@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PG Worktree Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #222533;
+    --border: #2d3044;
+    --text: #e2e4ed;
+    --text-muted: #7a7f96;
+    --accent: #6c8cff;
+    --accent-hover: #8da6ff;
+    --green: #4ade80;
+    --green-dim: rgba(74,222,128,0.12);
+    --red: #f87171;
+    --red-dim: rgba(248,113,113,0.12);
+    --orange: #fb923c;
+    --cyan: #22d3ee;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    padding: 24px 32px;
+    min-height: 100vh;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  .header h1 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .header h1 span { color: var(--text-muted); font-weight: 400; margin-left: 8px; font-size: 0.85rem; }
+  .btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 7px 18px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 500;
+    transition: background 0.15s;
+  }
+  .btn:hover { background: var(--accent-hover); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-muted);
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+  }
+  .btn-ghost:hover { background: var(--surface2); color: var(--text); }
+  .btn-danger { background: transparent; color: var(--red); }
+  .btn-danger:hover { background: var(--red-dim); }
+
+  /* Filter bar */
+  .filters {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .filter-input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    outline: none;
+    width: 240px;
+    transition: border-color 0.15s;
+  }
+  .filter-input:focus { border-color: var(--accent); }
+  select.filter-input { width: auto; min-width: 130px; cursor: pointer; }
+
+  /* Section header */
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 28px;
+    margin-bottom: 12px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .section-header:first-of-type { margin-top: 0; }
+  .section-header h2 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .section-header .count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+  .section-header .toggle-arrow {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    transition: transform 0.15s;
+  }
+  .section-header .toggle-arrow.collapsed { transform: rotate(-90deg); }
+
+  /* Table */
+  .table-wrap {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  table { width: 100%; min-width: 700px; border-collapse: collapse; font-size: 0.82rem; }
+  thead th {
+    background: var(--surface);
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 500;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    user-select: none;
+  }
+  thead th[data-sort] { cursor: pointer; }
+  thead th[data-sort]:hover { color: var(--text); }
+  .sort-arrow { font-size: 0.6rem; margin-left: 3px; }
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(108,140,255,0.03); cursor: pointer; }
+  tr.row-missing td { opacity: 0.45; }
+
+  /* Branch name cell */
+  .branch-cell { display: flex; align-items: center; gap: 10px; }
+  .pg-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    box-shadow: 0 0 0 2px var(--bg);
+  }
+  .pg-dot-up { background: var(--green); box-shadow: 0 0 6px rgba(74,222,128,0.4); }
+  .pg-dot-down { background: var(--text-muted); opacity: 0.4; }
+  .pg-dot-none { background: transparent; border: 1px dashed var(--border); }
+  .branch-name {
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+  .branch-name a { color: inherit; text-decoration: none; }
+  .branch-name a:hover { color: var(--accent); }
+  .branch-meta {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    display: flex;
+    gap: 8px;
+    margin-top: 1px;
+  }
+  .branch-meta .missing-tag {
+    color: var(--red);
+    font-weight: 500;
+  }
+
+  /* Links cell */
+  .links-cell { display: flex; gap: 6px; }
+  .link-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-decoration: none;
+    transition: opacity 0.15s;
+  }
+  .link-tag:hover { opacity: 0.8; text-decoration: none; }
+  .link-ml { background: rgba(34,211,238,0.12); color: var(--cyan); }
+  .link-cf { background: rgba(251,146,60,0.12); color: var(--orange); }
+
+  /* Actions cell */
+  .actions-cell { display: flex; gap: 4px; white-space: nowrap; }
+  .pg-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .pg-btn-start { background: var(--green-dim); color: var(--green); }
+  .pg-btn-start:hover { background: rgba(74,222,128,0.22); }
+  .pg-btn-stop { background: rgba(251,146,60,0.12); color: var(--orange); }
+  .pg-btn-stop:hover { background: rgba(251,146,60,0.22); }
+  .pg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .pg-btn-pending { background: rgba(108,140,255,0.12); color: var(--accent); cursor: wait; }
+  .pg-dot-transition { animation: pulse-dot 0.8s ease-in-out infinite; }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+
+  /* Transition badges */
+  .badge-transition {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 6px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    animation: pulse-dot 0.8s ease-in-out infinite;
+  }
+  .badge-archiving { background: rgba(122,127,150,0.12); color: var(--text-muted); }
+  .badge-creating { background: rgba(108,140,255,0.12); color: var(--accent); }
+
+  /* Notes cell */
+  .notes-cell {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+  }
+
+  /* Empty state */
+  .empty-row td {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 24px;
+    font-size: 0.8rem;
+  }
+
+  /* Modal */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.65);
+    backdrop-filter: blur(4px);
+    z-index: 100;
+    justify-content: center;
+    align-items: center;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 28px;
+    width: 480px;
+    max-width: 95vw;
+    max-height: 85vh;
+    overflow-y: auto;
+    box-shadow: 0 24px 48px rgba(0,0,0,0.4);
+  }
+  .modal h2 { font-size: 1.05rem; font-weight: 600; margin-bottom: 20px; }
+  .form-group { margin-bottom: 14px; }
+  .form-group label {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .form-group input[type="text"],
+  .form-group textarea,
+  .form-group select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 9px 13px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .form-group input:focus,
+  .form-group textarea:focus,
+  .form-group select:focus { border-color: var(--accent); }
+  .form-group textarea { min-height: 64px; resize: vertical; }
+  .modal-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* Output log */
+  .output-log {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.75rem;
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    margin-top: 14px;
+    display: none;
+    line-height: 1.6;
+    color: var(--text-muted);
+  }
+
+  /* Prefix chips */
+  .prefix-chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .prefix-chip {
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-muted);
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .prefix-chip:hover { border-color: var(--accent); color: var(--text); }
+  .prefix-chip.active { background: rgba(108,140,255,0.12); border-color: var(--accent); color: var(--accent); }
+
+  /* Toast notification */
+  .toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .toast {
+    padding: 12px 20px;
+    border-radius: 10px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    animation: toast-in 0.3s ease-out, toast-out 0.3s ease-in forwards;
+    animation-delay: 0s, var(--toast-duration, 4s);
+    pointer-events: auto;
+  }
+  .toast-success {
+    background: rgba(74,222,128,0.15);
+    border: 1px solid rgba(74,222,128,0.3);
+    color: var(--green);
+  }
+  .toast-error {
+    background: rgba(248,113,113,0.15);
+    border: 1px solid rgba(248,113,113,0.3);
+    color: var(--red);
+  }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateX(40px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  @keyframes toast-out {
+    from { opacity: 1; transform: translateX(0); }
+    to { opacity: 0; transform: translateX(40px); }
+  }
+
+  @media (max-width: 1000px) {
+    body { padding: 12px; }
+    .filters { flex-direction: column; align-items: stretch; }
+    .filter-input { width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<div class="toast-container" id="toast-container"></div>
+
+<div class="header">
+  <h1>PG Worktrees <span id="branch-count"></span></h1>
+  <button class="btn" onclick="openCreateModal()">+ New Worktree</button>
+</div>
+
+<div class="filters">
+  <input type="text" class="filter-input" id="search" placeholder="Search branches...">
+  <select class="filter-input" id="pg-filter">
+    <option value="">All PG states</option>
+    <option value="up">Running</option>
+    <option value="down">Stopped</option>
+  </select>
+</div>
+
+<!-- Active Table -->
+<div class="section-header" onclick="toggleSection('active')">
+  <span class="toggle-arrow" id="active-arrow">&#9660;</span>
+  <h2>Active <span class="count" id="active-count"></span></h2>
+</div>
+<div id="active-section">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th data-sort="name" data-table="active" style="width:35%">Branch <span class="sort-arrow"></span></th>
+          <th data-sort="port" data-table="active">Port <span class="sort-arrow"></span></th>
+          <th>Links</th>
+          <th>Notes</th>
+          <th data-sort="updated_at" data-table="active">Updated <span class="sort-arrow"></span></th>
+          <th style="text-align:right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="active-table"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Archived Table -->
+<div class="section-header" onclick="toggleSection('archived')">
+  <span class="toggle-arrow collapsed" id="archived-arrow">&#9660;</span>
+  <h2>Archived <span class="count" id="archived-count"></span></h2>
+</div>
+<div id="archived-section" style="display:none">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th data-sort="name" data-table="archived" style="width:40%">Branch <span class="sort-arrow"></span></th>
+          <th>Links</th>
+          <th>Notes</th>
+          <th data-sort="updated_at" data-table="archived">Updated <span class="sort-arrow"></span></th>
+          <th style="text-align:right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="archived-table"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Edit Modal -->
+<div class="modal-overlay" id="edit-modal">
+  <div class="modal">
+    <h2 id="edit-modal-title">Edit Branch</h2>
+    <input type="hidden" id="edit-name">
+    <div class="form-group">
+      <label>Mailing List URL</label>
+      <input type="text" id="edit-ml-url" placeholder="https://www.postgresql.org/message-id/...">
+    </div>
+    <div class="form-group">
+      <label>Commitfest URL</label>
+      <input type="text" id="edit-cf-url" placeholder="https://commitfest.postgresql.org/...">
+    </div>
+    <div class="form-group">
+      <label>Notes</label>
+      <textarea id="edit-notes" placeholder="Any notes..."></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('edit-modal')">Cancel</button>
+      <button class="btn" onclick="saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Worktree Modal -->
+<div class="modal-overlay" id="create-modal">
+  <div class="modal">
+    <h2>New Worktree</h2>
+    <div class="form-group">
+      <label>Category</label>
+      <div class="prefix-chips" id="prefix-chips"></div>
+    </div>
+    <div class="form-group">
+      <label>Branch Name</label>
+      <div style="display:flex;align-items:center;gap:0">
+        <span id="create-prefix-display" style="background:var(--bg);border:1px solid var(--border);border-right:none;border-radius:8px 0 0 8px;padding:9px 10px;font-size:0.85rem;color:var(--accent);font-weight:600;white-space:nowrap"></span>
+        <input type="text" id="create-branch" placeholder="branch-name" style="border-radius:0 8px 8px 0">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Base Branch</label>
+      <input type="text" id="create-base" value="master" placeholder="master">
+    </div>
+    <div class="output-log" id="create-output"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('create-modal')">Cancel</button>
+      <button class="btn" id="create-btn" onclick="createWorktree()">Create</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function showToast(message, type = 'success', duration = 4000) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  toast.style.setProperty('--toast-duration', (duration / 1000) + 's');
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), duration + 300);
+}
+
+let branches = [];
+let prevBranches = {};  // name -> pg_init_status from previous fetch
+let sortCol = 'name';
+let sortAsc = true;
+const pgTransitions = new Map();
+const archiving = new Set();
+const collapsedSections = new Set(['archived']);
+let refreshTimer = null;
+
+// Branch name prefixes
+const PREFIXES = [
+  { prefix: 'feat-', label: 'Feature' },
+  { prefix: 'fix-',  label: 'Bug Fix' },
+  { prefix: 'inq-',  label: 'Inquiry' },
+  { prefix: 'poc-',  label: 'PoC' },
+  { prefix: 'rev-',  label: 'Review' },
+  { prefix: 'tmp-',  label: 'Temporary' },
+];
+let selectedPrefix = PREFIXES[0].prefix;
+
+function initPrefixChips() {
+  const container = document.getElementById('prefix-chips');
+  container.innerHTML = PREFIXES.map(p =>
+    `<span class="prefix-chip${p.prefix === selectedPrefix ? ' active' : ''}" data-prefix="${p.prefix}" onclick="selectPrefix('${p.prefix}')">${p.label}</span>`
+  ).join('');
+  document.getElementById('create-prefix-display').textContent = selectedPrefix;
+}
+
+function selectPrefix(prefix) {
+  selectedPrefix = prefix;
+  document.querySelectorAll('.prefix-chip').forEach(c => {
+    c.classList.toggle('active', c.dataset.prefix === prefix);
+  });
+  document.getElementById('create-prefix-display').textContent = prefix;
+  document.getElementById('create-branch').focus();
+}
+
+initPrefixChips();
+
+function toggleSection(section) {
+  const el = document.getElementById(section + '-section');
+  const arrow = document.getElementById(section + '-arrow');
+  if (collapsedSections.has(section)) {
+    collapsedSections.delete(section);
+    el.style.display = '';
+    arrow.classList.remove('collapsed');
+  } else {
+    collapsedSections.add(section);
+    el.style.display = 'none';
+    arrow.classList.add('collapsed');
+  }
+}
+
+async function fetchBranches() {
+  const resp = await fetch('/api/branches');
+  const newBranches = await resp.json();
+
+  // Detect pg_init state transitions and show toasts
+  for (const b of newBranches) {
+    const prev = prevBranches[b.name];
+    if (prev === 'running' && b.pg_init_status !== 'running') {
+      if (b.pg_init_status === 'done') {
+        showToast(`${b.name} created successfully`, 'success');
+      } else if (b.pg_init_status === 'error') {
+        showToast(`Failed to create ${b.name}`, 'error', 6000);
+      }
+    }
+  }
+
+  // Save current state for next comparison
+  prevBranches = {};
+  for (const b of newBranches) {
+    if (b.pg_init_status) prevBranches[b.name] = b.pg_init_status;
+  }
+
+  branches = newBranches;
+  renderTable();
+
+  // Auto-refresh while any task is running
+  clearTimeout(refreshTimer);
+  if (branches.some(b => b.pg_init_status === 'running')) {
+    refreshTimer = setTimeout(fetchBranches, 3000);
+  }
+}
+
+function renderTable() {
+  const search = document.getElementById('search').value.toLowerCase();
+  const pgFilter = document.getElementById('pg-filter').value;
+
+  const active = branches.filter(b => {
+    if (b.status === 'archived') return false;
+    if (search && !b.name.toLowerCase().includes(search)) return false;
+    if (pgFilter && b.pg_running !== pgFilter) return false;
+    return true;
+  });
+
+  const archived = branches.filter(b => {
+    if (b.status !== 'archived') return false;
+    if (search && !b.name.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  active.sort((a, b) => {
+    let va = a[sortCol] ?? '';
+    let vb = b[sortCol] ?? '';
+    if (typeof va === 'number' && typeof vb === 'number') return sortAsc ? va - vb : vb - va;
+    va = String(va).toLowerCase();
+    vb = String(vb).toLowerCase();
+    return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+
+  archived.sort((a, b) => {
+    let va = a[sortCol] ?? '';
+    let vb = b[sortCol] ?? '';
+    if (typeof va === 'number' && typeof vb === 'number') return sortAsc ? va - vb : vb - va;
+    va = String(va).toLowerCase();
+    vb = String(vb).toLowerCase();
+    return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+
+  const totalActive = branches.filter(b => b.status !== 'archived').length;
+  const totalArchived = branches.filter(b => b.status === 'archived').length;
+  document.getElementById('branch-count').textContent = `${branches.length}`;
+  document.getElementById('active-count').textContent = `(${active.length}${active.length !== totalActive ? ' / ' + totalActive : ''})`;
+  document.getElementById('archived-count').textContent = `(${archived.length}${archived.length !== totalArchived ? ' / ' + totalArchived : ''})`;
+
+  // Render active table
+  const activeTbody = document.getElementById('active-table');
+  if (active.length === 0) {
+    activeTbody.innerHTML = '<tr class="empty-row"><td colspan="6">No active branches</td></tr>';
+  } else {
+    activeTbody.innerHTML = active.map(b => renderActiveRow(b)).join('');
+  }
+
+  // Render archived table
+  const archivedTbody = document.getElementById('archived-table');
+  if (archived.length === 0) {
+    archivedTbody.innerHTML = '<tr class="empty-row"><td colspan="5">No archived branches</td></tr>';
+  } else {
+    archivedTbody.innerHTML = archived.map(b => renderArchivedRow(b)).join('');
+  }
+}
+
+function renderActiveRow(b) {
+  const transition = pgTransitions.get(b.name);
+  const isCreatingDot = b.pg_init_status === 'running';
+  let dotClass, dotTitle;
+  if (isCreatingDot) {
+    dotClass = 'pg-dot-none pg-dot-transition';
+    dotTitle = 'Creating...';
+  } else if (transition) {
+    dotClass = 'pg-dot-' + (transition === 'starting' ? 'up' : 'down') + ' pg-dot-transition';
+    dotTitle = transition === 'starting' ? 'Starting...' : 'Stopping...';
+  } else {
+    dotClass = b.pg_running === 'up' ? 'pg-dot-up' : b.pg_running === 'down' ? 'pg-dot-down' : 'pg-dot-none';
+    dotTitle = b.pg_running === 'up' ? 'Running' : b.pg_running === 'down' ? 'Stopped' : 'N/A';
+  }
+  const rowClass = b.exists_on_disk ? '' : (isCreatingDot ? '' : 'row-missing');
+
+  const branchLink = b.src_dir
+    ? `<a href="vscode://file${b.src_dir}" title="Open in VSCode">${esc(b.name)}</a>`
+    : esc(b.name);
+
+  const meta = [];
+  if (!b.exists_on_disk) meta.push('<span class="missing-tag">missing on disk</span>');
+
+  const links = [];
+  if (b.mailing_list_url) links.push(`<a class="link-tag link-ml" href="${esc(b.mailing_list_url)}" target="_blank" title="${esc(b.mailing_list_url)}">ML</a>`);
+  if (b.commitfest_url) links.push(`<a class="link-tag link-cf" href="${esc(b.commitfest_url)}" target="_blank" title="${esc(b.commitfest_url)}">CF</a>`);
+
+  const isArchiving = archiving.has(b.name);
+  const isCreating = b.pg_init_status === 'running';
+
+  const actions = [];
+  if (isCreating) {
+    actions.push(`<span class="badge-transition badge-creating">Creating...</span>`);
+  } else if (isArchiving) {
+    actions.push(`<span class="badge-transition badge-archiving">Archiving...</span>`);
+  } else {
+    if (transition) {
+      const label = transition === 'starting' ? 'Starting...' : 'Stopping...';
+      actions.push(`<button class="pg-btn pg-btn-pending" disabled>${label}</button>`);
+    } else if (b.pg_running === 'down') {
+      actions.push(`<button class="pg-btn pg-btn-start" onclick="event.stopPropagation();pgCtl('${esc(b.name)}','start')">Start</button>`);
+    } else if (b.pg_running === 'up') {
+      actions.push(`<button class="pg-btn pg-btn-stop" onclick="event.stopPropagation();pgCtl('${esc(b.name)}','stop')">Stop</button>`);
+    }
+    if (b.exists_on_disk) actions.push(`<button class="btn-ghost btn btn-danger" onclick="event.stopPropagation();archiveBranch('${esc(b.name)}')">Archive</button>`);
+    if (!b.exists_on_disk) actions.push(`<button class="btn-ghost btn btn-danger" onclick="event.stopPropagation();deleteBranch('${esc(b.name)}')">Remove</button>`);
+  }
+
+  return `
+  <tr class="${rowClass}" ondblclick="openEditModal('${esc(b.name)}')">
+    <td>
+      <div class="branch-cell">
+        <span class="pg-dot ${dotClass}" title="${dotTitle}"></span>
+        <div>
+          <div class="branch-name">${branchLink}</div>
+          ${meta.length ? `<div class="branch-meta">${meta.join(' ')}</div>` : ''}
+        </div>
+      </div>
+    </td>
+    <td style="font-variant-numeric:tabular-nums;color:var(--text-muted)">${b.port ?? '-'}</td>
+    <td><div class="links-cell">${links.join('') || '<span style="color:var(--text-muted)">-</span>'}</div></td>
+    <td><div class="notes-cell" title="${esc(b.notes || '')}">${esc(b.notes || '') || '<span style="color:var(--text-muted)">-</span>'}</div></td>
+    <td style="color:var(--text-muted);font-size:0.78rem;white-space:nowrap">${formatDate(b.updated_at)}</td>
+    <td><div class="actions-cell" style="justify-content:flex-end">${actions.join('')}</div></td>
+  </tr>`;
+}
+
+function renderArchivedRow(b) {
+  const links = [];
+  if (b.mailing_list_url) links.push(`<a class="link-tag link-ml" href="${esc(b.mailing_list_url)}" target="_blank" title="${esc(b.mailing_list_url)}">ML</a>`);
+  if (b.commitfest_url) links.push(`<a class="link-tag link-cf" href="${esc(b.commitfest_url)}" target="_blank" title="${esc(b.commitfest_url)}">CF</a>`);
+
+  return `
+  <tr ondblclick="openEditModal('${esc(b.name)}')">
+    <td>
+      <div class="branch-cell">
+        <span class="pg-dot pg-dot-none"></span>
+        <div class="branch-name">${esc(b.name)}</div>
+      </div>
+    </td>
+    <td><div class="links-cell">${links.join('') || '<span style="color:var(--text-muted)">-</span>'}</div></td>
+    <td><div class="notes-cell" title="${esc(b.notes || '')}">${esc(b.notes || '') || '<span style="color:var(--text-muted)">-</span>'}</div></td>
+    <td style="color:var(--text-muted);font-size:0.78rem;white-space:nowrap">${formatDate(b.updated_at)}</td>
+    <td><div class="actions-cell" style="justify-content:flex-end"><button class="btn-ghost btn btn-danger" onclick="event.stopPropagation();deleteBranch('${esc(b.name)}')">Remove</button></div></td>
+  </tr>`;
+}
+
+function esc(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function formatDate(dt) {
+  if (!dt) return '-';
+  const d = new Date(dt);
+  if (isNaN(d)) return dt;
+  return d.toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' });
+}
+
+// PG control with polling
+async function pgCtl(name, action) {
+  const expectedState = action === 'start' ? 'up' : 'down';
+  pgTransitions.set(name, action === 'start' ? 'starting' : 'stopping');
+  renderTable();
+
+  try {
+    const resp = await fetch(`/api/branches/${encodeURIComponent(name)}/pg`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      pgTransitions.delete(name);
+      renderTable();
+      alert(data.error || 'Failed');
+      return;
+    }
+  } catch (e) {
+    pgTransitions.delete(name);
+    renderTable();
+    alert('Error: ' + e.message);
+    return;
+  }
+
+  const maxAttempts = 15;
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    try {
+      const resp = await fetch(`/api/branches/${encodeURIComponent(name)}/pg`);
+      const data = await resp.json();
+      if (data.pg_running === expectedState) break;
+    } catch (e) { /* keep polling */ }
+  }
+
+  pgTransitions.delete(name);
+  const b = branches.find(x => x.name === name);
+  if (b) {
+    try {
+      const resp = await fetch(`/api/branches/${encodeURIComponent(name)}/pg`);
+      const data = await resp.json();
+      b.pg_running = data.pg_running;
+    } catch (e) { /* fallback to full refresh */ }
+  }
+  renderTable();
+}
+
+// Sorting
+document.querySelectorAll('th[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.sort;
+    if (sortCol === col) sortAsc = !sortAsc;
+    else { sortCol = col; sortAsc = true; }
+    document.querySelectorAll('.sort-arrow').forEach(s => s.textContent = '');
+    th.querySelector('.sort-arrow').textContent = sortAsc ? '\u25B2' : '\u25BC';
+    renderTable();
+  });
+});
+
+// Filters
+document.getElementById('search').addEventListener('input', renderTable);
+document.getElementById('pg-filter').addEventListener('change', renderTable);
+
+// Modals
+function openModal(id) { document.getElementById(id).classList.add('active'); }
+function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+function openEditModal(name) {
+  const b = branches.find(x => x.name === name);
+  if (!b) return;
+  document.getElementById('edit-name').value = b.name;
+  document.getElementById('edit-modal-title').textContent = b.name;
+  document.getElementById('edit-ml-url').value = b.mailing_list_url || '';
+  document.getElementById('edit-cf-url').value = b.commitfest_url || '';
+  document.getElementById('edit-notes').value = b.notes || '';
+  openModal('edit-modal');
+}
+
+async function saveEdit() {
+  const name = document.getElementById('edit-name').value;
+  await fetch(`/api/branches/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      mailing_list_url: document.getElementById('edit-ml-url').value,
+      commitfest_url: document.getElementById('edit-cf-url').value,
+      notes: document.getElementById('edit-notes').value,
+    }),
+  });
+  closeModal('edit-modal');
+  fetchBranches();
+}
+
+async function deleteBranch(name) {
+  if (!confirm(`Remove "${name}" from dashboard?`)) return;
+  await fetch(`/api/branches/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  fetchBranches();
+}
+
+async function archiveBranch(name) {
+  if (!confirm(`Archive ${name}?`)) return;
+
+  archiving.add(name);
+  renderTable();
+
+  try {
+    const resp = await fetch(`/api/branches/${encodeURIComponent(name)}/archive`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      alert('Error: ' + (data.error || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+
+  archiving.delete(name);
+  fetchBranches();
+}
+
+function openCreateModal() {
+  document.getElementById('create-branch').value = '';
+  document.getElementById('create-base').value = 'master';
+  document.getElementById('create-output').style.display = 'none';
+  document.getElementById('create-output').textContent = '';
+  document.getElementById('create-btn').disabled = false;
+  document.getElementById('create-btn').textContent = 'Create';
+  selectPrefix(PREFIXES[0].prefix);
+  openModal('create-modal');
+}
+
+async function createWorktree() {
+  const suffix = document.getElementById('create-branch').value.trim();
+  const base = document.getElementById('create-base').value.trim();
+  if (!suffix) { alert('Branch name is required'); return; }
+  const branch = selectedPrefix + suffix;
+
+  closeModal('create-modal');
+
+  try {
+    const resp = await fetch('/api/pg_init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ branch, base_branch: base }),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      alert(`Failed to create ${branch}:\n${data.error || 'Unknown error'}`);
+      return;
+    }
+  } catch (e) {
+    alert(`Failed to create ${branch}:\n${e.message}`);
+    return;
+  }
+
+  // fetchBranches will pick up the running task from the server
+  // and start auto-refresh polling
+  fetchBranches();
+}
+
+document.querySelectorAll('.modal-overlay').forEach(o => {
+  o.addEventListener('click', e => { if (e.target === o) closeModal(o.id); });
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.active').forEach(o => closeModal(o.id));
+});
+
+fetchBranches();
+</script>
+</body>
+</html>
