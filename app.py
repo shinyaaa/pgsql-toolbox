@@ -17,6 +17,7 @@ app = Flask(__name__)
 
 PGSQL_DIR = Path.home() / "pgsql"
 ARCHIVE_DIR = PGSQL_DIR / "_archive"
+LOGS_DIR = PGSQL_DIR / "logs"
 PORT_LOCK = PGSQL_DIR / "port_lock"
 MAIN_REPO = PGSQL_DIR / "master" / "postgres"
 PG_INIT = Path.home() / "git" / "settings" / "bin" / "pg_init"
@@ -207,21 +208,31 @@ def api_delete_branch(name):
 def _run_pg_init(branch, base_branch):
     """Run pg_init in background thread.
 
-    Uses temp files instead of pipes to avoid blocking when pg_init
-    starts long-running child processes (e.g. PostgreSQL server) that
-    inherit pipe file descriptors.
+    stdout/stderr are sent to /dev/null so they don't interfere with
+    pg_init's own `exec > >(tee ...)` logging.  Passing a pipe or temp
+    file from subprocess replaces the fd that tee inherits, which can
+    cause SIGPIPE during parallel make and corrupt the build.
     """
     cmd = [str(PG_INIT), "-b", branch, "-B", base_branch]
     try:
-        with tempfile.TemporaryFile(mode="w+") as out:
-            result = subprocess.run(cmd, stdout=out, stderr=out)
-            out.seek(0)
-            output = out.read()
+        result = subprocess.run(
+            cmd, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
         if result.returncode != 0:
-            pg_init_tasks[branch] = {
-                "status": "error",
-                "error": output,
-            }
+            # Check log file for error details
+            error = f"pg_init exited with code {result.returncode}"
+            if LOGS_DIR.exists():
+                logs = sorted(LOGS_DIR.glob("pg_init_*.log"), reverse=True)
+                for f in logs:
+                    try:
+                        content = f.read_text(errors="replace")
+                        if branch in content:
+                            error = content
+                            break
+                    except OSError:
+                        continue
+            pg_init_tasks[branch] = {"status": "error", "error": error}
         else:
             pg_init_tasks[branch] = {"status": "done"}
     except Exception as e:
@@ -394,6 +405,44 @@ def api_archive_branch(name):
     steps.append("Updated status to archived")
 
     return jsonify({"ok": True, "steps": steps})
+
+
+@app.route("/api/logs")
+def api_logs_list():
+    """List pg_init log files, newest first. Optional ?branch= filter."""
+    if not LOGS_DIR.exists():
+        return jsonify([])
+    logs = sorted(LOGS_DIR.glob("pg_init_*.log"), reverse=True)
+    branch = request.args.get("branch")
+    result = []
+    for f in logs:
+        entry = {"name": f.name, "size": f.stat().st_size,
+                 "mtime": datetime.fromtimestamp(f.stat().st_mtime).isoformat()}
+        if branch:
+            try:
+                head = f.read_text(errors="replace")[:4096]
+                if branch not in head:
+                    continue
+            except OSError:
+                continue
+        result.append(entry)
+    return jsonify(result)
+
+
+@app.route("/api/logs/<name>")
+def api_log_content(name):
+    """Return content of a specific log file."""
+    if "/" in name or "\\" in name or ".." in name:
+        return jsonify({"error": "Invalid filename"}), 400
+    log_path = LOGS_DIR / name
+    if not log_path.exists():
+        return jsonify({"error": "Log not found"}), 404
+    tail = request.args.get("tail", type=int)
+    content = log_path.read_text(errors="replace")
+    if tail:
+        lines = content.splitlines()
+        content = "\n".join(lines[-tail:])
+    return jsonify({"name": name, "content": content})
 
 
 @app.route("/api/statuses")

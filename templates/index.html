@@ -390,6 +390,99 @@
     to { opacity: 0; transform: translateX(40px); }
   }
 
+  /* Kebab menu */
+  .kebab-wrap { position: relative; }
+  .kebab-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 6px;
+    font-size: 1.1rem;
+    line-height: 1;
+    letter-spacing: 1px;
+    transition: background 0.15s, color 0.15s;
+  }
+  .kebab-btn:hover { background: var(--surface2); color: var(--text); }
+  .kebab-menu {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    min-width: 150px;
+    z-index: 50;
+    padding: 4px 0;
+  }
+  .kebab-menu.open { display: block; }
+  .kebab-menu-item {
+    display: block;
+    width: 100%;
+    padding: 8px 14px;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-size: 0.78rem;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.1s;
+    white-space: nowrap;
+  }
+  .kebab-menu-item:hover { background: var(--surface2); }
+  .kebab-menu-item.danger { color: var(--red); }
+  .kebab-menu-item.danger:hover { background: var(--red-dim); }
+
+  /* Log viewer */
+  .log-panel {
+    margin-top: 28px;
+  }
+  .log-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 12px;
+  }
+  .log-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+    font-size: 0.8rem;
+  }
+  .log-item:hover { border-color: var(--accent); }
+  .log-item.active { border-color: var(--accent); background: var(--surface2); }
+  .log-item .log-name { font-weight: 600; flex: 1; font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 0.75rem; }
+  .log-item .log-meta { color: var(--text-muted); font-size: 0.72rem; }
+  .log-viewer {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 0.73rem;
+    line-height: 1.7;
+    max-height: 500px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text-muted);
+  }
+  .log-viewer-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 40px;
+    font-size: 0.8rem;
+  }
+
   @media (max-width: 1000px) {
     body { padding: 12px; }
     .filters { flex-direction: column; align-items: stretch; }
@@ -457,6 +550,30 @@
       </thead>
       <tbody id="archived-table"></tbody>
     </table>
+  </div>
+</div>
+
+<!-- Logs Section -->
+<div class="section-header" onclick="toggleSection('logs')">
+  <span class="toggle-arrow collapsed" id="logs-arrow">&#9660;</span>
+  <h2>pg_init Logs <span class="count" id="logs-count"></span></h2>
+</div>
+<div id="logs-section" style="display:none">
+  <div class="log-panel">
+    <div class="log-list" id="log-list"></div>
+    <div class="log-viewer" id="log-viewer" style="display:none"></div>
+  </div>
+</div>
+
+<!-- Log Modal -->
+<div class="modal-overlay" id="log-modal">
+  <div class="modal" style="width:720px">
+    <h2 id="log-modal-title">pg_init Log</h2>
+    <div id="log-modal-list" class="log-list"></div>
+    <div class="log-viewer" id="log-modal-viewer" style="display:none"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('log-modal')">Close</button>
+    </div>
   </div>
 </div>
 
@@ -528,7 +645,7 @@ let sortCol = 'name';
 let sortAsc = true;
 const pgTransitions = new Map();
 const archiving = new Set();
-const collapsedSections = new Set(['archived']);
+const collapsedSections = new Set(['archived', 'logs']);
 let refreshTimer = null;
 
 // Branch name prefixes
@@ -709,9 +826,22 @@ function renderActiveRow(b) {
     } else if (b.pg_running === 'up') {
       actions.push(`<button class="pg-btn pg-btn-stop" onclick="event.stopPropagation();pgCtl('${esc(b.name)}','stop')">Stop</button>`);
     }
-    if (b.exists_on_disk) actions.push(`<button class="btn-ghost btn btn-danger" onclick="event.stopPropagation();archiveBranch('${esc(b.name)}')">Archive</button>`);
-    if (!b.exists_on_disk) actions.push(`<button class="btn-ghost btn btn-danger" onclick="event.stopPropagation();deleteBranch('${esc(b.name)}')">Remove</button>`);
   }
+
+  const menuItems = [];
+  menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();openLogModal('${esc(b.name)}')">View Log</button>`);
+  menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();openEditModal('${esc(b.name)}');closeAllMenus()">Edit</button>`);
+  if (b.exists_on_disk) {
+    menuItems.push(`<button class="kebab-menu-item danger" onclick="event.stopPropagation();archiveBranch('${esc(b.name)}');closeAllMenus()">Archive</button>`);
+  }
+  if (!b.exists_on_disk) {
+    menuItems.push(`<button class="kebab-menu-item danger" onclick="event.stopPropagation();deleteBranch('${esc(b.name)}');closeAllMenus()">Remove</button>`);
+  }
+
+  const kebab = `<div class="kebab-wrap">
+    <button class="kebab-btn" onclick="event.stopPropagation();toggleMenu(this)" title="Menu">&#8942;</button>
+    <div class="kebab-menu">${menuItems.join('')}</div>
+  </div>`;
 
   return `
   <tr class="${rowClass}" ondblclick="openEditModal('${esc(b.name)}')">
@@ -728,7 +858,7 @@ function renderActiveRow(b) {
     <td><div class="links-cell">${links.join('') || '<span style="color:var(--text-muted)">-</span>'}</div></td>
     <td><div class="notes-cell" title="${esc(b.notes || '')}">${esc(b.notes || '') || '<span style="color:var(--text-muted)">-</span>'}</div></td>
     <td style="color:var(--text-muted);font-size:0.78rem;white-space:nowrap">${formatDate(b.updated_at)}</td>
-    <td><div class="actions-cell" style="justify-content:flex-end">${actions.join('')}</div></td>
+    <td><div class="actions-cell" style="justify-content:flex-end">${actions.join('')}${kebab}</div></td>
   </tr>`;
 }
 
@@ -748,7 +878,16 @@ function renderArchivedRow(b) {
     <td><div class="links-cell">${links.join('') || '<span style="color:var(--text-muted)">-</span>'}</div></td>
     <td><div class="notes-cell" title="${esc(b.notes || '')}">${esc(b.notes || '') || '<span style="color:var(--text-muted)">-</span>'}</div></td>
     <td style="color:var(--text-muted);font-size:0.78rem;white-space:nowrap">${formatDate(b.updated_at)}</td>
-    <td><div class="actions-cell" style="justify-content:flex-end"><button class="btn-ghost btn btn-danger" onclick="event.stopPropagation();deleteBranch('${esc(b.name)}')">Remove</button></div></td>
+    <td><div class="actions-cell" style="justify-content:flex-end">
+      <div class="kebab-wrap">
+        <button class="kebab-btn" onclick="event.stopPropagation();toggleMenu(this)" title="Menu">&#8942;</button>
+        <div class="kebab-menu">
+          <button class="kebab-menu-item" onclick="event.stopPropagation();openLogModal('${esc(b.name)}')">View Log</button>
+          <button class="kebab-menu-item" onclick="event.stopPropagation();openEditModal('${esc(b.name)}');closeAllMenus()">Edit</button>
+          <button class="kebab-menu-item danger" onclick="event.stopPropagation();deleteBranch('${esc(b.name)}');closeAllMenus()">Remove</button>
+        </div>
+      </div>
+    </div></td>
   </tr>`;
 }
 
@@ -936,7 +1075,118 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.active').forEach(o => closeModal(o.id));
 });
 
+// --- Kebab menu ---
+function toggleMenu(btn) {
+  const menu = btn.nextElementSibling;
+  const wasOpen = menu.classList.contains('open');
+  closeAllMenus();
+  if (!wasOpen) menu.classList.add('open');
+}
+
+function closeAllMenus() {
+  document.querySelectorAll('.kebab-menu.open').forEach(m => m.classList.remove('open'));
+}
+
+document.addEventListener('click', closeAllMenus);
+
+// --- Log modal ---
+async function openLogModal(branch) {
+  closeAllMenus();
+  document.getElementById('log-modal-title').textContent = `pg_init Log: ${branch}`;
+  document.getElementById('log-modal-viewer').style.display = 'none';
+  document.getElementById('log-modal-list').innerHTML = '<div class="log-viewer-empty">Loading...</div>';
+  openModal('log-modal');
+
+  try {
+    const resp = await fetch(`/api/logs?branch=${encodeURIComponent(branch)}`);
+    const logs = await resp.json();
+    const list = document.getElementById('log-modal-list');
+    if (logs.length === 0) {
+      list.innerHTML = '<div class="log-viewer-empty">No logs found for this branch</div>';
+      return;
+    }
+    if (logs.length === 1) {
+      list.innerHTML = '';
+      showLogInModal(logs[0].name);
+      return;
+    }
+    list.innerHTML = logs.map(l => {
+      const size = l.size < 1024 ? l.size + ' B' : (l.size / 1024).toFixed(1) + ' KB';
+      const date = formatDate(l.mtime);
+      return `<div class="log-item" onclick="showLogInModal('${esc(l.name)}')">
+        <span class="log-name">${esc(l.name)}</span>
+        <span class="log-meta">${size}</span>
+        <span class="log-meta">${date}</span>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('log-modal-list').innerHTML = '<div class="log-viewer-empty">Failed to load logs</div>';
+  }
+}
+
+async function showLogInModal(name) {
+  const viewer = document.getElementById('log-modal-viewer');
+  viewer.textContent = 'Loading...';
+  viewer.style.display = 'block';
+  try {
+    const resp = await fetch(`/api/logs/${encodeURIComponent(name)}`);
+    const data = await resp.json();
+    viewer.textContent = data.content || '(empty)';
+    viewer.scrollTop = viewer.scrollHeight;
+  } catch (e) {
+    viewer.textContent = 'Failed to load log';
+  }
+}
+
+// --- Log viewer ---
+let selectedLog = null;
+
+async function fetchLogs() {
+  try {
+    const resp = await fetch('/api/logs');
+    const logs = await resp.json();
+    document.getElementById('logs-count').textContent = `(${logs.length})`;
+    const list = document.getElementById('log-list');
+    if (logs.length === 0) {
+      list.innerHTML = '<div class="log-viewer-empty">No logs yet</div>';
+      return;
+    }
+    list.innerHTML = logs.map(l => {
+      const size = l.size < 1024 ? l.size + ' B' : (l.size / 1024).toFixed(1) + ' KB';
+      const date = formatDate(l.mtime);
+      const active = selectedLog === l.name ? ' active' : '';
+      return `<div class="log-item${active}" onclick="viewLog('${esc(l.name)}')">
+        <span class="log-name">${esc(l.name)}</span>
+        <span class="log-meta">${size}</span>
+        <span class="log-meta">${date}</span>
+      </div>`;
+    }).join('');
+  } catch (e) { /* ignore */ }
+}
+
+async function viewLog(name) {
+  selectedLog = (selectedLog === name) ? null : name;
+  const viewer = document.getElementById('log-viewer');
+  if (!selectedLog) {
+    viewer.style.display = 'none';
+    fetchLogs();
+    return;
+  }
+  fetchLogs();
+  try {
+    const resp = await fetch(`/api/logs/${encodeURIComponent(name)}`);
+    const data = await resp.json();
+    viewer.textContent = data.content || '(empty)';
+    viewer.style.display = 'block';
+    viewer.scrollTop = viewer.scrollHeight;
+  } catch (e) {
+    viewer.textContent = 'Failed to load log';
+    viewer.style.display = 'block';
+  }
+}
+
 fetchBranches();
+fetchLogs();
 </script>
 </body>
 </html>

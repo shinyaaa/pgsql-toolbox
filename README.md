@@ -21,6 +21,23 @@
 
 ## 起動
 
+systemd ユーザーサービスとして常駐する。
+
+```bash
+# 状態確認
+systemctl --user status pgsql-dashboard
+
+# 起動 / 停止 / 再起動
+systemctl --user start pgsql-dashboard
+systemctl --user stop pgsql-dashboard
+systemctl --user restart pgsql-dashboard
+
+# ログ確認
+journalctl --user -u pgsql-dashboard -f
+```
+
+手動で起動する場合:
+
 ```bash
 cd ~/git/pgsql-dashboard
 python3 app.py
@@ -45,5 +62,12 @@ pgsql-dashboard/
 | GET | `/api/branches` | 全ブランチ取得 (ディスク状態と同期) |
 | PUT | `/api/branches/<name>` | ブランチ情報更新 (status, URL, notes) |
 | DELETE | `/api/branches/<name>` | ダッシュボードからエントリ削除 |
+| POST | `/api/branches/<name>/pg` | PostgreSQL 起動/停止 (`{"action": "start"\|"stop"}`) |
+| GET | `/api/branches/<name>/pg` | PostgreSQL 稼働状態取得 |
+| POST | `/api/branches/<name>/archive` | ブランチをアーカイブ |
 | POST | `/api/pg_init` | pg_init 実行 (`{"branch": "...", "base_branch": "..."}`) |
+| GET | `/api/pg_init` | pg_init タスク状態一覧 |
+| GET | `/api/pg_init/<branch>` | 個別タスク状態取得 |
+| GET | `/api/logs` | pg_init ログ一覧 (`?branch=` でフィルタ可) |
+| GET | `/api/logs/<name>` | ログ内容取得 (`?tail=N` で末尾N行) |
 | GET | `/api/statuses` | ステータス一覧取得 |
