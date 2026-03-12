@@ -407,9 +407,7 @@
   .kebab-btn:hover { background: var(--surface2); color: var(--text); }
   .kebab-menu {
     display: none;
-    position: absolute;
-    right: 0;
-    top: 100%;
+    position: fixed;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -1080,7 +1078,19 @@ function toggleMenu(btn) {
   const menu = btn.nextElementSibling;
   const wasOpen = menu.classList.contains('open');
   closeAllMenus();
-  if (!wasOpen) menu.classList.add('open');
+  if (!wasOpen) {
+    menu.classList.add('open');
+    const rect = btn.getBoundingClientRect();
+    const menuHeight = menu.offsetHeight;
+    // Open upward if not enough space below
+    if (rect.bottom + menuHeight > window.innerHeight) {
+      menu.style.top = (rect.top - menuHeight) + 'px';
+    } else {
+      menu.style.top = rect.bottom + 'px';
+    }
+    menu.style.right = (window.innerWidth - rect.right) + 'px';
+    menu.style.left = 'auto';
+  }
 }
 
 function closeAllMenus() {

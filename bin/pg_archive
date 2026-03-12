@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Archive a PostgreSQL development worktree."""
+
+import argparse
+import sys
+from pathlib import Path
+
+# Add repo root to path for lib imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.operations import archive_branch
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Archive a PostgreSQL development worktree"
+    )
+    parser.add_argument("branch", help="Branch name to archive")
+    parser.add_argument(
+        "-y", "--yes", action="store_true",
+        help="Skip confirmation prompt",
+    )
+    args = parser.parse_args()
+
+    if not args.yes:
+        answer = input(f"Archive '{args.branch}'? This will:\n"
+                       "  - Stop PostgreSQL\n"
+                       "  - Kill tmux session\n"
+                       "  - Move directory to _archive/\n"
+                       "  - Delete local and remote git branches\n"
+                       "  - Remove port_lock entry\n"
+                       "Proceed? [y/N] ")
+        if answer.lower() not in ("y", "yes"):
+            print("Cancelled.")
+            sys.exit(0)
+
+    try:
+        steps = archive_branch(args.branch)
+        for step in steps:
+            print(f"  ✓ {step}")
+        print(f"\nArchived '{args.branch}' successfully.")
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

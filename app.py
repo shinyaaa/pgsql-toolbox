@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """PostgreSQL Worktree Dashboard Server."""
 
-import os
-import re
-import shutil
 import sqlite3
-import subprocess
-import tempfile
 import threading
 from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, g, jsonify, render_template, request
 
-app = Flask(__name__)
+from lib.config import DB_PATH, LOGS_DIR, PGSQL_DIR
+from lib.db import init_db
+from lib.init import init_branch
+from lib.operations import (
+    archive_branch,
+    check_pg_running,
+    parse_port_lock,
+    pg_ctl_path,
+    pg_data_path,
+    remove_port_lock_entry,
+    scan_worktrees,
+)
 
-PGSQL_DIR = Path.home() / "pgsql"
-ARCHIVE_DIR = PGSQL_DIR / "_archive"
-LOGS_DIR = PGSQL_DIR / "logs"
-PORT_LOCK = PGSQL_DIR / "port_lock"
-MAIN_REPO = PGSQL_DIR / "master" / "postgres"
-PG_INIT = Path.home() / "git" / "settings" / "bin" / "pg_init"
-DB_PATH = Path(__file__).parent / "dashboard.db"
+app = Flask(__name__)
 
 # Track background pg_init tasks: branch_name -> {"status": "running"/"done"/"error", "error": "..."}
 pg_init_tasks = {}
@@ -40,68 +40,6 @@ def close_db(exception):
     db = g.pop("db", None)
     if db is not None:
         db.close()
-
-
-def init_db():
-    db = sqlite3.connect(str(DB_PATH))
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS branches (
-            name TEXT PRIMARY KEY,
-            status TEXT NOT NULL DEFAULT 'active',
-            mailing_list_url TEXT DEFAULT '',
-            commitfest_url TEXT DEFAULT '',
-            notes TEXT DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-    """)
-    db.commit()
-    db.close()
-
-
-def parse_port_lock():
-    """Parse port_lock file and return dict of branch -> port."""
-    result = {}
-    if PORT_LOCK.exists():
-        for line in PORT_LOCK.read_text().splitlines():
-            parts = line.strip().split()
-            if len(parts) >= 2 and not parts[0].startswith("#"):
-                port, project = parts[0], parts[1]
-                result[project] = int(port)
-    return result
-
-
-def scan_worktrees():
-    """Scan ~/pgsql for existing worktree directories."""
-    if not PGSQL_DIR.exists():
-        return []
-    return sorted(
-        d.name
-        for d in PGSQL_DIR.iterdir()
-        if d.is_dir() and d.name not in ("port_lock", "_archive")
-    )
-
-
-def pg_ctl_path(name):
-    return PGSQL_DIR / name / "bin" / "pg_ctl"
-
-
-def pg_data_path(name):
-    return PGSQL_DIR / name / "data"
-
-
-def check_pg_running(name):
-    """Check if PostgreSQL is running for the given worktree.
-    Returns 'up', 'down', or None (no pg_ctl/data)."""
-    ctl = pg_ctl_path(name)
-    data = pg_data_path(name)
-    if not ctl.exists() or not data.exists():
-        return None
-    result = subprocess.run(
-        [str(ctl), "status", "-D", str(data)],
-        capture_output=True, text=True,
-    )
-    return "up" if result.returncode == 0 else "down"
 
 
 def sync_branches():
@@ -206,37 +144,24 @@ def api_delete_branch(name):
 
 
 def _run_pg_init(branch, base_branch):
-    """Run pg_init in background thread.
-
-    stdout/stderr are sent to /dev/null so they don't interfere with
-    pg_init's own `exec > >(tee ...)` logging.  Passing a pipe or temp
-    file from subprocess replaces the fd that tee inherits, which can
-    cause SIGPIPE during parallel make and corrupt the build.
-    """
-    cmd = [str(PG_INIT), "-b", branch, "-B", base_branch]
+    """Run pg_init in background thread."""
     try:
-        result = subprocess.run(
-            cmd, stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        if result.returncode != 0:
-            # Check log file for error details
-            error = f"pg_init exited with code {result.returncode}"
-            if LOGS_DIR.exists():
-                logs = sorted(LOGS_DIR.glob("pg_init_*.log"), reverse=True)
-                for f in logs:
-                    try:
-                        content = f.read_text(errors="replace")
-                        if branch in content:
-                            error = content
-                            break
-                    except OSError:
-                        continue
-            pg_init_tasks[branch] = {"status": "error", "error": error}
-        else:
-            pg_init_tasks[branch] = {"status": "done"}
+        init_branch(branch, base_branch)
+        pg_init_tasks[branch] = {"status": "done"}
     except Exception as e:
-        pg_init_tasks[branch] = {"status": "error", "error": str(e)}
+        # Try to get details from log files
+        error = str(e)
+        if LOGS_DIR.exists():
+            logs = sorted(LOGS_DIR.glob("pg_init_*.log"), reverse=True)
+            for f in logs:
+                try:
+                    content = f.read_text(errors="replace")
+                    if branch in content:
+                        error = content
+                        break
+                except OSError:
+                    continue
+        pg_init_tasks[branch] = {"status": "error", "error": error}
 
 
 @app.route("/api/pg_init", methods=["POST"])
@@ -295,6 +220,7 @@ def api_pg_ctl(name):
         cmd = [str(ctl), "stop", "-D", str(pgdata)]
 
     try:
+        import subprocess
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         output = result.stdout + result.stderr
         if result.returncode != 0:
@@ -310,101 +236,14 @@ def api_pg_status(name):
     return jsonify({"name": name, "pg_running": status})
 
 
-def remove_port_lock_entry(name):
-    """Remove a branch's entry from the port_lock file."""
-    if not PORT_LOCK.exists():
-        return
-    lines = PORT_LOCK.read_text().splitlines()
-    new_lines = [
-        line for line in lines
-        if not (line.strip().split()[1:2] == [name] if len(line.strip().split()) >= 2 else False)
-    ]
-    if len(new_lines) != len(lines):
-        PORT_LOCK.write_text("\n".join(new_lines) + "\n" if new_lines else "")
-
-
 @app.route("/api/branches/<name>/archive", methods=["POST"])
 def api_archive_branch(name):
     """Archive a branch: stop PG, move to _archive, remove worktree/branches, update DB."""
-    project_dir = PGSQL_DIR / name
-    if not project_dir.exists():
-        return jsonify({"error": f"Directory {name} not found"}), 404
-
-    steps = []
-
-    # 1. Stop PostgreSQL if running
-    pg_status = check_pg_running(name)
-    if pg_status == "up":
-        ctl = pg_ctl_path(name)
-        pgdata = pg_data_path(name)
-        result = subprocess.run(
-            [str(ctl), "stop", "-D", str(pgdata)],
-            capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode == 0:
-            steps.append("Stopped PostgreSQL")
-        else:
-            return jsonify({"error": f"Failed to stop PostgreSQL: {result.stdout + result.stderr}"}), 500
-
-    # 2. Kill tmux session if exists
-    result = subprocess.run(
-        ["tmux", "kill-session", "-t", name],
-        capture_output=True, text=True,
-    )
-    if result.returncode == 0:
-        steps.append(f"Killed tmux session: {name}")
-
-    # 3. Move directory to _archive
-    ARCHIVE_DIR.mkdir(exist_ok=True)
-    dest = ARCHIVE_DIR / name
-    if dest.exists():
-        shutil.rmtree(str(dest))
-    shutil.move(str(project_dir), str(dest))
-    steps.append(f"Moved to _archive/{name}")
-
-    # 4. Prune git worktree references
-    if MAIN_REPO.exists():
-        subprocess.run(
-            ["git", "-C", str(MAIN_REPO), "worktree", "prune"],
-            capture_output=True, text=True,
-        )
-        steps.append("Pruned worktree references")
-
-        # 5. Delete local branch
-        result = subprocess.run(
-            ["git", "-C", str(MAIN_REPO), "branch", "-D", name],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            steps.append(f"Deleted local branch: {name}")
-        else:
-            steps.append(f"Local branch delete skipped: {result.stderr.strip()}")
-
-        # 6. Delete remote branch
-        result = subprocess.run(
-            ["git", "-C", str(MAIN_REPO), "push", "origin", "--delete", name],
-            capture_output=True, text=True,
-            timeout=30,
-        )
-        if result.returncode == 0:
-            steps.append(f"Deleted remote branch: {name}")
-        else:
-            steps.append(f"Remote branch delete skipped: {result.stderr.strip()}")
-
-    # 7. Remove port_lock entry
-    remove_port_lock_entry(name)
-    steps.append("Removed port_lock entry")
-
-    # 8. Update DB status to archived
-    db = get_db()
-    db.execute(
-        "UPDATE branches SET status = 'archived', updated_at = ? WHERE name = ?",
-        (datetime.now().isoformat(), name),
-    )
-    db.commit()
-    steps.append("Updated status to archived")
-
-    return jsonify({"ok": True, "steps": steps})
+    try:
+        steps = archive_branch(name)
+        return jsonify({"ok": True, "steps": steps})
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/logs")

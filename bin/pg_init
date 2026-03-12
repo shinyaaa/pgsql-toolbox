@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Initialize a PostgreSQL development worktree."""
+
+import argparse
+import sys
+from pathlib import Path
+
+# Add repo root to path for lib imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.init import init_branch
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Initialize a PostgreSQL development worktree"
+    )
+    parser.add_argument(
+        "-b", dest="branch",
+        help="Branch or tag to checkout (default: prompt interactively)",
+    )
+    parser.add_argument(
+        "-B", dest="base_branch", default="master",
+        help="Base branch for new branch creation (default: master)",
+    )
+    args = parser.parse_args()
+
+    branch = args.branch
+    base_branch = args.base_branch
+
+    # Interactive prompt if branch not provided
+    if not branch:
+        branch = input("Branch (default: master): ").strip() or "master"
+
+    if not args.branch:
+        user_base = input(f"Base branch (default: {base_branch}): ").strip()
+        if user_base:
+            base_branch = user_base
+
+    try:
+        init_branch(branch, base_branch)
+    except Exception as e:
+        print(f"\nError: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
