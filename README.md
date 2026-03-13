@@ -85,21 +85,21 @@ systemd ユーザーサービスとして常駐する。
 
 ```bash
 # 状態確認
-systemctl --user status pgsql-dashboard
+systemctl --user status pgsql-toolbox
 
 # 起動 / 停止 / 再起動
-systemctl --user start pgsql-dashboard
-systemctl --user stop pgsql-dashboard
-systemctl --user restart pgsql-dashboard
+systemctl --user start pgsql-toolbox
+systemctl --user stop pgsql-toolbox
+systemctl --user restart pgsql-toolbox
 
 # ログ確認
-journalctl --user -u pgsql-dashboard -f
+journalctl --user -u pgsql-toolbox -f
 ```
 
 手動で起動する場合:
 
 ```bash
-cd ~/git/pgsql-dashboard
+cd ~/git/pgsql-toolbox
 python3 app.py
 ```
 
@@ -108,7 +108,7 @@ http://127.0.0.1:30001 でアクセス。
 ## 構成
 
 ```
-pgsql-dashboard/
+pgsql-toolbox/
   app.py                # Flask バックエンド (API + SQLite)
   lib/
     config.py           # 共通定数

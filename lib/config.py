@@ -1,4 +1,4 @@
-"""Shared constants for pgsql-dashboard."""
+"""Shared constants for pgsql-toolbox."""
 
 from pathlib import Path
 

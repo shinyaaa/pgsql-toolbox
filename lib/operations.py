@@ -1,4 +1,4 @@
-"""Shared operations for pgsql-dashboard (archive, port_lock, pg_ctl, etc.)."""
+"""Shared operations for pgsql-toolbox (archive, port_lock, pg_ctl, etc.)."""
 
 import logging
 import os
