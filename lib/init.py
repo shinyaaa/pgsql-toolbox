@@ -6,16 +6,21 @@ Ported from the original bash script bin/pg_init.
 import fcntl
 import logging
 import os
+import shutil
 import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from lib.config import (
+    CLAUDE_STARTUP_BUFFER,
+    CLAUDE_STARTUP_POLL_INTERVAL,
+    CLAUDE_STARTUP_TIMEOUT,
     GH_REPO,
     LOGS_DIR,
     MAIN_REPO,
+    MCP_ENDPOINT,
     PGSQL_DIR,
     PORT_LOCK,
     PRIMARY_PORT_MIN,
@@ -24,9 +29,10 @@ from lib.config import (
     STANDBY_PORT_STRIDE,
     SYNC_BRANCHES,
 )
-from lib.operations import run_cmd
+from lib.operations import atomic_write, make_run_wrapper
 
 logger = logging.getLogger("pg_init")
+_run = make_run_wrapper(logger)
 
 
 def setup_logging(log_file: Optional[Path] = None) -> Path:
@@ -40,7 +46,10 @@ def setup_logging(log_file: Optional[Path] = None) -> Path:
         log_file = LOGS_DIR / f"pg_init_{timestamp}.log"
 
     logger.setLevel(logging.INFO)
-    logger.handlers.clear()
+    # Replace handlers for this invocation
+    for h in logger.handlers[:]:
+        logger.removeHandler(h)
+        h.close()
 
     fmt = logging.Formatter("%(message)s")
 
@@ -53,12 +62,6 @@ def setup_logging(log_file: Optional[Path] = None) -> Path:
     logger.addHandler(sh)
 
     return log_file
-
-
-def _run(cmd, check=True, capture=False, cwd=None, timeout=None):
-    """Convenience wrapper that passes module logger to run_cmd."""
-    return run_cmd(cmd, check=check, capture=capture, cwd=cwd,
-                   timeout=timeout, cmd_logger=logger)
 
 
 def sync_upstream():
@@ -84,7 +87,7 @@ def allocate_port(project: str, branch: str) -> int:
 
         # Read and prune stale entries
         content = PORT_LOCK.read_text()
-        latest: dict[str, str] = {}
+        latest: Dict[str, str] = {}
         for line in content.splitlines():
             parts = line.strip().split()
             if not parts or parts[0].startswith("#"):
@@ -100,8 +103,9 @@ def allocate_port(project: str, branch: str) -> int:
                 latest[lproj] = f"{lp} {lproj} {lbranch}"
 
         # Rewrite pruned, deduplicated entries
-        PORT_LOCK.write_text(
-            "\n".join(latest.values()) + "\n" if latest else ""
+        atomic_write(
+            PORT_LOCK,
+            "\n".join(latest.values()) + "\n" if latest else "",
         )
 
         # Check if project already exists on disk
@@ -278,8 +282,6 @@ def setup_worktree(branch: str, base_branch: str) -> Path:
 
 def copy_settings(src_dir: Path):
     """Copy agent settings from skel/ to the worktree."""
-    import shutil
-
     skel_dir = REPO_ROOT / "skel"
     if not skel_dir.is_dir():
         logger.warning(f"skel directory not found: {skel_dir}")
@@ -298,7 +300,7 @@ def copy_settings(src_dir: Path):
 
     # Install MCP server
     _run(["claude", "mcp", "add", "--transport", "http",
-          "pgsql-ml-mcp", "http://localhost:40000/mcp"],
+          "pgsql-ml-mcp", MCP_ENDPOINT],
          cwd=str(src_dir), check=False)
 
 
@@ -327,16 +329,8 @@ def build_postgres(src_dir: Path, project_dir: Path, port: int):
          cwd=str(src_dir / "src" / "tools" / "pg_bsd_indent"))
 
 
-def setup_environment(src_dir: Path, project_dir: Path, port: int, branch: str,
-                      standbys: Optional[list] = None):
-    """Create .envrc, work/ directory, git excludes, and memo file."""
-    logger.info("Setting up environment...")
-
-    # Create work/ and .vscode/
-    (src_dir / "work").mkdir(exist_ok=True)
-    (src_dir / ".vscode").mkdir(exist_ok=True)
-
-    # Create .envrc
+def _setup_envrc(src_dir: Path, project_dir: Path, port: int):
+    """Create .envrc for direnv."""
     envrc = src_dir / ".envrc"
     envrc_lines = [
         f"export PGPORT={port}",
@@ -346,33 +340,35 @@ def setup_environment(src_dir: Path, project_dir: Path, port: int, branch: str,
         f"PATH_add {project_dir}/bin",
         f"PATH_add {src_dir}/src/tools/pgindent",
     ]
-
-    # Create standby wrapper scripts in project bin/
-    if standbys:
-        bin_dir = project_dir / "bin"
-        for i, sb in enumerate(standbys, 1):
-            sb_port = port + i * STANDBY_PORT_STRIDE
-            sb_data = project_dir / f"data-s{i}"
-
-            # psql-s{i}: shortcut for psql to standby
-            psql_wrapper = bin_dir / f"psql-s{i}"
-            psql_wrapper.write_text(
-                f"#!/bin/sh\nexec psql -p {sb_port} \"$@\"\n"
-            )
-            psql_wrapper.chmod(0o755)
-
-            # pg-s{i}: run any command with PGPORT/PGDATA set to standby
-            pg_wrapper = bin_dir / f"pg-s{i}"
-            pg_wrapper.write_text(
-                f"#!/bin/sh\nexport PGPORT={sb_port}\n"
-                f"export PGDATA={sb_data}\nexec \"$@\"\n"
-            )
-            pg_wrapper.chmod(0o755)
-
     envrc.write_text("\n".join(envrc_lines) + "\n")
     _run(["direnv", "allow"], cwd=str(src_dir), check=False)
 
-    # Set up git excludes
+
+def _setup_standby_wrappers(project_dir: Path, port: int, standbys: list):
+    """Create convenience wrapper scripts for standbys in project bin/."""
+    bin_dir = project_dir / "bin"
+    for i, sb in enumerate(standbys, 1):
+        sb_port = port + i * STANDBY_PORT_STRIDE
+        sb_data = project_dir / f"data-s{i}"
+
+        # psql-s{i}: shortcut for psql to standby
+        psql_wrapper = bin_dir / f"psql-s{i}"
+        psql_wrapper.write_text(
+            f"#!/bin/sh\nexec psql -p {sb_port} \"$@\"\n"
+        )
+        psql_wrapper.chmod(0o755)
+
+        # pg-s{i}: run any command with PGPORT/PGDATA set to standby
+        pg_wrapper = bin_dir / f"pg-s{i}"
+        pg_wrapper.write_text(
+            f"#!/bin/sh\nexport PGPORT={sb_port}\n"
+            f"export PGDATA={sb_data}\nexec \"$@\"\n"
+        )
+        pg_wrapper.chmod(0o755)
+
+
+def _setup_git_excludes(src_dir: Path):
+    """Add generated paths to the worktree's git exclude file."""
     result = _run(
         ["git", "rev-parse", "--git-path", "info/exclude"],
         cwd=str(src_dir), capture=True,
@@ -389,11 +385,29 @@ def setup_environment(src_dir: Path, project_dir: Path, port: int, branch: str,
             if pat not in existing.splitlines():
                 f.write(f"{pat}\n")
 
-    # Create memo file
+
+def _setup_memo(project_dir: Path, branch: str):
+    """Create a memo file for the branch."""
     memo_dir = project_dir / "postgres" / "work" / branch
     memo_dir.mkdir(parents=True, exist_ok=True)
     memo_file = memo_dir / f"{branch}.md"
     memo_file.touch(exist_ok=True)
+
+
+def setup_environment(src_dir: Path, project_dir: Path, port: int, branch: str,
+                      standbys: Optional[list] = None):
+    """Create .envrc, work/ directory, git excludes, and memo file."""
+    logger.info("Setting up environment...")
+
+    # Create work/ and .vscode/
+    (src_dir / "work").mkdir(exist_ok=True)
+    (src_dir / ".vscode").mkdir(exist_ok=True)
+
+    _setup_envrc(src_dir, project_dir, port)
+    if standbys:
+        _setup_standby_wrappers(project_dir, port, standbys)
+    _setup_git_excludes(src_dir)
+    _setup_memo(project_dir, branch)
 
 
 def init_database(project_dir: Path, port: int):
@@ -450,19 +464,19 @@ def setup_tmux_claude(branch: str, src_dir: Path):
 
     # Wait for Claude Code prompt (poll quietly, no logging)
     logger.info("Waiting for Claude Code to start...")
-    for i in range(60):
+    for i in range(CLAUDE_STARTUP_TIMEOUT):
         result = subprocess.run(
             ["tmux", "capture-pane", "-t", session, "-p"],
             capture_output=True, text=True,
         )
         if result.stdout:
-            lines = [l for l in result.stdout.splitlines() if l.strip()]
+            lines = [line for line in result.stdout.splitlines() if line.strip()]
             # Claude Code prompt: ">" or "❯" or contains input marker
             if lines and (lines[-1].startswith(">") or "❯" in lines[-1]):
                 break
-        time.sleep(1)
+        time.sleep(CLAUDE_STARTUP_POLL_INTERVAL)
 
-    time.sleep(2)
+    time.sleep(CLAUDE_STARTUP_BUFFER)
     subprocess.run(
         ["tmux", "send-keys", "-t", session, f"/rename {branch}", "Enter"],
         capture_output=True, text=True,

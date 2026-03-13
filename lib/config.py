@@ -27,3 +27,14 @@ PRIMARY_PORT_MAX = 50999
 STANDBY_PORT_STRIDE = 1000
 MAX_STANDBYS = 9
 REPL_TYPES = ["streaming_sync", "streaming_async", "logical"]
+
+# Log preview
+LOG_PREVIEW_SIZE = 4096
+
+# Claude Code startup polling in tmux
+CLAUDE_STARTUP_TIMEOUT = 60
+CLAUDE_STARTUP_POLL_INTERVAL = 1
+CLAUDE_STARTUP_BUFFER = 2
+
+# MCP server endpoint
+MCP_ENDPOINT = "http://localhost:40000/mcp"

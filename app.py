@@ -9,7 +9,7 @@ from pathlib import Path
 
 from flask import Flask, g, jsonify, render_template, request
 
-from lib.config import DB_PATH, HIDDEN_DIRS, LOGS_DIR, PGSQL_DIR, STANDBY_PORT_STRIDE
+from lib.config import DB_PATH, HIDDEN_DIRS, LOG_PREVIEW_SIZE, LOGS_DIR, PGSQL_DIR, STANDBY_PORT_STRIDE
 from lib.db import get_standbys, init_db, remove_standbys
 from lib.init import init_branch
 from lib.operations import (
@@ -251,7 +251,7 @@ def api_pg_ctl(name):
 
     port_map = parse_port_lock()
     port = port_map.get(name)
-    if port and standby_index:
+    if port and standby_index is not None:
         port = port + standby_index * STANDBY_PORT_STRIDE
 
     if action == "start":
@@ -340,7 +340,7 @@ def api_logs_list():
                  "mtime": datetime.fromtimestamp(f.stat().st_mtime).isoformat()}
         if branch:
             try:
-                head = f.read_text(errors="replace")[:4096]
+                head = f.read_text(errors="replace")[:LOG_PREVIEW_SIZE]
                 if branch not in head:
                     continue
             except OSError:

@@ -8,15 +8,10 @@ from pathlib import Path
 from typing import Optional
 
 from lib.config import PGSQL_DIR, STANDBY_PORT_STRIDE
-from lib.operations import run_cmd
+from lib.operations import make_run_wrapper
 
 logger = logging.getLogger("pg_replication")
-
-
-def _run(cmd, check=True, capture=False, cwd=None, timeout=None):
-    """Convenience wrapper that passes module logger to run_cmd."""
-    return run_cmd(cmd, check=check, capture=capture, cwd=cwd,
-                   timeout=timeout, cmd_logger=logger)
+_run = make_run_wrapper(logger)
 
 
 def standby_port(primary_port: int, standby_index: int) -> int:

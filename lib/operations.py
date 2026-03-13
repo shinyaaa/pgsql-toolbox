@@ -1,10 +1,12 @@
 """Shared operations for pgsql-dashboard (archive, port_lock, pg_ctl, etc.)."""
 
 import logging
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from lib.config import ARCHIVE_DIR, HIDDEN_DIRS, MAIN_REPO, PORT_LOCK, PGSQL_DIR, STANDBY_PORT_STRIDE
 from lib.db import get_standbys, remove_standbys, update_branch_status
@@ -51,7 +53,29 @@ def run_cmd(cmd, check=True, capture=False, cwd=None, timeout=None,
     return result
 
 
-def parse_port_lock() -> dict[str, int]:
+def make_run_wrapper(cmd_logger: logging.Logger):
+    """Create a convenience wrapper that passes the given logger to run_cmd."""
+    def _run(cmd, check=True, capture=False, cwd=None, timeout=None):
+        return run_cmd(cmd, check=check, capture=capture, cwd=cwd,
+                       timeout=timeout, cmd_logger=cmd_logger)
+    return _run
+
+
+def atomic_write(path: Path, content: str):
+    """Atomically write content to a file using rename."""
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent))
+    try:
+        os.write(fd, content.encode())
+        os.fsync(fd)
+        os.close(fd)
+        os.replace(tmp_path, str(path))
+    except BaseException:
+        os.close(fd)
+        os.unlink(tmp_path)
+        raise
+
+
+def parse_port_lock() -> Dict[str, int]:
     """Parse port_lock file and return dict of project -> port."""
     result = {}
     if PORT_LOCK.exists():
@@ -88,7 +112,7 @@ def pg_ctl_path(name: str) -> Path:
 
 
 def pg_data_path(name: str, standby_index: Optional[int] = None) -> Path:
-    if standby_index:
+    if standby_index is not None:
         return PGSQL_DIR / name / f"data-s{standby_index}"
     return PGSQL_DIR / name / "data"
 
@@ -123,7 +147,7 @@ def remove_port_lock_entry(name: str):
         if not (len(line.strip().split()) >= 2 and line.strip().split()[1] == name)
     ]
     if len(new_lines) != len(lines):
-        PORT_LOCK.write_text("\n".join(new_lines) + "\n" if new_lines else "")
+        atomic_write(PORT_LOCK, "\n".join(new_lines) + "\n" if new_lines else "")
 
 
 def archive_branch(name: str, db_path: Optional[Path] = None) -> list:
