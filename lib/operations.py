@@ -1,5 +1,6 @@
 """Shared operations for pgsql-dashboard (archive, port_lock, pg_ctl, etc.)."""
 
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -8,16 +9,65 @@ from typing import Optional
 from lib.config import ARCHIVE_DIR, HIDDEN_DIRS, MAIN_REPO, PORT_LOCK, PGSQL_DIR, STANDBY_PORT_STRIDE
 from lib.db import get_standbys, remove_standbys, update_branch_status
 
+logger = logging.getLogger(__name__)
+
+
+def run_cmd(cmd, check=True, capture=False, cwd=None, timeout=None,
+            cmd_logger=None):
+    """Run a subprocess command, logging the command and any output.
+
+    Args:
+        cmd: Command to run (list or string).
+        check: If True, raise RuntimeError on non-zero exit.
+        capture: If True, capture stdout/stderr separately (for programmatic use).
+                 If False, merge stderr into stdout and log each line.
+        cwd: Working directory.
+        timeout: Timeout in seconds.
+        cmd_logger: Logger instance to use (defaults to module logger).
+    """
+    log = cmd_logger or logger
+    cmd_str = cmd if isinstance(cmd, str) else " ".join(str(c) for c in cmd)
+    log.info(f"+ {cmd_str}")
+    kwargs = {
+        "cwd": cwd,
+        "timeout": timeout,
+        "text": True,
+    }
+    if capture:
+        kwargs["capture_output"] = True
+    else:
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.STDOUT
+    result = subprocess.run(cmd, **kwargs)
+    if not capture and result.stdout:
+        for line in result.stdout.splitlines():
+            log.info(line)
+    if check and result.returncode != 0:
+        if capture:
+            error = (result.stderr or "") + (result.stdout or "")
+        else:
+            error = result.stdout or ""
+        raise RuntimeError(f"Command failed (exit {result.returncode}): {cmd_str}\n{error}")
+    return result
+
 
 def parse_port_lock() -> dict[str, int]:
     """Parse port_lock file and return dict of project -> port."""
     result = {}
     if PORT_LOCK.exists():
-        for line in PORT_LOCK.read_text().splitlines():
+        for line_no, line in enumerate(PORT_LOCK.read_text().splitlines(), 1):
             parts = line.strip().split()
-            if len(parts) >= 2 and not parts[0].startswith("#"):
-                port, project = parts[0], parts[1]
-                result[project] = int(port)
+            if not parts or parts[0].startswith("#"):
+                continue
+            if len(parts) < 2:
+                logger.warning("port_lock line %d: too few fields: %s", line_no, line)
+                continue
+            try:
+                port = int(parts[0])
+            except ValueError:
+                logger.warning("port_lock line %d: invalid port %r", line_no, parts[0])
+                continue
+            result[parts[1]] = port
     return result
 
 

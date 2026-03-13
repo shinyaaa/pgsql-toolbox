@@ -2,6 +2,7 @@
 """PostgreSQL Worktree Dashboard Server."""
 
 import sqlite3
+import subprocess
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +32,7 @@ from lib.replication import (
 app = Flask(__name__)
 
 # Track background pg_init tasks: branch_name -> {"status": "running"/"done"/"error", "error": "..."}
+_pg_init_lock = threading.Lock()
 pg_init_tasks = {}
 
 
@@ -117,7 +119,9 @@ def api_branches():
     branches = sync_branches()
     known_names = {b["name"] for b in branches}
     # Include pg_init tasks as virtual "creating" entries
-    for name, task in pg_init_tasks.items():
+    with _pg_init_lock:
+        tasks_snapshot = dict(pg_init_tasks)
+    for name, task in tasks_snapshot.items():
         entry = {"name": name, "pg_init_status": task.get("status"),
                  "pg_init_error": task.get("error", "")}
         if name in known_names:
@@ -173,7 +177,8 @@ def _run_pg_init(branch, base_branch, standbys=None):
     """Run pg_init in background thread."""
     try:
         init_branch(branch, base_branch, standbys=standbys)
-        pg_init_tasks[branch] = {"status": "done"}
+        with _pg_init_lock:
+            pg_init_tasks[branch] = {"status": "done"}
     except Exception as e:
         # Try to get details from log files
         error = str(e)
@@ -187,7 +192,8 @@ def _run_pg_init(branch, base_branch, standbys=None):
                         break
                 except OSError:
                     continue
-        pg_init_tasks[branch] = {"status": "error", "error": error}
+        with _pg_init_lock:
+            pg_init_tasks[branch] = {"status": "error", "error": error}
 
 
 @app.route("/api/pg_init", methods=["POST"])
@@ -200,10 +206,11 @@ def api_pg_init():
     if not branch:
         return jsonify({"error": "Branch name is required"}), 400
 
-    if branch in pg_init_tasks and pg_init_tasks[branch]["status"] == "running":
-        return jsonify({"error": f"{branch} is already being created"}), 409
+    with _pg_init_lock:
+        if branch in pg_init_tasks and pg_init_tasks[branch]["status"] == "running":
+            return jsonify({"error": f"{branch} is already being created"}), 409
+        pg_init_tasks[branch] = {"status": "running"}
 
-    pg_init_tasks[branch] = {"status": "running"}
     thread = threading.Thread(
         target=_run_pg_init, args=(branch, base_branch, standbys), daemon=True
     )
@@ -214,7 +221,8 @@ def api_pg_init():
 
 @app.route("/api/pg_init/<branch>", methods=["GET"])
 def api_pg_init_status(branch):
-    task = pg_init_tasks.get(branch)
+    with _pg_init_lock:
+        task = pg_init_tasks.get(branch)
     if not task:
         return jsonify({"status": "unknown"}), 404
     return jsonify(task)
@@ -223,7 +231,9 @@ def api_pg_init_status(branch):
 @app.route("/api/pg_init", methods=["GET"])
 def api_pg_init_list():
     """Return all pg_init task statuses."""
-    return jsonify(pg_init_tasks)
+    with _pg_init_lock:
+        snapshot = dict(pg_init_tasks)
+    return jsonify(snapshot)
 
 
 @app.route("/api/branches/<name>/pg", methods=["POST"])
@@ -252,7 +262,6 @@ def api_pg_ctl(name):
         cmd = [str(ctl), "stop", "-D", str(pgdata)]
 
     try:
-        import subprocess
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         output = result.stdout + result.stderr
         if result.returncode != 0:

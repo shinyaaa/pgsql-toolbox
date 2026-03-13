@@ -8,32 +8,15 @@ from pathlib import Path
 from typing import Optional
 
 from lib.config import PGSQL_DIR, STANDBY_PORT_STRIDE
+from lib.operations import run_cmd
 
-logger = logging.getLogger("pg_init")
+logger = logging.getLogger("pg_replication")
 
 
 def _run(cmd, check=True, capture=False, cwd=None, timeout=None):
-    """Run a subprocess command, logging the command and any errors."""
-    cmd_str = cmd if isinstance(cmd, str) else " ".join(str(c) for c in cmd)
-    logger.info(f"+ {cmd_str}")
-    kwargs = {
-        "cwd": cwd,
-        "timeout": timeout,
-        "text": True,
-    }
-    if capture:
-        kwargs["capture_output"] = True
-    else:
-        kwargs["stdout"] = subprocess.PIPE
-        kwargs["stderr"] = subprocess.STDOUT
-    result = subprocess.run(cmd, **kwargs)
-    if not capture and result.stdout:
-        for line in result.stdout.splitlines():
-            logger.info(line)
-    if check and result.returncode != 0:
-        error = result.stderr if capture else (result.stdout or "")
-        raise RuntimeError(f"Command failed (exit {result.returncode}): {cmd_str}\n{error}")
-    return result
+    """Convenience wrapper that passes module logger to run_cmd."""
+    return run_cmd(cmd, check=check, capture=capture, cwd=cwd,
+                   timeout=timeout, cmd_logger=logger)
 
 
 def standby_port(primary_port: int, standby_index: int) -> int:

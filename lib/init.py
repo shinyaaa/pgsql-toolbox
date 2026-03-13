@@ -18,10 +18,13 @@ from lib.config import (
     MAIN_REPO,
     PGSQL_DIR,
     PORT_LOCK,
+    PRIMARY_PORT_MIN,
+    PRIMARY_PORT_MAX,
     REPO_ROOT,
     STANDBY_PORT_STRIDE,
     SYNC_BRANCHES,
 )
+from lib.operations import run_cmd
 
 logger = logging.getLogger("pg_init")
 
@@ -53,27 +56,9 @@ def setup_logging(log_file: Optional[Path] = None) -> Path:
 
 
 def _run(cmd, check=True, capture=False, cwd=None, timeout=None):
-    """Run a subprocess command, logging the command and any errors."""
-    cmd_str = cmd if isinstance(cmd, str) else " ".join(str(c) for c in cmd)
-    logger.info(f"+ {cmd_str}")
-    kwargs = {
-        "cwd": cwd,
-        "timeout": timeout,
-        "text": True,
-    }
-    if capture:
-        kwargs["capture_output"] = True
-    else:
-        kwargs["stdout"] = subprocess.PIPE
-        kwargs["stderr"] = subprocess.STDOUT
-    result = subprocess.run(cmd, **kwargs)
-    if not capture and result.stdout:
-        for line in result.stdout.splitlines():
-            logger.info(line)
-    if check and result.returncode != 0:
-        error = result.stderr if capture else (result.stdout or "")
-        raise RuntimeError(f"Command failed (exit {result.returncode}): {cmd_str}\n{error}")
-    return result
+    """Convenience wrapper that passes module logger to run_cmd."""
+    return run_cmd(cmd, check=check, capture=capture, cwd=cwd,
+                   timeout=timeout, cmd_logger=logger)
 
 
 def sync_upstream():
@@ -107,8 +92,8 @@ def allocate_port(project: str, branch: str) -> int:
             if len(parts) < 3:
                 continue
             lp, lproj, lbranch = parts[0], parts[1], parts[2]
-            # Enforce master-only for port 50000
-            if lp == "50000" and lbranch != "master":
+            # Enforce master-only for the master port
+            if lp == str(PRIMARY_PORT_MIN) and lbranch != "master":
                 continue
             # Keep only if project directory exists
             if (PGSQL_DIR / lproj).is_dir():
@@ -131,13 +116,14 @@ def allocate_port(project: str, branch: str) -> int:
 
         # Allocate new port
         if branch == "master":
-            port = 50000
-            # Check if 50000 is already taken by another project
+            port = PRIMARY_PORT_MIN
+            # Check if master port is already taken by another project
             for line_val in latest.values():
                 parts = line_val.split()
-                if parts[0] == "50000" and parts[1] != project:
+                if parts[0] == str(PRIMARY_PORT_MIN) and parts[1] != project:
                     raise RuntimeError(
-                        f"Port 50000 is already allocated to project: {parts[1]}"
+                        f"Port {PRIMARY_PORT_MIN} is already allocated to "
+                        f"project: {parts[1]}"
                     )
         else:
             used_ports = set()
@@ -146,12 +132,15 @@ def allocate_port(project: str, branch: str) -> int:
                 used_ports.add(int(parts[0]))
 
             port = None
-            for p in range(50001, 51000):
+            for p in range(PRIMARY_PORT_MIN + 1, PRIMARY_PORT_MAX + 1):
                 if p not in used_ports:
                     port = p
                     break
             if port is None:
-                raise RuntimeError("No free port available in range 50001-50999")
+                raise RuntimeError(
+                    f"No free port available in range "
+                    f"{PRIMARY_PORT_MIN + 1}-{PRIMARY_PORT_MAX}"
+                )
 
         # Register allocation
         with open(str(PORT_LOCK), "a") as f:
