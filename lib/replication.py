@@ -7,16 +7,17 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from lib.config import PGSQL_DIR, STANDBY_PORT_STRIDE
+from lib.config import (
+    PGSQL_DIR,
+    REPL_LOGICAL,
+    REPL_STREAMING_SYNC,
+    REPL_STREAMING_TYPES,
+    standby_port,
+)
 from lib.operations import make_run_wrapper
 
 logger = logging.getLogger("pg_replication")
 _run = make_run_wrapper(logger)
-
-
-def standby_port(primary_port: int, standby_index: int) -> int:
-    """Derive standby port from primary port and index."""
-    return primary_port + standby_index * STANDBY_PORT_STRIDE
 
 
 def standby_data_dir(project_dir: Path, standby_index: int) -> Path:
@@ -36,13 +37,13 @@ def configure_primary(project_dir: Path, port: int, standbys: list):
     pg_ctl = project_dir / "bin" / "pg_ctl"
 
     # Determine wal_level
-    has_logical = any(s["type"] == "logical" for s in standbys)
+    has_logical = any(s["type"] == REPL_LOGICAL for s in standbys)
     wal_level = "logical" if has_logical else "replica"
 
     # Determine synchronous_standby_names
     sync_names = []
     for i, sb in enumerate(standbys, 1):
-        if sb["type"] == "streaming_sync":
+        if sb["type"] == REPL_STREAMING_SYNC:
             sync_names.append(f"s{i}")
 
     # Append to postgresql.conf
@@ -79,6 +80,7 @@ def configure_primary(project_dir: Path, port: int, standbys: list):
     subprocess.run(
         [str(pg_ctl), "-D", str(data_dir), "restart", "-w"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+        timeout=60,
     )
 
 
@@ -99,12 +101,12 @@ def create_standby(project_dir: Path, primary_port: int,
     pg_ctl = project_dir / "bin" / "pg_ctl"
     psql = project_dir / "bin" / "psql"
 
-    if repl_type in ("streaming_sync", "streaming_async"):
+    if repl_type in REPL_STREAMING_TYPES:
         _create_streaming_standby(
             project_dir, data_dir, pg_basebackup, pg_ctl,
             primary_port, sb_port, standby_index, repl_type,
         )
-    elif repl_type == "logical":
+    elif repl_type == REPL_LOGICAL:
         _create_logical_standby(
             project_dir, data_dir, initdb, pg_ctl, psql,
             primary_port, sb_port, standby_index,
@@ -141,7 +143,7 @@ def _create_streaming_standby(project_dir, data_dir, pg_basebackup, pg_ctl,
         f.write("\n".join(standby_conf) + "\n")
 
     # For sync streaming, add application_name to primary_conninfo
-    if repl_type == "streaming_sync":
+    if repl_type == REPL_STREAMING_SYNC:
         auto_conf = data_dir / "postgresql.auto.conf"
         content = auto_conf.read_text()
         app_name = f"s{standby_index}"
@@ -164,6 +166,7 @@ def _create_streaming_standby(project_dir, data_dir, pg_basebackup, pg_ctl,
     result = subprocess.run(
         [str(pg_ctl), "-D", str(data_dir), "-o", f"-p {sb_port}", "start"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+        timeout=60,
     )
     if result.returncode != 0:
         raise RuntimeError(
@@ -207,6 +210,7 @@ def _create_logical_standby(project_dir, data_dir, initdb, pg_ctl, psql,
     result = subprocess.run(
         [str(pg_ctl), "-D", str(data_dir), "-o", f"-p {sb_port}", "start"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+        timeout=60,
     )
     if result.returncode != 0:
         raise RuntimeError(

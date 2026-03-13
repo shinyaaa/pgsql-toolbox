@@ -8,6 +8,7 @@ from pathlib import Path
 # Add repo root to path for lib imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from lib.config import REPL_STREAMING_ASYNC, REPL_STREAMING_SYNC, REPL_LOGICAL
 from lib.init import init_branch
 
 
@@ -46,9 +47,9 @@ def main():
     standbys = None
     if args.standbys:
         type_map = {
-            "sync": "streaming_sync",
-            "async": "streaming_async",
-            "logical": "logical",
+            "sync": REPL_STREAMING_SYNC,
+            "async": REPL_STREAMING_ASYNC,
+            "logical": REPL_LOGICAL,
         }
         standbys = [{"type": type_map[s]} for s in args.standbys]
 

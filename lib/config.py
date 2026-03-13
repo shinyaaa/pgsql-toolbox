@@ -26,7 +26,16 @@ PRIMARY_PORT_MIN = 50000
 PRIMARY_PORT_MAX = 50999
 STANDBY_PORT_STRIDE = 1000
 MAX_STANDBYS = 9
-REPL_TYPES = ["streaming_sync", "streaming_async", "logical"]
+REPL_STREAMING_SYNC = "streaming_sync"
+REPL_STREAMING_ASYNC = "streaming_async"
+REPL_LOGICAL = "logical"
+REPL_TYPES = [REPL_STREAMING_SYNC, REPL_STREAMING_ASYNC, REPL_LOGICAL]
+REPL_STREAMING_TYPES = {REPL_STREAMING_SYNC, REPL_STREAMING_ASYNC}
+
+
+def standby_port(primary_port: int, standby_index: int) -> int:
+    """Derive standby port from primary port and index."""
+    return primary_port + standby_index * STANDBY_PORT_STRIDE
 
 # Log preview
 LOG_PREVIEW_SIZE = 4096

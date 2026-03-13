@@ -8,6 +8,7 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -26,17 +27,66 @@ from lib.config import (
     PRIMARY_PORT_MIN,
     PRIMARY_PORT_MAX,
     REPO_ROOT,
-    STANDBY_PORT_STRIDE,
     SYNC_BRANCHES,
+    standby_port,
 )
 from lib.operations import atomic_write, make_run_wrapper
 
-logger = logging.getLogger("pg_init")
-_run = make_run_wrapper(logger)
+_default_logger = logging.getLogger("pg_init")
+_default_run = make_run_wrapper(_default_logger)
+_local = threading.local()
+
+
+class _LoggerProxy:
+    """Thread-aware proxy: uses per-invocation logger if set, else the default."""
+
+    def __getattr__(self, name):
+        real = getattr(_local, 'logger', _default_logger)
+        return getattr(real, name)
+
+
+class _RunProxy:
+    """Thread-aware proxy: uses per-invocation _run if set, else the default."""
+
+    def __call__(self, *args, **kwargs):
+        real = getattr(_local, 'run', _default_run)
+        return real(*args, **kwargs)
+
+
+logger = _LoggerProxy()  # type: ignore[assignment]
+_run = _RunProxy()
+
+
+def _make_logger(log_file: Path) -> logging.Logger:
+    """Create a per-invocation logger that writes to both file and stdout.
+
+    Uses a unique logger name per log file to avoid thread-safety issues
+    when multiple init_branch() calls run concurrently.
+    """
+    inv_logger = logging.getLogger(f"pg_init.{log_file.stem}")
+    inv_logger.setLevel(logging.INFO)
+    inv_logger.propagate = False
+
+    # Clear any stale handlers (e.g. from a previous run with the same name)
+    for h in inv_logger.handlers[:]:
+        inv_logger.removeHandler(h)
+        h.close()
+
+    fmt = logging.Formatter("%(message)s")
+
+    fh = logging.FileHandler(str(log_file))
+    fh.setFormatter(fmt)
+    inv_logger.addHandler(fh)
+
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    inv_logger.addHandler(sh)
+
+    return inv_logger
 
 
 def setup_logging(log_file: Optional[Path] = None) -> Path:
-    """Configure logging to both file and stdout (replaces bash tee).
+    """Determine the log file path, creating the log directory if needed.
 
     Returns the log file path.
     """
@@ -44,23 +94,6 @@ def setup_logging(log_file: Optional[Path] = None) -> Path:
     if log_file is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = LOGS_DIR / f"pg_init_{timestamp}.log"
-
-    logger.setLevel(logging.INFO)
-    # Replace handlers for this invocation
-    for h in logger.handlers[:]:
-        logger.removeHandler(h)
-        h.close()
-
-    fmt = logging.Formatter("%(message)s")
-
-    fh = logging.FileHandler(str(log_file))
-    fh.setFormatter(fmt)
-    logger.addHandler(fh)
-
-    sh = logging.StreamHandler()
-    sh.setFormatter(fmt)
-    logger.addHandler(sh)
-
     return log_file
 
 
@@ -348,7 +381,7 @@ def _setup_standby_wrappers(project_dir: Path, port: int, standbys: list):
     """Create convenience wrapper scripts for standbys in project bin/."""
     bin_dir = project_dir / "bin"
     for i, sb in enumerate(standbys, 1):
-        sb_port = port + i * STANDBY_PORT_STRIDE
+        sb_port = standby_port(port, i)
         sb_data = project_dir / f"data-s{i}"
 
         # psql-s{i}: shortcut for psql to standby
@@ -431,6 +464,7 @@ def init_database(project_dir: Path, port: int):
     result = subprocess.run(
         [str(pg_ctl), "-D", str(data_dir), "-o", f"-p {port}", "start"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
+        timeout=60,
     )
     if result.returncode != 0:
         raise RuntimeError(f"pg_ctl start failed (exit {result.returncode})")
@@ -510,6 +544,12 @@ def init_branch(branch: str, base_branch: str = "master",
     Returns the log file path.
     """
     log_path = setup_logging(log_file)
+
+    # Set up per-invocation logger and run wrapper (thread-safe via threading.local)
+    inv_logger = _make_logger(log_path)
+    _local.logger = inv_logger
+    _local.run = make_run_wrapper(inv_logger)
+
     project = branch
     project_dir = PGSQL_DIR / project
 
@@ -573,12 +613,19 @@ def init_branch(branch: str, base_branch: str = "master",
         logger.info(f"  {project_dir}/bin/psql -p {port} postgres")
         if standbys:
             for i in range(1, len(standbys) + 1):
-                sb_port = port + i * STANDBY_PORT_STRIDE
+                sb_port = standby_port(port, i)
                 logger.info(f"  {project_dir}/bin/psql -p {sb_port} postgres  (standby S{i})")
         logger.info(f"Log file: {log_path}")
 
     except Exception:
         logger.exception("pg_init failed")
         raise
+    finally:
+        # Clean up per-invocation logger handlers and thread-local state
+        for h in inv_logger.handlers[:]:
+            inv_logger.removeHandler(h)
+            h.close()
+        _local.logger = None
+        _local.run = None
 
     return log_path

@@ -2,16 +2,32 @@
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
-from lib.config import ARCHIVE_DIR, HIDDEN_DIRS, MAIN_REPO, PORT_LOCK, PGSQL_DIR, STANDBY_PORT_STRIDE
+from lib.config import ARCHIVE_DIR, HIDDEN_DIRS, MAIN_REPO, PORT_LOCK, PGSQL_DIR
 from lib.db import get_standbys, remove_standbys, update_branch_status
 
 logger = logging.getLogger(__name__)
+
+# Valid branch name: alphanumeric, hyphens, underscores, dots, slashes (no .., no leading /)
+_BRANCH_NAME_RE = re.compile(r'^[A-Za-z0-9][\w.\-/]*$')
+
+
+def validate_branch_name(name: str) -> str:
+    """Validate and return the branch name, or raise ValueError."""
+    if not name or not name.strip():
+        raise ValueError("Branch name is required")
+    name = name.strip()
+    if '..' in name or name.startswith('/') or name.startswith('-'):
+        raise ValueError(f"Invalid branch name: {name!r}")
+    if not _BRANCH_NAME_RE.match(name):
+        raise ValueError(f"Invalid branch name: {name!r}")
+    return name
 
 
 def run_cmd(cmd, check=True, capture=False, cwd=None, timeout=None,
@@ -67,12 +83,23 @@ def atomic_write(path: Path, content: str):
     try:
         os.write(fd, content.encode())
         os.fsync(fd)
+    except Exception:
         os.close(fd)
-        os.replace(tmp_path, str(path))
-    except BaseException:
-        os.close(fd)
-        os.unlink(tmp_path)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
         raise
+    else:
+        os.close(fd)
+        try:
+            os.replace(tmp_path, str(path))
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 def parse_port_lock() -> Dict[str, int]:
@@ -95,7 +122,7 @@ def parse_port_lock() -> Dict[str, int]:
     return result
 
 
-def scan_worktrees() -> list[str]:
+def scan_worktrees() -> List[str]:
     """Scan ~/pgsql for existing worktree directories."""
     if not PGSQL_DIR.exists():
         return []
@@ -150,7 +177,7 @@ def remove_port_lock_entry(name: str):
         atomic_write(PORT_LOCK, "\n".join(new_lines) + "\n" if new_lines else "")
 
 
-def archive_branch(name: str, db_path: Optional[Path] = None) -> list:
+def archive_branch(name: str, db_path: Optional[Path] = None) -> List[str]:
     """Archive a branch: stop PG, move to _archive, remove worktree/branches, update DB.
 
     Returns list of step descriptions.

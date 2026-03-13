@@ -9,7 +9,7 @@ from pathlib import Path
 
 from flask import Flask, g, jsonify, render_template, request
 
-from lib.config import DB_PATH, HIDDEN_DIRS, LOG_PREVIEW_SIZE, LOGS_DIR, PGSQL_DIR, STANDBY_PORT_STRIDE
+from lib.config import DB_PATH, HIDDEN_DIRS, LOG_PREVIEW_SIZE, LOGS_DIR, PGSQL_DIR, standby_port
 from lib.db import get_standbys, init_db, remove_standbys
 from lib.init import init_branch
 from lib.operations import (
@@ -20,6 +20,7 @@ from lib.operations import (
     pg_data_path,
     remove_port_lock_entry,
     scan_worktrees,
+    validate_branch_name,
 )
 from lib.replication import (
     build_cluster,
@@ -91,7 +92,7 @@ def sync_branches():
         # Attach standby info
         sbs = standby_map.get(d["name"], [])
         for sb in sbs:
-            sb["port"] = d["port"] + sb["standby_index"] * STANDBY_PORT_STRIDE if d["port"] else None
+            sb["port"] = standby_port(d["port"], sb["standby_index"]) if d["port"] else None
             sb["pg_running"] = check_pg_running(d["name"], sb["standby_index"]) if d["exists_on_disk"] else None
         d["standbys"] = sbs
 
@@ -199,12 +200,13 @@ def _run_pg_init(branch, base_branch, standbys=None):
 @app.route("/api/pg_init", methods=["POST"])
 def api_pg_init():
     data = request.get_json()
-    branch = data.get("branch", "").strip()
-    base_branch = data.get("base_branch", "master").strip()
     standbys = data.get("standbys")  # e.g. [{"type": "streaming_sync"}, ...]
 
-    if not branch:
-        return jsonify({"error": "Branch name is required"}), 400
+    try:
+        branch = validate_branch_name(data.get("branch", ""))
+        base_branch = validate_branch_name(data.get("base_branch", "master"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     with _pg_init_lock:
         if branch in pg_init_tasks and pg_init_tasks[branch]["status"] == "running":
@@ -252,7 +254,7 @@ def api_pg_ctl(name):
     port_map = parse_port_lock()
     port = port_map.get(name)
     if port and standby_index is not None:
-        port = port + standby_index * STANDBY_PORT_STRIDE
+        port = standby_port(port, standby_index)
 
     if action == "start":
         cmd = [str(ctl), "start", "-D", str(pgdata), "-l", str(pgdata / "server.log")]
@@ -267,7 +269,9 @@ def api_pg_ctl(name):
         if result.returncode != 0:
             return jsonify({"error": output}), 500
         return jsonify({"ok": True, "output": output})
-    except Exception as e:
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "pg_ctl timed out after 30s"}), 500
+    except OSError as e:
         return jsonify({"error": str(e)}), 500
 
 

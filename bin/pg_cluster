@@ -9,7 +9,7 @@ from pathlib import Path
 # Add repo root to path for lib imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from lib.config import PGSQL_DIR, STANDBY_PORT_STRIDE
+from lib.config import PGSQL_DIR, standby_port
 from lib.db import get_standbys
 from lib.operations import check_pg_running, parse_port_lock
 from lib.replication import (
@@ -62,7 +62,7 @@ def cmd_status(args):
 
     for sb in standbys:
         idx = sb["standby_index"]
-        sb_port = port + idx * STANDBY_PORT_STRIDE
+        sb_port = standby_port(port, idx)
         sb_status = check_pg_running(args.name, idx)
         print(f"  S{idx} ({sb['repl_type']})  port={sb_port}  [{sb_status or 'N/A'}]")
 

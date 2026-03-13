@@ -9,7 +9,7 @@ from pathlib import Path
 # Add repo root to path for lib imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from lib.config import DB_PATH, PGSQL_DIR, STANDBY_PORT_STRIDE
+from lib.config import DB_PATH, PGSQL_DIR, standby_port
 from lib.db import get_connection, get_standbys, init_db
 from lib.operations import check_pg_running, parse_port_lock, scan_worktrees
 
@@ -47,7 +47,7 @@ def main():
         sbs = get_standbys(name)
         for sb in sbs:
             idx = sb["standby_index"]
-            sb_port = port + idx * STANDBY_PORT_STRIDE if port else None
+            sb_port = standby_port(port, idx) if port else None
             entry["standbys"].append({
                 "index": idx,
                 "type": sb["repl_type"],
