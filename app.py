@@ -8,8 +8,8 @@ from pathlib import Path
 
 from flask import Flask, g, jsonify, render_template, request
 
-from lib.config import DB_PATH, LOGS_DIR, PGSQL_DIR
-from lib.db import init_db
+from lib.config import DB_PATH, HIDDEN_DIRS, LOGS_DIR, PGSQL_DIR, STANDBY_PORT_STRIDE
+from lib.db import get_standbys, init_db, remove_standbys
 from lib.init import init_branch
 from lib.operations import (
     archive_branch,
@@ -19,6 +19,13 @@ from lib.operations import (
     pg_data_path,
     remove_port_lock_entry,
     scan_worktrees,
+)
+from lib.replication import (
+    build_cluster,
+    reload_cluster,
+    restart_cluster,
+    start_cluster,
+    stop_cluster,
 )
 
 app = Flask(__name__)
@@ -59,15 +66,33 @@ def sync_branches():
             )
     db.commit()
 
+    # Load all standby records at once
+    standby_rows = db.execute(
+        "SELECT primary_name, standby_index, repl_type FROM standbys ORDER BY standby_index"
+    ).fetchall()
+    standby_map = {}
+    for sr in standby_rows:
+        standby_map.setdefault(sr["primary_name"], []).append(dict(sr))
+
     rows = db.execute("SELECT * FROM branches ORDER BY name").fetchall()
     branches = []
     for row in rows:
+        if row["name"] in HIDDEN_DIRS:
+            continue
         d = dict(row)
         d["port"] = port_map.get(d["name"])
         d["exists_on_disk"] = d["name"] in worktrees
         src_dir = PGSQL_DIR / d["name"] / "postgres"
         d["src_dir"] = str(src_dir) if src_dir.exists() else None
         d["pg_running"] = check_pg_running(d["name"]) if d["exists_on_disk"] else None
+
+        # Attach standby info
+        sbs = standby_map.get(d["name"], [])
+        for sb in sbs:
+            sb["port"] = d["port"] + sb["standby_index"] * STANDBY_PORT_STRIDE if d["port"] else None
+            sb["pg_running"] = check_pg_running(d["name"], sb["standby_index"]) if d["exists_on_disk"] else None
+        d["standbys"] = sbs
+
         branches.append(d)
     return branches
 
@@ -138,15 +163,16 @@ def api_update_branch(name):
 def api_delete_branch(name):
     """Remove a branch entry from the database (does not delete worktree)."""
     db = get_db()
+    db.execute("DELETE FROM standbys WHERE primary_name = ?", (name,))
     db.execute("DELETE FROM branches WHERE name = ?", (name,))
     db.commit()
     return jsonify({"ok": True})
 
 
-def _run_pg_init(branch, base_branch):
+def _run_pg_init(branch, base_branch, standbys=None):
     """Run pg_init in background thread."""
     try:
-        init_branch(branch, base_branch)
+        init_branch(branch, base_branch, standbys=standbys)
         pg_init_tasks[branch] = {"status": "done"}
     except Exception as e:
         # Try to get details from log files
@@ -169,6 +195,7 @@ def api_pg_init():
     data = request.get_json()
     branch = data.get("branch", "").strip()
     base_branch = data.get("base_branch", "master").strip()
+    standbys = data.get("standbys")  # e.g. [{"type": "streaming_sync"}, ...]
 
     if not branch:
         return jsonify({"error": "Branch name is required"}), 400
@@ -177,7 +204,9 @@ def api_pg_init():
         return jsonify({"error": f"{branch} is already being created"}), 409
 
     pg_init_tasks[branch] = {"status": "running"}
-    thread = threading.Thread(target=_run_pg_init, args=(branch, base_branch), daemon=True)
+    thread = threading.Thread(
+        target=_run_pg_init, args=(branch, base_branch, standbys), daemon=True
+    )
     thread.start()
 
     return jsonify({"ok": True, "status": "running"})
@@ -201,16 +230,19 @@ def api_pg_init_list():
 def api_pg_ctl(name):
     data = request.get_json()
     action = data.get("action")
+    standby_index = data.get("standby_index")  # optional int
     if action not in ("start", "stop"):
         return jsonify({"error": "action must be 'start' or 'stop'"}), 400
 
     ctl = pg_ctl_path(name)
-    pgdata = pg_data_path(name)
+    pgdata = pg_data_path(name, standby_index)
     if not ctl.exists() or not pgdata.exists():
         return jsonify({"error": f"pg_ctl or data directory not found for {name}"}), 404
 
     port_map = parse_port_lock()
     port = port_map.get(name)
+    if port and standby_index:
+        port = port + standby_index * STANDBY_PORT_STRIDE
 
     if action == "start":
         cmd = [str(ctl), "start", "-D", str(pgdata), "-l", str(pgdata / "server.log")]
@@ -232,8 +264,48 @@ def api_pg_ctl(name):
 
 @app.route("/api/branches/<name>/pg", methods=["GET"])
 def api_pg_status(name):
-    status = check_pg_running(name)
+    standby_index = request.args.get("standby_index", type=int)
+    status = check_pg_running(name, standby_index)
     return jsonify({"name": name, "pg_running": status})
+
+
+@app.route("/api/branches/<name>/cluster", methods=["POST"])
+def api_cluster_action(name):
+    """Cluster-level operations: start, stop, restart, reload, build."""
+    data = request.get_json()
+    action = data.get("action")
+    if action not in ("start", "stop", "restart", "reload", "build"):
+        return jsonify({"error": "action must be start/stop/restart/reload/build"}), 400
+
+    port_map = parse_port_lock()
+    port = port_map.get(name)
+    if not port:
+        return jsonify({"error": f"No port found for {name}"}), 404
+
+    project_dir = PGSQL_DIR / name
+    if not project_dir.exists():
+        return jsonify({"error": f"Directory {name} not found"}), 404
+
+    sbs = get_standbys(name)
+    standby_list = [{"standby_index": s["standby_index"], "repl_type": s["repl_type"]} for s in sbs]
+
+    try:
+        if action == "start":
+            start_cluster(project_dir, name, port, standby_list)
+        elif action == "stop":
+            stop_cluster(project_dir, name, port, standby_list)
+        elif action == "restart":
+            restart_cluster(project_dir, name, port, standby_list)
+        elif action == "reload":
+            reload_cluster(project_dir, name, port, standby_list)
+        elif action == "build":
+            src_dir = project_dir / "postgres"
+            if not src_dir.exists():
+                return jsonify({"error": "Source directory not found"}), 404
+            build_cluster(src_dir, project_dir, port, standby_list)
+        return jsonify({"ok": True, "action": action})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/branches/<name>/archive", methods=["POST"])

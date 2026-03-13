@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Cluster management CLI for PostgreSQL replication worktrees."""
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+# Add repo root to path for lib imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from lib.config import PGSQL_DIR, STANDBY_PORT_STRIDE
+from lib.db import get_standbys
+from lib.operations import check_pg_running, parse_port_lock
+from lib.replication import (
+    build_cluster,
+    reload_cluster,
+    restart_cluster,
+    start_cluster,
+    stop_cluster,
+)
+
+logger = logging.getLogger("pg_init")
+
+
+def setup_logging():
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+
+
+def get_cluster_info(name):
+    """Get port and standby info for a cluster."""
+    port_map = parse_port_lock()
+    port = port_map.get(name)
+    if not port:
+        print(f"Error: No port found for '{name}'", file=sys.stderr)
+        sys.exit(1)
+
+    project_dir = PGSQL_DIR / name
+    if not project_dir.exists():
+        print(f"Error: Directory not found: {project_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    standbys = get_standbys(name)
+    standby_list = [{"standby_index": s["standby_index"], "repl_type": s["repl_type"]} for s in standbys]
+
+    return project_dir, port, standby_list
+
+
+def cmd_status(args):
+    """Show cluster status."""
+    project_dir, port, standbys = get_cluster_info(args.name)
+
+    primary_status = check_pg_running(args.name)
+    print(f"Cluster: {args.name}")
+    print(f"  Primary  port={port}  [{primary_status or 'N/A'}]")
+
+    for sb in standbys:
+        idx = sb["standby_index"]
+        sb_port = port + idx * STANDBY_PORT_STRIDE
+        sb_status = check_pg_running(args.name, idx)
+        print(f"  S{idx} ({sb['repl_type']})  port={sb_port}  [{sb_status or 'N/A'}]")
+
+    if not standbys:
+        print("  (no standbys)")
+
+
+def cmd_start(args):
+    """Start all instances."""
+    project_dir, port, standbys = get_cluster_info(args.name)
+    start_cluster(project_dir, args.name, port, standbys)
+    print("Cluster started.")
+
+
+def cmd_stop(args):
+    """Stop all instances."""
+    project_dir, port, standbys = get_cluster_info(args.name)
+    stop_cluster(project_dir, args.name, port, standbys)
+    print("Cluster stopped.")
+
+
+def cmd_restart(args):
+    """Restart all instances."""
+    project_dir, port, standbys = get_cluster_info(args.name)
+    restart_cluster(project_dir, args.name, port, standbys)
+    print("Cluster restarted.")
+
+
+def cmd_reload(args):
+    """Reload configuration for all instances."""
+    project_dir, port, standbys = get_cluster_info(args.name)
+    reload_cluster(project_dir, args.name, port, standbys)
+    print("Configuration reloaded.")
+
+
+def cmd_build(args):
+    """Rebuild, reinstall, and restart all instances."""
+    project_dir, port, standbys = get_cluster_info(args.name)
+    src_dir = project_dir / "postgres"
+    if not src_dir.exists():
+        print(f"Error: Source directory not found: {src_dir}", file=sys.stderr)
+        sys.exit(1)
+    build_cluster(src_dir, project_dir, port, standbys)
+    print("Build and restart complete.")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Manage PostgreSQL replication clusters"
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    for cmd_name, cmd_func, cmd_help in [
+        ("status", cmd_status, "Show cluster status"),
+        ("start", cmd_start, "Start all instances"),
+        ("stop", cmd_stop, "Stop all instances"),
+        ("restart", cmd_restart, "Restart all instances"),
+        ("reload", cmd_reload, "Reload configuration"),
+        ("build", cmd_build, "Rebuild + reinstall + restart"),
+    ]:
+        sub = subparsers.add_parser(cmd_name, help=cmd_help)
+        sub.add_argument("name", help="Branch/worktree name")
+        sub.set_defaults(func=cmd_func)
+
+    args = parser.parse_args()
+    setup_logging()
+
+    try:
+        args.func(args)
+    except Exception as e:
+        print(f"\nError: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -5,8 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from lib.config import ARCHIVE_DIR, MAIN_REPO, PORT_LOCK, PGSQL_DIR
-from lib.db import update_branch_status
+from lib.config import ARCHIVE_DIR, HIDDEN_DIRS, MAIN_REPO, PORT_LOCK, PGSQL_DIR, STANDBY_PORT_STRIDE
+from lib.db import get_standbys, remove_standbys, update_branch_status
 
 
 def parse_port_lock() -> dict[str, int]:
@@ -25,7 +25,7 @@ def scan_worktrees() -> list[str]:
     """Scan ~/pgsql for existing worktree directories."""
     if not PGSQL_DIR.exists():
         return []
-    skip = {"port_lock", "_archive", "logs"}
+    skip = HIDDEN_DIRS
     return sorted(
         d.name
         for d in PGSQL_DIR.iterdir()
@@ -37,15 +37,23 @@ def pg_ctl_path(name: str) -> Path:
     return PGSQL_DIR / name / "bin" / "pg_ctl"
 
 
-def pg_data_path(name: str) -> Path:
+def pg_data_path(name: str, standby_index: Optional[int] = None) -> Path:
+    if standby_index:
+        return PGSQL_DIR / name / f"data-s{standby_index}"
     return PGSQL_DIR / name / "data"
 
 
-def check_pg_running(name: str) -> Optional[str]:
+def check_pg_running(name: str, standby_index: Optional[int] = None) -> Optional[str]:
     """Check if PostgreSQL is running for the given worktree.
-    Returns 'up', 'down', or None (no pg_ctl/data)."""
+
+    Args:
+        name: Worktree/branch name
+        standby_index: If set, check standby data-s{N} instead of primary data/
+
+    Returns 'up', 'down', or None (no pg_ctl/data).
+    """
     ctl = pg_ctl_path(name)
-    data = pg_data_path(name)
+    data = pg_data_path(name, standby_index)
     if not ctl.exists() or not data.exists():
         return None
     result = subprocess.run(
@@ -80,10 +88,24 @@ def archive_branch(name: str, db_path: Optional[Path] = None) -> list:
 
     steps = []
 
-    # 1. Stop PostgreSQL if running
+    # 0. Stop standbys first (reverse order)
+    standby_rows = get_standbys(name, db_path)
+    ctl = pg_ctl_path(name)
+    for sb in reversed(standby_rows):
+        idx = sb["standby_index"]
+        sb_data = pg_data_path(name, idx)
+        if sb_data.exists() and ctl.exists():
+            sb_status = check_pg_running(name, idx)
+            if sb_status == "up":
+                subprocess.run(
+                    [str(ctl), "stop", "-D", str(sb_data), "-m", "fast"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                steps.append(f"Stopped standby S{idx}")
+
+    # 1. Stop primary PostgreSQL if running
     pg_status = check_pg_running(name)
     if pg_status == "up":
-        ctl = pg_ctl_path(name)
         pgdata = pg_data_path(name)
         result = subprocess.run(
             [str(ctl), "stop", "-D", str(pgdata)],
@@ -145,7 +167,12 @@ def archive_branch(name: str, db_path: Optional[Path] = None) -> list:
     remove_port_lock_entry(name)
     steps.append("Removed port_lock entry")
 
-    # 8. Update DB status to archived
+    # 8. Remove standby records from DB
+    if standby_rows:
+        remove_standbys(name, db_path)
+        steps.append("Removed standby records")
+
+    # 9. Update DB status to archived
     update_branch_status(name, "archived", db_path)
     steps.append("Updated status to archived")
 

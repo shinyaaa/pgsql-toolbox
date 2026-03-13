@@ -9,8 +9,8 @@ from pathlib import Path
 # Add repo root to path for lib imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from lib.config import DB_PATH, PGSQL_DIR
-from lib.db import get_connection, init_db
+from lib.config import DB_PATH, PGSQL_DIR, STANDBY_PORT_STRIDE
+from lib.db import get_connection, get_standbys, init_db
 from lib.operations import check_pg_running, parse_port_lock, scan_worktrees
 
 
@@ -36,12 +36,24 @@ def main():
 
     entries = []
     for name in worktrees:
+        port = port_map.get(name)
         entry = {
             "branch": name,
-            "port": port_map.get(name),
+            "port": port,
             "pg": check_pg_running(name),
             "status": db_status.get(name, "active"),
+            "standbys": [],
         }
+        sbs = get_standbys(name)
+        for sb in sbs:
+            idx = sb["standby_index"]
+            sb_port = port + idx * STANDBY_PORT_STRIDE if port else None
+            entry["standbys"].append({
+                "index": idx,
+                "type": sb["repl_type"],
+                "port": sb_port,
+                "pg": check_pg_running(name, idx),
+            })
         entries.append(entry)
 
     if args.json_output:
@@ -55,6 +67,11 @@ def main():
     # Table format
     name_w = max(len(e["branch"]) for e in entries)
     name_w = max(name_w, 6)  # "BRANCH" header
+    # Account for standby indented names
+    for e in entries:
+        for sb in e["standbys"]:
+            sb_label = f"  S{sb['index']} ({sb['type']})"
+            name_w = max(name_w, len(sb_label))
 
     print(f"{'BRANCH':<{name_w}}  {'PORT':>5}  {'PG':<4}  STATUS")
     print(f"{'-' * name_w}  -----  ----  ------")
@@ -62,6 +79,11 @@ def main():
         port_str = str(e["port"]) if e["port"] else "-"
         pg_str = e["pg"] or "-"
         print(f"{e['branch']:<{name_w}}  {port_str:>5}  {pg_str:<4}  {e['status']}")
+        for sb in e["standbys"]:
+            sb_label = f"  S{sb['index']} ({sb['type']})"
+            sb_port = str(sb["port"]) if sb["port"] else "-"
+            sb_pg = sb["pg"] or "-"
+            print(f"{sb_label:<{name_w}}  {sb_port:>5}  {sb_pg:<4}")
 
 
 if __name__ == "__main__":

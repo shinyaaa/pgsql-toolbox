@@ -19,6 +19,7 @@ from lib.config import (
     PGSQL_DIR,
     PORT_LOCK,
     REPO_ROOT,
+    STANDBY_PORT_STRIDE,
     SYNC_BRANCHES,
 )
 
@@ -145,12 +146,12 @@ def allocate_port(project: str, branch: str) -> int:
                 used_ports.add(int(parts[0]))
 
             port = None
-            for p in range(50001, 60000):
+            for p in range(50001, 51000):
                 if p not in used_ports:
                     port = p
                     break
             if port is None:
-                raise RuntimeError("No free port available in range 50001-59999")
+                raise RuntimeError("No free port available in range 50001-50999")
 
         # Register allocation
         with open(str(PORT_LOCK), "a") as f:
@@ -337,7 +338,8 @@ def build_postgres(src_dir: Path, project_dir: Path, port: int):
          cwd=str(src_dir / "src" / "tools" / "pg_bsd_indent"))
 
 
-def setup_environment(src_dir: Path, project_dir: Path, port: int, branch: str):
+def setup_environment(src_dir: Path, project_dir: Path, port: int, branch: str,
+                      standbys: Optional[list] = None):
     """Create .envrc, work/ directory, git excludes, and memo file."""
     logger.info("Setting up environment...")
 
@@ -347,14 +349,38 @@ def setup_environment(src_dir: Path, project_dir: Path, port: int, branch: str):
 
     # Create .envrc
     envrc = src_dir / ".envrc"
-    envrc.write_text(
-        f"export PGPORT={port}\n"
-        f"export PGDATA={project_dir}/data\n"
-        f"export PGDATABASE=postgres\n"
-        f"export PGPATH={project_dir}\n"
-        f"PATH_add {project_dir}/bin\n"
-        f"PATH_add {src_dir}/src/tools/pgindent\n"
-    )
+    envrc_lines = [
+        f"export PGPORT={port}",
+        f"export PGDATA={project_dir}/data",
+        f"export PGDATABASE=postgres",
+        f"export PGPATH={project_dir}",
+        f"PATH_add {project_dir}/bin",
+        f"PATH_add {src_dir}/src/tools/pgindent",
+    ]
+
+    # Create standby wrapper scripts in project bin/
+    if standbys:
+        bin_dir = project_dir / "bin"
+        for i, sb in enumerate(standbys, 1):
+            sb_port = port + i * STANDBY_PORT_STRIDE
+            sb_data = project_dir / f"data-s{i}"
+
+            # psql-s{i}: shortcut for psql to standby
+            psql_wrapper = bin_dir / f"psql-s{i}"
+            psql_wrapper.write_text(
+                f"#!/bin/sh\nexec psql -p {sb_port} \"$@\"\n"
+            )
+            psql_wrapper.chmod(0o755)
+
+            # pg-s{i}: run any command with PGPORT/PGDATA set to standby
+            pg_wrapper = bin_dir / f"pg-s{i}"
+            pg_wrapper.write_text(
+                f"#!/bin/sh\nexport PGPORT={sb_port}\n"
+                f"export PGDATA={sb_data}\nexec \"$@\"\n"
+            )
+            pg_wrapper.chmod(0o755)
+
+    envrc.write_text("\n".join(envrc_lines) + "\n")
     _run(["direnv", "allow"], cwd=str(src_dir), check=False)
 
     # Set up git excludes
@@ -458,6 +484,7 @@ def setup_tmux_claude(branch: str, src_dir: Path):
 
 
 def init_branch(branch: str, base_branch: str = "master",
+                standbys: Optional[list] = None,
                 log_file: Optional[Path] = None) -> Path:
     """Initialize a complete PostgreSQL development environment.
 
@@ -471,7 +498,11 @@ def init_branch(branch: str, base_branch: str = "master",
     7. Build PostgreSQL
     8. Set up environment
     9. Initialize database
-    10. Start tmux + Claude Code
+    10. Setup replication (if standbys specified)
+    11. Start tmux + Claude Code
+
+    Args:
+        standbys: Optional list of dicts, e.g. [{"type": "streaming_sync"}, {"type": "streaming_async"}]
 
     Returns the log file path.
     """
@@ -482,6 +513,8 @@ def init_branch(branch: str, base_branch: str = "master",
     try:
         logger.info(f"Initializing PostgreSQL environment for branch: {branch}")
         logger.info(f"Base branch: {base_branch}")
+        if standbys:
+            logger.info(f"Standbys: {', '.join(s['type'] for s in standbys)}")
 
         # 1. Sync upstream
         sync_upstream()
@@ -508,18 +541,37 @@ def init_branch(branch: str, base_branch: str = "master",
         build_postgres(src_dir, project_dir, port)
 
         # 9. Setup environment
-        setup_environment(src_dir, project_dir, port, branch)
+        setup_environment(src_dir, project_dir, port, branch, standbys)
 
         # 10. Initialize database
         init_database(project_dir, port)
 
-        # 11. Setup tmux + Claude Code
+        # 11. Setup replication
+        if standbys:
+            from lib.db import add_standby
+            from lib.replication import configure_primary, create_standby
+
+            logger.info("")
+            logger.info("Setting up replication cluster...")
+            configure_primary(project_dir, port, standbys)
+
+            for i, sb in enumerate(standbys, 1):
+                create_standby(project_dir, port, i, sb["type"])
+                add_standby(branch, i, sb["type"])
+
+            logger.info("Replication cluster setup complete!")
+
+        # 12. Setup tmux + Claude Code
         setup_tmux_claude(branch, src_dir)
 
         logger.info("")
         logger.info("PostgreSQL development environment setup complete!")
         logger.info(f"You can access the database with the following command:")
         logger.info(f"  {project_dir}/bin/psql -p {port} postgres")
+        if standbys:
+            for i in range(1, len(standbys) + 1):
+                sb_port = port + i * STANDBY_PORT_STRIDE
+                logger.info(f"  {project_dir}/bin/psql -p {sb_port} postgres  (standby S{i})")
         logger.info(f"Log file: {log_path}")
 
     except Exception:

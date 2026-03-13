@@ -23,6 +23,11 @@ def main():
         "-B", dest="base_branch", default="master",
         help="Base branch for new branch creation (default: master)",
     )
+    parser.add_argument(
+        "-s", "--standby", action="append", dest="standbys",
+        choices=["sync", "async", "logical"],
+        help="Add a standby (repeatable). e.g. -s sync -s async",
+    )
     args = parser.parse_args()
 
     branch = args.branch
@@ -37,8 +42,18 @@ def main():
         if user_base:
             base_branch = user_base
 
+    # Convert standby shorthand to full type names
+    standbys = None
+    if args.standbys:
+        type_map = {
+            "sync": "streaming_sync",
+            "async": "streaming_async",
+            "logical": "logical",
+        }
+        standbys = [{"type": type_map[s]} for s in args.standbys]
+
     try:
-        init_branch(branch, base_branch)
+        init_branch(branch, base_branch, standbys=standbys)
     except Exception as e:
         print(f"\nError: {e}", file=sys.stderr)
         sys.exit(1)

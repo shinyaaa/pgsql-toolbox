@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PG Worktree Dashboard</title>
+<title>PostgreSQL Worktree Dashboard</title>
 <style>
   :root {
     --bg: #0f1117;
@@ -193,6 +193,11 @@
   .link-tag:hover { opacity: 0.8; text-decoration: none; }
   .link-ml { background: rgba(34,211,238,0.12); color: var(--cyan); }
   .link-cf { background: rgba(251,146,60,0.12); color: var(--orange); }
+
+  /* VSCode links */
+  .vscode-links { font-size: 0.8em; opacity: 0.7; }
+  .vscode-links a { color: var(--cyan); text-decoration: none; }
+  .vscode-links a:hover { opacity: 0.8; text-decoration: underline; }
 
   /* Actions cell */
   .actions-cell { display: flex; gap: 4px; white-space: nowrap; }
@@ -435,9 +440,6 @@
   .kebab-menu-item.danger:hover { background: var(--red-dim); }
 
   /* Log viewer */
-  .log-panel {
-    margin-top: 28px;
-  }
   .log-list {
     display: flex;
     flex-direction: column;
@@ -481,6 +483,89 @@
     font-size: 0.8rem;
   }
 
+  /* Standby rows */
+  tr.standby-row td { background: rgba(108,140,255,0.02); }
+  tr.standby-row:hover td { background: rgba(108,140,255,0.05); }
+  .standby-indent {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 24px;
+  }
+  .standby-indent::before {
+    content: '';
+    display: inline-block;
+    width: 12px;
+    height: 1px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+  .repl-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .repl-sync { background: rgba(74,222,128,0.12); color: var(--green); }
+  .repl-async { background: rgba(251,146,60,0.12); color: var(--orange); }
+  .repl-logical { background: rgba(108,140,255,0.12); color: var(--accent); }
+  .cluster-badge {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-left: 4px;
+  }
+
+  /* Standby config in create modal */
+  .standby-config { margin-top: 8px; }
+  .standby-row-config {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+  .standby-row-config select {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    outline: none;
+  }
+  .standby-row-config .standby-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    min-width: 24px;
+  }
+  .btn-remove-standby {
+    background: none;
+    border: none;
+    color: var(--red);
+    cursor: pointer;
+    font-size: 1rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .btn-remove-standby:hover { background: var(--red-dim); }
+  .btn-add-standby {
+    background: var(--bg);
+    border: 1px dashed var(--border);
+    color: var(--text-muted);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    width: 100%;
+    transition: all 0.15s;
+  }
+  .btn-add-standby:hover { border-color: var(--accent); color: var(--accent); }
+
   @media (max-width: 1000px) {
     body { padding: 12px; }
     .filters { flex-direction: column; align-items: stretch; }
@@ -493,14 +578,14 @@
 <div class="toast-container" id="toast-container"></div>
 
 <div class="header">
-  <h1>PG Worktrees <span id="branch-count"></span></h1>
+  <h1>PostgreSQL Worktrees <span id="branch-count"></span></h1>
   <button class="btn" onclick="openCreateModal()">+ New Worktree</button>
 </div>
 
 <div class="filters">
   <input type="text" class="filter-input" id="search" placeholder="Search branches...">
   <select class="filter-input" id="pg-filter">
-    <option value="">All PG states</option>
+    <option value="">All PostgreSQL states</option>
     <option value="up">Running</option>
     <option value="down">Stopped</option>
   </select>
@@ -551,17 +636,6 @@
   </div>
 </div>
 
-<!-- Logs Section -->
-<div class="section-header" onclick="toggleSection('logs')">
-  <span class="toggle-arrow collapsed" id="logs-arrow">&#9660;</span>
-  <h2>pg_init Logs <span class="count" id="logs-count"></span></h2>
-</div>
-<div id="logs-section" style="display:none">
-  <div class="log-panel">
-    <div class="log-list" id="log-list"></div>
-    <div class="log-viewer" id="log-viewer" style="display:none"></div>
-  </div>
-</div>
 
 <!-- Log Modal -->
 <div class="modal-overlay" id="log-modal">
@@ -617,6 +691,11 @@
     <div class="form-group">
       <label>Base Branch</label>
       <input type="text" id="create-base" value="master" placeholder="master">
+    </div>
+    <div class="form-group">
+      <label>Replication</label>
+      <div class="standby-config" id="standby-config"></div>
+      <button type="button" class="btn-add-standby" onclick="addStandbyRow()">+ Add Standby</button>
     </div>
     <div class="output-log" id="create-output"></div>
     <div class="modal-actions">
@@ -796,9 +875,14 @@ function renderActiveRow(b) {
   }
   const rowClass = b.exists_on_disk ? '' : (isCreatingDot ? '' : 'row-missing');
 
+  const hasSbs = b.standbys && b.standbys.length > 0;
+  const clusterBadge = hasSbs ? `<span class="cluster-badge">[${b.standbys.length}S]</span>` : '';
+  const tunnelLink = b.src_dir
+    ? ` <span class="vscode-links"><a href="vscode://vscode-remote/tunnel+home0101${b.src_dir}?windowId=_blank" title="Open in VSCode (Tunnel)">[home0101]</a></span>`
+    : '';
   const branchLink = b.src_dir
-    ? `<a href="vscode://file${b.src_dir}" title="Open in VSCode">${esc(b.name)}</a>`
-    : esc(b.name);
+    ? `<a href="vscode://vscode-remote/ssh-remote+100.88.93.9${b.src_dir}?windowId=_blank" title="Open in VSCode (Remote SSH)">${esc(b.name)}</a>${clusterBadge}${tunnelLink}`
+    : esc(b.name) + clusterBadge;
 
   const meta = [];
   if (!b.exists_on_disk) meta.push('<span class="missing-tag">missing on disk</span>');
@@ -827,6 +911,13 @@ function renderActiveRow(b) {
   }
 
   const menuItems = [];
+  if (hasSbs) {
+    menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();clusterAction('${esc(b.name)}','start');closeAllMenus()">Start All</button>`);
+    menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();clusterAction('${esc(b.name)}','stop');closeAllMenus()">Stop All</button>`);
+    menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();clusterAction('${esc(b.name)}','restart');closeAllMenus()">Restart All</button>`);
+    menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();clusterAction('${esc(b.name)}','reload');closeAllMenus()">Reload All</button>`);
+    menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();clusterAction('${esc(b.name)}','build');closeAllMenus()">Build All</button>`);
+  }
   menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();openLogModal('${esc(b.name)}')">View Log</button>`);
   menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();openEditModal('${esc(b.name)}');closeAllMenus()">Edit</button>`);
   if (b.exists_on_disk) {
@@ -841,7 +932,7 @@ function renderActiveRow(b) {
     <div class="kebab-menu">${menuItems.join('')}</div>
   </div>`;
 
-  return `
+  let html = `
   <tr class="${rowClass}" ondblclick="openEditModal('${esc(b.name)}')">
     <td>
       <div class="branch-cell">
@@ -857,6 +948,53 @@ function renderActiveRow(b) {
     <td><div class="notes-cell" title="${esc(b.notes || '')}">${esc(b.notes || '') || '<span style="color:var(--text-muted)">-</span>'}</div></td>
     <td style="color:var(--text-muted);font-size:0.78rem;white-space:nowrap">${formatDate(b.updated_at)}</td>
     <td><div class="actions-cell" style="justify-content:flex-end">${actions.join('')}${kebab}</div></td>
+  </tr>`;
+
+  // Render standby sub-rows
+  if (hasSbs) {
+    for (const sb of b.standbys) {
+      html += renderStandbyRow(b, sb);
+    }
+  }
+
+  return html;
+}
+
+function renderStandbyRow(b, sb) {
+  const idx = sb.standby_index;
+  const sbDot = sb.pg_running === 'up' ? 'pg-dot-up' : sb.pg_running === 'down' ? 'pg-dot-down' : 'pg-dot-none';
+  const sbTitle = sb.pg_running === 'up' ? 'Running' : sb.pg_running === 'down' ? 'Stopped' : 'N/A';
+
+  const replTypeMap = {
+    streaming_sync: { label: 'SYNC', cls: 'repl-sync' },
+    streaming_async: { label: 'ASYNC', cls: 'repl-async' },
+    logical: { label: 'LOGICAL', cls: 'repl-logical' },
+  };
+  const repl = replTypeMap[sb.repl_type] || { label: sb.repl_type, cls: '' };
+
+  const sbTransition = pgTransitions.get(`${b.name}:s${idx}`);
+  let sbActions = '';
+  if (sbTransition) {
+    const label = sbTransition === 'starting' ? 'Starting...' : 'Stopping...';
+    sbActions = `<button class="pg-btn pg-btn-pending" disabled>${label}</button>`;
+  } else if (sb.pg_running === 'down') {
+    sbActions = `<button class="pg-btn pg-btn-start" onclick="event.stopPropagation();pgCtlStandby('${esc(b.name)}',${idx},'start')">Start</button>`;
+  } else if (sb.pg_running === 'up') {
+    sbActions = `<button class="pg-btn pg-btn-stop" onclick="event.stopPropagation();pgCtlStandby('${esc(b.name)}',${idx},'stop')">Stop</button>`;
+  }
+
+  return `
+  <tr class="standby-row">
+    <td>
+      <div class="standby-indent">
+        <span class="pg-dot ${sbDot}" title="${sbTitle}"></span>
+        <span style="font-weight:500;color:var(--text-muted)">S${idx}</span>
+        <span class="repl-badge ${repl.cls}">${repl.label}</span>
+      </div>
+    </td>
+    <td style="font-variant-numeric:tabular-nums;color:var(--text-muted)">${sb.port ?? '-'}</td>
+    <td></td><td></td><td></td>
+    <td><div class="actions-cell" style="justify-content:flex-end">${sbActions}</div></td>
   </tr>`;
 }
 
@@ -1025,6 +1163,43 @@ async function archiveBranch(name) {
   fetchBranches();
 }
 
+// --- Standby config in create modal ---
+let standbyCount = 0;
+
+function addStandbyRow(type = 'streaming_sync') {
+  standbyCount++;
+  const idx = standbyCount;
+  const container = document.getElementById('standby-config');
+  const row = document.createElement('div');
+  row.className = 'standby-row-config';
+  row.id = `standby-row-${idx}`;
+  row.innerHTML = `
+    <span class="standby-label">S${container.children.length + 1}</span>
+    <select data-standby-type>
+      <option value="streaming_sync"${type === 'streaming_sync' ? ' selected' : ''}>Sync Streaming</option>
+      <option value="streaming_async"${type === 'streaming_async' ? ' selected' : ''}>Async Streaming</option>
+      <option value="logical"${type === 'logical' ? ' selected' : ''}>Logical</option>
+    </select>
+    <button type="button" class="btn-remove-standby" onclick="removeStandbyRow(this)">&times;</button>
+  `;
+  container.appendChild(row);
+}
+
+function removeStandbyRow(btn) {
+  btn.closest('.standby-row-config').remove();
+  // Renumber labels
+  const rows = document.querySelectorAll('#standby-config .standby-row-config');
+  rows.forEach((r, i) => {
+    r.querySelector('.standby-label').textContent = `S${i + 1}`;
+  });
+}
+
+function getStandbysFromModal() {
+  const selects = document.querySelectorAll('#standby-config select[data-standby-type]');
+  if (selects.length === 0) return null;
+  return Array.from(selects).map(s => ({ type: s.value }));
+}
+
 function openCreateModal() {
   document.getElementById('create-branch').value = '';
   document.getElementById('create-base').value = 'master';
@@ -1032,6 +1207,8 @@ function openCreateModal() {
   document.getElementById('create-output').textContent = '';
   document.getElementById('create-btn').disabled = false;
   document.getElementById('create-btn').textContent = 'Create';
+  document.getElementById('standby-config').innerHTML = '';
+  standbyCount = 0;
   selectPrefix(PREFIXES[0].prefix);
   openModal('create-modal');
 }
@@ -1048,7 +1225,7 @@ async function createWorktree() {
     const resp = await fetch('/api/pg_init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ branch, base_branch: base }),
+      body: JSON.stringify({ branch, base_branch: base, standbys: getStandbysFromModal() }),
     });
     const data = await resp.json();
     if (!data.ok) {
@@ -1099,6 +1276,67 @@ function closeAllMenus() {
 
 document.addEventListener('click', closeAllMenus);
 
+// --- Standby PG control ---
+async function pgCtlStandby(name, standbyIndex, action) {
+  const key = `${name}:s${standbyIndex}`;
+  const expectedState = action === 'start' ? 'up' : 'down';
+  pgTransitions.set(key, action === 'start' ? 'starting' : 'stopping');
+  renderTable();
+
+  try {
+    const resp = await fetch(`/api/branches/${encodeURIComponent(name)}/pg`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, standby_index: standbyIndex }),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      pgTransitions.delete(key);
+      renderTable();
+      alert(data.error || 'Failed');
+      return;
+    }
+  } catch (e) {
+    pgTransitions.delete(key);
+    renderTable();
+    alert('Error: ' + e.message);
+    return;
+  }
+
+  // Poll for state change
+  for (let i = 0; i < 15; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    try {
+      const resp = await fetch(`/api/branches/${encodeURIComponent(name)}/pg?standby_index=${standbyIndex}`);
+      const data = await resp.json();
+      if (data.pg_running === expectedState) break;
+    } catch (e) { /* keep polling */ }
+  }
+
+  pgTransitions.delete(key);
+  fetchBranches();
+}
+
+// --- Cluster actions ---
+async function clusterAction(name, action) {
+  try {
+    const resp = await fetch(`/api/branches/${encodeURIComponent(name)}/cluster`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      showToast(`${name}: ${action} completed`, 'success');
+    } else {
+      showToast(`${name}: ${action} failed - ${data.error}`, 'error', 6000);
+    }
+  } catch (e) {
+    showToast(`${name}: ${action} failed - ${e.message}`, 'error', 6000);
+  }
+  fetchBranches();
+}
+
 // --- Log modal ---
 async function openLogModal(branch) {
   closeAllMenus();
@@ -1148,55 +1386,7 @@ async function showLogInModal(name) {
   }
 }
 
-// --- Log viewer ---
-let selectedLog = null;
-
-async function fetchLogs() {
-  try {
-    const resp = await fetch('/api/logs');
-    const logs = await resp.json();
-    document.getElementById('logs-count').textContent = `(${logs.length})`;
-    const list = document.getElementById('log-list');
-    if (logs.length === 0) {
-      list.innerHTML = '<div class="log-viewer-empty">No logs yet</div>';
-      return;
-    }
-    list.innerHTML = logs.map(l => {
-      const size = l.size < 1024 ? l.size + ' B' : (l.size / 1024).toFixed(1) + ' KB';
-      const date = formatDate(l.mtime);
-      const active = selectedLog === l.name ? ' active' : '';
-      return `<div class="log-item${active}" onclick="viewLog('${esc(l.name)}')">
-        <span class="log-name">${esc(l.name)}</span>
-        <span class="log-meta">${size}</span>
-        <span class="log-meta">${date}</span>
-      </div>`;
-    }).join('');
-  } catch (e) { /* ignore */ }
-}
-
-async function viewLog(name) {
-  selectedLog = (selectedLog === name) ? null : name;
-  const viewer = document.getElementById('log-viewer');
-  if (!selectedLog) {
-    viewer.style.display = 'none';
-    fetchLogs();
-    return;
-  }
-  fetchLogs();
-  try {
-    const resp = await fetch(`/api/logs/${encodeURIComponent(name)}`);
-    const data = await resp.json();
-    viewer.textContent = data.content || '(empty)';
-    viewer.style.display = 'block';
-    viewer.scrollTop = viewer.scrollHeight;
-  } catch (e) {
-    viewer.textContent = 'Failed to load log';
-    viewer.style.display = 'block';
-  }
-}
-
 fetchBranches();
-fetchLogs();
 </script>
 </body>
 </html>

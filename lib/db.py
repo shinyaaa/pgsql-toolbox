@@ -31,6 +31,15 @@ def init_db(db_path: Optional[Path] = None):
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS standbys (
+            primary_name TEXT NOT NULL,
+            standby_index INTEGER NOT NULL,
+            repl_type TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (primary_name, standby_index)
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -41,6 +50,43 @@ def update_branch_status(name: str, status: str, db_path: Optional[Path] = None)
     conn.execute(
         "UPDATE branches SET status = ?, updated_at = ? WHERE name = ?",
         (status, datetime.now().isoformat(), name),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_standbys(name: str, db_path: Optional[Path] = None) -> list:
+    """Get standby records for a primary branch."""
+    conn = get_connection(db_path)
+    rows = conn.execute(
+        "SELECT standby_index, repl_type, created_at FROM standbys "
+        "WHERE primary_name = ? ORDER BY standby_index",
+        (name,),
+    ).fetchall()
+    result = [dict(r) for r in rows]
+    conn.close()
+    return result
+
+
+def add_standby(primary_name: str, standby_index: int, repl_type: str,
+                db_path: Optional[Path] = None):
+    """Add a standby record for a primary branch."""
+    conn = get_connection(db_path)
+    conn.execute(
+        "INSERT OR REPLACE INTO standbys (primary_name, standby_index, repl_type) "
+        "VALUES (?, ?, ?)",
+        (primary_name, standby_index, repl_type),
+    )
+    conn.commit()
+    conn.close()
+
+
+def remove_standbys(primary_name: str, db_path: Optional[Path] = None):
+    """Remove all standby records for a primary branch."""
+    conn = get_connection(db_path)
+    conn.execute(
+        "DELETE FROM standbys WHERE primary_name = ?",
+        (primary_name,),
     )
     conn.commit()
     conn.close()
