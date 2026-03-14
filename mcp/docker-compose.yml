@@ -1,0 +1,56 @@
+name: pgsql-ml-mcp
+
+x-postgres-env: &postgres-env
+  POSTGRES_USER: hackers
+  POSTGRES_PASSWORD: hackers_dev
+  POSTGRES_DB: pgsql_hackers
+  POSTGRES_HOST: db
+  POSTGRES_PORT: "5432"
+
+services:
+  db:
+    build: ./db
+    environment:
+      <<: *postgres-env
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hackers -d pgsql_hackers"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mcp-server:
+    build:
+      context: ./mcp-server
+      network: host
+    environment:
+      <<: *postgres-env
+      MCP_SERVER_HOST: "0.0.0.0"
+      MCP_SERVER_PORT: "40000"
+    ports:
+      - "40000:40000"
+    volumes:
+      - ./mcp-server/src:/app/src:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  ingester:
+    build:
+      context: ./ingester
+      network: host
+    environment:
+      <<: *postgres-env
+    volumes:
+      - ./ingester/src:/app/src:ro
+      - ./data/mbox:/data/mbox:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles:
+      - tools
+
+volumes:
+  pgdata:

@@ -1,6 +1,6 @@
 # PostgreSQL Development Toolbox
 
-`~/pgsql` 配下の PostgreSQL 開発用 worktree を管理する CLI ツール群 + Web ダッシュボード。
+`~/pgsql` 配下の PostgreSQL 開発用 worktree を管理する CLI ツール群 + Web ダッシュボード + メーリングリスト検索 MCP サーバー。
 
 ## 機能
 
@@ -9,6 +9,7 @@
 - **`pg_init`** - worktree 作成・PostgreSQL ビルド・環境構築を一括実行
 - **`pg_archive`** - worktree のアーカイブ (PG 停止、tmux 終了、git ブランチ削除)
 - **`pg_status`** - 全 worktree のステータス一覧表示
+- **`pg_mcp`** - メーリングリスト MCP サーバーの管理 (Docker Compose ラッパー)
 
 ### Web ダッシュボード
 
@@ -26,6 +27,7 @@
 - Python 3.10+
 - Flask (`pip install flask`)
 - git, gh (GitHub CLI), make, direnv, tmux
+- Docker / Docker Compose (MCP サーバー用)
 
 ## CLI Usage
 
@@ -79,24 +81,48 @@ master                     50000  up    active
 feat-my-feature            50001  down  active
 ```
 
-## ダッシュボード起動
+## MCP サーバー (メーリングリスト検索)
 
-systemd ユーザーサービスとして常駐する。
+PostgreSQL メーリングリスト (pgsql-hackers, pgsql-bugs 等) の全文検索を提供する MCP サーバー。
+Docker Compose で PostgreSQL 18 + FastMCP サーバーを起動する。
 
 ```bash
-# 状態確認
-systemctl --user status pgsql-toolbox
+# mbox ダウンロード
+bin/pg_mcp download pgsql-hackers 199706 202601
 
-# 起動 / 停止 / 再起動
-systemctl --user start pgsql-toolbox
-systemctl --user stop pgsql-toolbox
-systemctl --user restart pgsql-toolbox
+# 起動 + データ投入
+bin/pg_mcp up
+bin/pg_mcp ingest
 
-# ログ確認
-journalctl --user -u pgsql-toolbox -f
+# ステータス確認・ログ
+bin/pg_mcp status
+bin/pg_mcp logs
 ```
 
-手動で起動する場合:
+Claude Code に `.mcp.json` で自動登録される。詳細は `mcp/README.md` を参照。
+
+## サービス管理
+
+`pgsql-toolbox.target` で Dashboard と MCP サーバーを一括管理する。
+
+```bash
+# 全サービス起動 / 停止
+systemctl --user start pgsql-toolbox.target
+systemctl --user stop pgsql-toolbox.target
+
+# 全体ステータス
+systemctl --user status pgsql-toolbox.target
+
+# 個別サービス確認
+systemctl --user status pgsql-toolbox.service   # Dashboard
+systemctl --user status pgsql-ml-mcp.service    # MCP
+
+# ログ確認
+journalctl --user -u pgsql-toolbox -f           # Dashboard
+journalctl --user -u pgsql-ml-mcp -f            # MCP
+```
+
+Dashboard を手動で起動する場合:
 
 ```bash
 cd ~/git/pgsql-toolbox
@@ -119,8 +145,16 @@ pgsql-toolbox/
     pg_init             # CLI: worktree 作成
     pg_archive          # CLI: アーカイブ
     pg_status           # CLI: ステータス表示
+    pg_mcp              # CLI: MCP サーバー管理
   templates/
     index.html          # シングルページフロントエンド
+  mcp/                  # メーリングリスト検索 MCP サーバー
+    docker-compose.yml  # Docker Compose 定義
+    db/                 # PostgreSQL スキーマ・Dockerfile
+    mcp-server/         # FastMCP サーバー
+    ingester/           # mbox パーサー・取り込みパイプライン
+    scripts/            # mbox ダウンロードスクリプト
+    data/mbox/          # ダウンロードした mbox ファイル
   dashboard.db          # SQLite データベース (自動生成)
 ```
 

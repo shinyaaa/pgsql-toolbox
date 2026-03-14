@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Docker Compose wrapper for the PostgreSQL Mailing List MCP server.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MCP_DIR="$SCRIPT_DIR/../mcp"
+COMPOSE="docker compose -f $MCP_DIR/docker-compose.yml"
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") <command> [args]
+
+Commands:
+  up              Start MCP services (db + mcp-server)
+  down            Stop MCP services
+  status          Show service status
+  logs [service]  Show logs (optionally for a specific service)
+  ingest          Run the mbox ingester
+  download <list> <start_yyyymm> <end_yyyymm>
+                  Download mailing list archives
+                  Example: $(basename "$0") download pgsql-hackers 202401 202601
+EOF
+    exit 1
+}
+
+cmd_up() {
+    $COMPOSE up -d
+}
+
+cmd_down() {
+    $COMPOSE down
+}
+
+cmd_status() {
+    $COMPOSE ps
+}
+
+cmd_logs() {
+    $COMPOSE logs -f "$@"
+}
+
+cmd_ingest() {
+    $COMPOSE run --rm ingester
+}
+
+cmd_download() {
+    if [ $# -lt 3 ]; then
+        echo "Usage: $(basename "$0") download <list_name> <start_yyyymm> <end_yyyymm>" >&2
+        exit 1
+    fi
+    local list="$1" start="$2" end="$3"
+    bash "$MCP_DIR/scripts/download_mbox.sh" "$list" "$start" "$end" "$MCP_DIR/data/mbox/$list"
+}
+
+if [ $# -lt 1 ]; then
+    usage
+fi
+
+command="$1"
+shift
+
+case "$command" in
+    up)       cmd_up ;;
+    down)     cmd_down ;;
+    status)   cmd_status ;;
+    logs)     cmd_logs "$@" ;;
+    ingest)   cmd_ingest ;;
+    download) cmd_download "$@" ;;
+    *)        usage ;;
+esac

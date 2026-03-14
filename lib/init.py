@@ -412,7 +412,7 @@ def _setup_git_excludes(src_dir: Path):
     exclude_file.parent.mkdir(parents=True, exist_ok=True)
 
     existing = exclude_file.read_text() if exclude_file.exists() else ""
-    patterns = ["work/", ".vscode/", ".envrc", "AGENTS.md", ".claude/"]
+    patterns = ["work/", ".vscode/", ".envrc", "AGENTS.md", ".claude/", ".mcp.json"]
     with open(str(exclude_file), "a") as f:
         for pat in patterns:
             if pat not in existing.splitlines():
