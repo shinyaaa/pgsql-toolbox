@@ -575,6 +575,70 @@
   }
   .btn-add-standby:hover { border-color: var(--accent); color: var(--accent); }
 
+  /* Tabs */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+  }
+  .tab {
+    padding: 10px 18px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+    user-select: none;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* MCP panel */
+  .mcp-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .mcp-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+  .mcp-card h3 {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 10px;
+  }
+  .mcp-card .big {
+    font-size: 1.05rem;
+    font-weight: 600;
+  }
+  .mcp-svc {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    font-size: 0.85rem;
+  }
+  .mcp-svc .svc-name { font-weight: 600; }
+  .mcp-svc .svc-status { color: var(--text-muted); font-size: 0.78rem; margin-left: auto; }
+
+  .mcp-table-wrap {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .mcp-table-wrap table { min-width: 0; }
+
   @media (max-width: 1000px) {
     body { padding: 12px; }
     .filters { flex-direction: column; align-items: stretch; }
@@ -587,9 +651,16 @@
 <div class="toast-container" id="toast-container"></div>
 
 <div class="header">
-  <h1>PostgreSQL Worktrees <span id="branch-count"></span></h1>
-  <button class="btn" onclick="openCreateModal()">+ New Worktree</button>
+  <h1 id="page-title">PostgreSQL Worktrees <span id="branch-count"></span></h1>
+  <button class="btn" id="header-action-btn" onclick="openCreateModal()">+ New Worktree</button>
 </div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="worktrees" onclick="switchTab('worktrees')">PostgreSQL Worktrees</div>
+  <div class="tab" data-tab="mcp" onclick="switchTab('mcp')">MCP Server</div>
+</div>
+
+<div class="tab-panel active" id="tab-worktrees">
 
 <div class="filters">
   <input type="text" class="filter-input" id="search" placeholder="Search branches...">
@@ -645,6 +716,47 @@
   </div>
 </div>
 
+
+</div><!-- /tab-worktrees -->
+
+<div class="tab-panel" id="tab-mcp">
+  <div class="mcp-grid">
+    <div class="mcp-card">
+      <h3>Services</h3>
+      <div id="mcp-services">Loading...</div>
+    </div>
+    <div class="mcp-card">
+      <h3>Mail data last updated</h3>
+      <div class="big" id="mcp-last-updated">-</div>
+      <div style="color:var(--text-muted);font-size:0.78rem;margin-top:4px" id="mcp-last-updated-rel"></div>
+    </div>
+    <div class="mcp-card">
+      <h3>Daily batch</h3>
+      <div class="big" id="mcp-batch-status">-</div>
+      <div style="color:var(--text-muted);font-size:0.78rem;margin-top:4px" id="mcp-batch-meta"></div>
+    </div>
+  </div>
+
+  <div class="section-header" style="margin-top:8px">
+    <h2>Mailing lists</h2>
+  </div>
+  <div class="mcp-table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>List</th>
+          <th>Files</th>
+          <th>Total size</th>
+          <th>Latest file</th>
+          <th>Last updated</th>
+        </tr>
+      </thead>
+      <tbody id="mcp-lists-body">
+        <tr class="empty-row"><td colspan="5">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div><!-- /tab-mcp -->
 
 <!-- Log Modal -->
 <div class="modal-overlay" id="log-modal">
@@ -1404,6 +1516,138 @@ async function showLogInModal(name) {
 }
 
 fetchBranches();
+
+// --- Tabs ---
+let mcpRefreshTimer = null;
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  const titleEl = document.getElementById('page-title');
+  const btn = document.getElementById('header-action-btn');
+  if (name === 'worktrees') {
+    titleEl.innerHTML = 'PostgreSQL Worktrees <span id="branch-count"></span>';
+    document.getElementById('branch-count').textContent = `${branches.length}`;
+    btn.textContent = '+ New Worktree';
+    btn.onclick = openCreateModal;
+    btn.style.display = '';
+    clearInterval(mcpRefreshTimer);
+    mcpRefreshTimer = null;
+  } else if (name === 'mcp') {
+    titleEl.textContent = 'MCP Server';
+    btn.textContent = 'Run batch now';
+    btn.onclick = runMcpBatch;
+    btn.style.display = '';
+    fetchMcpStatus();
+    if (!mcpRefreshTimer) mcpRefreshTimer = setInterval(fetchMcpStatus, 10000);
+  }
+}
+
+function formatBytes(n) {
+  if (n == null) return '-';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+function formatDateTime(dt) {
+  if (!dt) return '-';
+  const d = new Date(dt);
+  if (isNaN(d)) return dt;
+  return d.toLocaleString('ja-JP');
+}
+
+function relativeTime(dt) {
+  if (!dt) return '';
+  const d = new Date(dt);
+  if (isNaN(d)) return '';
+  const sec = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
+async function fetchMcpStatus() {
+  try {
+    const resp = await fetch('/api/mcp/status');
+    const data = await resp.json();
+    renderMcpStatus(data);
+  } catch (e) {
+    document.getElementById('mcp-services').textContent = 'Failed to load: ' + e.message;
+  }
+}
+
+function renderMcpStatus(data) {
+  // Services
+  const svcEl = document.getElementById('mcp-services');
+  const services = data.services || [];
+  if (services.length === 0) {
+    svcEl.innerHTML = '<div style="color:var(--text-muted);font-size:0.85rem">Not running</div>';
+  } else if (services[0].error) {
+    svcEl.innerHTML = `<div style="color:var(--red);font-size:0.8rem">${esc(services[0].error)}</div>`;
+  } else {
+    svcEl.innerHTML = services.map(s => {
+      const running = s.state === 'running';
+      const dot = running ? 'pg-dot-up' : 'pg-dot-down';
+      const stat = s.health ? `${s.state} (${s.health})` : (s.status || s.state || '-');
+      return `<div class="mcp-svc">
+        <span class="pg-dot ${dot}"></span>
+        <span class="svc-name">${esc(s.name || '-')}</span>
+        <span class="svc-status">${esc(stat)}</span>
+      </div>`;
+    }).join('');
+  }
+
+  // Mail data last updated
+  const mbox = data.mbox || {};
+  document.getElementById('mcp-last-updated').textContent = formatDateTime(mbox.last_updated);
+  document.getElementById('mcp-last-updated-rel').textContent = relativeTime(mbox.last_updated);
+
+  // Batch
+  const batch = data.batch || {};
+  const bs = document.getElementById('mcp-batch-status');
+  bs.textContent = batch.status === 'running' ? 'Running…' : 'Idle';
+  bs.style.color = batch.status === 'running' ? 'var(--accent)' : 'var(--text)';
+  const meta = [];
+  if (batch.started_at) meta.push(`started: ${formatDateTime(batch.started_at)}`);
+  if (batch.finished_at) meta.push(`finished: ${formatDateTime(batch.finished_at)}`);
+  if (batch.error) meta.push(`error: ${batch.error}`);
+  document.getElementById('mcp-batch-meta').textContent = meta.join(' · ');
+
+  // Lists table
+  const tbody = document.getElementById('mcp-lists-body');
+  const lists = mbox.lists || [];
+  if (lists.length === 0) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No mbox files yet</td></tr>';
+  } else {
+    tbody.innerHTML = lists.map(l => `
+      <tr>
+        <td><strong>${esc(l.name)}</strong></td>
+        <td style="font-variant-numeric:tabular-nums">${l.file_count}</td>
+        <td style="color:var(--text-muted)">${formatBytes(l.total_size)}</td>
+        <td style="font-family:'SF Mono',monospace;font-size:0.75rem;color:var(--text-muted)">${esc(l.latest_file || '-')}</td>
+        <td style="color:var(--text-muted);font-size:0.78rem">${formatDateTime(l.last_updated)}</td>
+      </tr>`).join('');
+  }
+}
+
+async function runMcpBatch() {
+  if (!confirm('Run MCP download + ingest now?')) return;
+  try {
+    const resp = await fetch('/api/mcp/batch', { method: 'POST' });
+    const data = await resp.json();
+    if (data.ok) {
+      showToast('MCP batch started', 'success');
+    } else {
+      showToast(data.error || 'Failed to start batch', 'error');
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+  }
+  fetchMcpStatus();
+}
 </script>
 </body>
 </html>

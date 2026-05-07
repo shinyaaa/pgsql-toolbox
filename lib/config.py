@@ -47,3 +47,18 @@ CLAUDE_STARTUP_BUFFER = 2
 
 # MCP server endpoint
 MCP_ENDPOINT = "http://localhost:40000/mcp"
+
+# MCP mailing-list ingestion
+MCP_DIR = REPO_ROOT / "mcp"
+MCP_MBOX_DIR = MCP_DIR / "data" / "mbox"
+MCP_COMPOSE_FILE = MCP_DIR / "docker-compose.yml"
+MCP_DOWNLOAD_SCRIPT = MCP_DIR / "scripts" / "download_mbox.sh"
+MCP_LISTS = [
+    "pgsql-hackers",
+    "pgsql-bugs",
+    "pgsql-committers",
+    "pgsql-docs",
+]
+# Daily batch run time (local time, 24h)
+MCP_BATCH_HOUR = 3
+MCP_BATCH_MINUTE = 0

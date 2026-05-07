@@ -22,6 +22,12 @@ from lib.operations import (
     scan_worktrees,
     validate_branch_name,
 )
+from lib.mcp_status import (
+    batch_state as mcp_batch_state,
+    get_status as mcp_get_status,
+    start_scheduler as mcp_start_scheduler,
+    trigger_batch_async as mcp_trigger_batch,
+)
 from lib.replication import (
     build_cluster,
     reload_cluster,
@@ -374,6 +380,24 @@ def api_statuses():
     return jsonify(STATUSES)
 
 
+@app.route("/api/mcp/status")
+def api_mcp_status():
+    return jsonify(mcp_get_status())
+
+
+@app.route("/api/mcp/batch", methods=["POST"])
+def api_mcp_batch():
+    started = mcp_trigger_batch()
+    if not started:
+        return jsonify({"error": "batch already running",
+                        "batch": mcp_batch_state()}), 409
+    return jsonify({"ok": True, "batch": mcp_batch_state()})
+
+
 if __name__ == "__main__":
+    import os
     init_db()
+    # Avoid double-starting under the Flask reloader
+    if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        mcp_start_scheduler()
     app.run(host="0.0.0.0", port=30001, debug=True, threaded=True)
