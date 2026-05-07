@@ -69,5 +69,6 @@ CREATE INDEX idx_patches_files ON patches USING GIN (files_changed);
 CREATE TABLE ingestion_log (
     mbox_file       TEXT PRIMARY KEY,
     message_count   INTEGER NOT NULL DEFAULT 0,
-    ingested_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    ingested_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    file_mtime      TIMESTAMPTZ
 );

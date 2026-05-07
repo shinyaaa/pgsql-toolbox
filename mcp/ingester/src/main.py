@@ -9,7 +9,13 @@ import time
 
 import psycopg
 
-from .db import classify_threads, get_ingested_files, insert_batch, record_ingestion
+from .db import (
+    classify_threads,
+    ensure_schema,
+    get_ingested_files,
+    insert_batch,
+    record_ingestion,
+)
 from .mbox_parser import parse_mbox
 from .thread_resolver import resolve_threads
 
@@ -66,6 +72,7 @@ def _discover_mbox_files(mbox_dir: str) -> list[tuple[str, str]]:
 
 def main():
     conn = get_db_connection()
+    ensure_schema(conn)
     mbox_dir = os.environ.get("MBOX_DIR", "/data/mbox")
 
     discovered = _discover_mbox_files(mbox_dir)
@@ -76,21 +83,26 @@ def main():
         return
 
     already_ingested = get_ingested_files(conn)
-    pending = [
-        (path, list_name)
-        for path, list_name in discovered
-        if os.path.basename(path) not in already_ingested
-    ]
+    pending = []
+    for path, list_name in discovered:
+        basename = os.path.basename(path)
+        mtime = os.path.getmtime(path)
+        prev_mtime = already_ingested.get(basename, "missing")
+        if prev_mtime == "missing":
+            pending.append((path, list_name, mtime))
+        elif prev_mtime is None or mtime > prev_mtime + 1.0:
+            # Re-process if file was updated (1s tolerance for FS precision)
+            pending.append((path, list_name, mtime))
 
     logger.info(
-        "Found %d mbox files, %d already ingested, %d to process",
+        "Found %d mbox files, %d already ingested, %d to (re)process",
         len(discovered),
         len(already_ingested),
         len(pending),
     )
 
     total_messages = 0
-    for mbox_path, list_name in pending:
+    for mbox_path, list_name, mtime in pending:
         basename = os.path.basename(mbox_path)
         logger.info("Processing %s (list: %s) ...", basename, list_name)
 
@@ -98,14 +110,14 @@ def main():
         logger.info("  Parsed %d messages from %s", len(messages), basename)
 
         if not messages:
-            record_ingestion(conn, basename, 0)
+            record_ingestion(conn, basename, 0, mtime)
             continue
 
         resolve_threads(messages)
         count, affected_threads = insert_batch(conn, messages, list_name=list_name)
-        record_ingestion(conn, basename, count)
+        record_ingestion(conn, basename, count, mtime)
         total_messages += count
-        logger.info("  Inserted %d messages from %s", count, basename)
+        logger.info("  Inserted %d new messages from %s", count, basename)
 
         if affected_threads:
             stats = classify_threads(conn, affected_threads)

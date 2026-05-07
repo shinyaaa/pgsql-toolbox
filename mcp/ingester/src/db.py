@@ -17,21 +17,46 @@ def _strip_nul(value):
     return value
 
 
-def get_ingested_files(conn: psycopg.Connection) -> set[str]:
-    with conn.cursor() as cur:
-        cur.execute("SELECT mbox_file FROM ingestion_log")
-        return {row[0] for row in cur.fetchall()}
-
-
-def record_ingestion(conn: psycopg.Connection, mbox_file: str, count: int) -> None:
+def ensure_schema(conn: psycopg.Connection) -> None:
+    """Apply idempotent migrations needed by the ingester."""
     with conn.cursor() as cur:
         cur.execute(
-            """INSERT INTO ingestion_log (mbox_file, message_count)
-               VALUES (%s, %s)
+            "ALTER TABLE ingestion_log "
+            "ADD COLUMN IF NOT EXISTS file_mtime TIMESTAMPTZ"
+        )
+    conn.commit()
+
+
+def get_ingested_files(conn: psycopg.Connection) -> dict[str, float | None]:
+    """Return {basename: file_mtime_epoch_or_None} for already-ingested mbox files."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT mbox_file, file_mtime FROM ingestion_log")
+        return {
+            row[0]: (row[1].timestamp() if row[1] is not None else None)
+            for row in cur.fetchall()
+        }
+
+
+def record_ingestion(
+    conn: psycopg.Connection,
+    mbox_file: str,
+    count: int,
+    file_mtime: float | None = None,
+) -> None:
+    from datetime import datetime, timezone
+    mtime_dt = (
+        datetime.fromtimestamp(file_mtime, tz=timezone.utc)
+        if file_mtime is not None else None
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO ingestion_log (mbox_file, message_count, file_mtime)
+               VALUES (%s, %s, %s)
                ON CONFLICT (mbox_file) DO UPDATE SET
                    message_count = EXCLUDED.message_count,
+                   file_mtime = EXCLUDED.file_mtime,
                    ingested_at = now()""",
-            (mbox_file, count),
+            (mbox_file, count, mtime_dt),
         )
     conn.commit()
 

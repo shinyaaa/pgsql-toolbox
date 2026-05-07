@@ -22,7 +22,9 @@ while [[ "$current" -le "$END" ]]; do
     filename="${LIST}.${current}"
     outpath="${OUTDIR}/${filename}"
 
-    if [[ -f "$outpath" ]]; then
+    # Always re-download the END month (still being appended to upstream).
+    # Past months are immutable — skip if already present.
+    if [[ -f "$outpath" && "$current" != "$END" ]]; then
         echo "SKIP: ${filename} (already exists)"
     else
         url="${BASE_URL}/${filename}"
