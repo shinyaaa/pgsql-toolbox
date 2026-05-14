@@ -131,6 +131,63 @@ python3 app.py
 
 http://127.0.0.1:30001 でアクセス。
 
+### systemd ユニット定義 (参考)
+
+`~/.config/systemd/user/` 配下に以下のファイルを配置する。
+
+`pgsql-toolbox.target`:
+
+```ini
+[Unit]
+Description=pgsql-toolbox services (Dashboard + MCP)
+
+[Install]
+WantedBy=default.target
+```
+
+`pgsql-toolbox.service`:
+
+```ini
+[Unit]
+Description=PostgreSQL Worktree Dashboard
+PartOf=pgsql-toolbox.target
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/shinya/git/pgsql-toolbox
+ExecStart=/usr/bin/python3 app.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/shinya/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=pgsql-toolbox.target
+```
+
+`pgsql-ml-mcp.service`:
+
+```ini
+[Unit]
+Description=PostgreSQL Mailing List MCP Server
+PartOf=pgsql-toolbox.target
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/shinya/git/pgsql-toolbox/mcp
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=pgsql-toolbox.target
+```
+
+`pgsql-toolbox.service` の `PATH` に `~/.local/bin` を含めるのは、`pg_init` から `claude mcp add` を呼び出すため。
+
 ## 構成
 
 ```
