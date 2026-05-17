@@ -471,9 +471,6 @@ def init_database(project_dir: Path, port: int):
     logger.info("PostgreSQL started.")
 
 
-_BOX_CHARS = " \t│╭╮╰╯─┌┐└┘├┤┬┴┼|"
-
-
 def _capture_pane(session: str) -> str:
     """Return the visible text of a tmux pane."""
     result = subprocess.run(
@@ -483,21 +480,97 @@ def _capture_pane(session: str) -> str:
     return result.stdout or ""
 
 
-def _trust_dialog_visible(pane: str) -> bool:
-    """Detect Claude Code's folder-trust dialog, shown on first launch."""
-    lowered = pane.lower()
-    return "trust the files" in lowered or "do you trust" in lowered
+def _pane_title(session: str) -> str:
+    """Return the tmux pane title (the terminal title set by the app)."""
+    result = subprocess.run(
+        ["tmux", "display-message", "-t", session, "-p", "#{pane_title}"],
+        capture_output=True, text=True,
+    )
+    return result.stdout or ""
+
+
+def _send_keys(session: str, *keys: str, literal: bool = False):
+    """Send keystrokes to a tmux session; `literal` sends text verbatim."""
+    cmd = ["tmux", "send-keys", "-t", session]
+    if literal:
+        cmd.append("-l")
+    cmd.extend(keys)
+    subprocess.run(cmd, capture_output=True, text=True)
+
+
+def _dialog_visible(pane: str) -> bool:
+    """Detect a modal confirmation dialog (folder-trust, MCP approval, ...).
+
+    A fresh worktree shows two dialogs in sequence before the prompt: the
+    folder-trust check and the .mcp.json MCP-server approval. Their wording
+    changes between Claude Code releases, but every such dialog renders an
+    "Enter to confirm" footer, so matching that is far more durable than
+    matching any specific prompt text. For both dialogs the default-
+    highlighted option is the one we want, so a plain Enter accepts them.
+    """
+    return "Enter to confirm" in pane
 
 
 def _prompt_ready(pane: str) -> bool:
-    """Detect that Claude Code's input box is drawn and ready for input."""
-    if "? for shortcuts" in pane:
+    """Detect that Claude Code's input box is drawn and idle for input."""
+    return "? for shortcuts" in pane
+
+
+def _session_renamed(session: str, name: str) -> bool:
+    """Return True once Claude Code reports the conversation renamed."""
+    # Claude Code sets the terminal title to the conversation name; the
+    # default title is "Claude Code", so the branch name showing up there
+    # is a reliable confirmation that /rename took effect.
+    if name in _pane_title(session):
         return True
-    # The input box line looks like "│ > ... │"; strip the box-drawing
-    # frame and check for the leading prompt character.
-    for line in pane.splitlines():
-        if line.strip(_BOX_CHARS).startswith(">"):
+    return f"Session renamed to: {name}" in _capture_pane(session)
+
+
+def _wait_for_claude_prompt(session: str) -> bool:
+    """Poll until Claude Code is idle at its input prompt.
+
+    Accepts any startup dialog (folder-trust, MCP approval) along the way
+    by sending Enter on its default choice. Returns True once the prompt
+    is reached, False on timeout.
+    """
+    acted_on = None
+    deadline = time.monotonic() + CLAUDE_STARTUP_TIMEOUT
+    while time.monotonic() < deadline:
+        pane = _capture_pane(session)
+        if _prompt_ready(pane):
             return True
+        if _dialog_visible(pane) and pane != acted_on:
+            # Accept the dialog. Remember its pane text so we send Enter
+            # once per distinct dialog, not repeatedly while the same one
+            # is still on screen.
+            _send_keys(session, "Enter")
+            acted_on = pane
+            time.sleep(CLAUDE_STARTUP_BUFFER)
+            continue
+        time.sleep(CLAUDE_STARTUP_POLL_INTERVAL)
+    return False
+
+
+def _rename_claude_session(session: str, branch: str, attempts: int = 3) -> bool:
+    """Send /rename to Claude Code and verify it applied, retrying if not."""
+    for attempt in range(1, attempts + 1):
+        # Clear any leftover input from a previous attempt.
+        _send_keys(session, "C-u")
+        time.sleep(0.5)
+        # Type the command literally, then submit it with a separate Enter
+        # keystroke. The slash-command autocomplete popup closes once the
+        # argument (with its leading space) is typed, so one Enter submits.
+        _send_keys(session, f"/rename {branch}", literal=True)
+        time.sleep(CLAUDE_STARTUP_BUFFER)
+        _send_keys(session, "Enter")
+        # Give Claude Code a moment to apply and confirm the rename.
+        for _ in range(5):
+            time.sleep(1)
+            if _session_renamed(session, branch):
+                return True
+        logger.info(
+            f"  rename attempt {attempt}/{attempts} not confirmed; retrying"
+        )
     return False
 
 
@@ -521,54 +594,29 @@ def setup_tmux_claude(branch: str, src_dir: Path):
     )
 
     # Start Claude Code
-    subprocess.run(
-        ["tmux", "send-keys", "-t", session, "claude", "Enter"],
-        capture_output=True, text=True,
-    )
+    _send_keys(session, "claude", "Enter")
 
     # Wait until Claude Code is idle at its input prompt. A fresh worktree
-    # triggers a folder-trust dialog on first launch; it must be accepted
-    # first, otherwise the /rename keystrokes land in the dialog and the
-    # Enter is consumed confirming it instead of submitting the command.
+    # shows blocking dialogs first (folder-trust, then .mcp.json approval);
+    # they must be accepted, otherwise the /rename keystrokes land in a
+    # dialog and the Enter is consumed confirming it instead of submitting.
     logger.info("Waiting for Claude Code to start...")
-    ready = False
-    trust_accepted = False
-    for _ in range(CLAUDE_STARTUP_TIMEOUT):
-        pane = _capture_pane(session)
-        if _trust_dialog_visible(pane):
-            if not trust_accepted:
-                subprocess.run(
-                    ["tmux", "send-keys", "-t", session, "Enter"],
-                    capture_output=True, text=True,
-                )
-                trust_accepted = True
-            time.sleep(CLAUDE_STARTUP_POLL_INTERVAL)
-            continue
-        if _prompt_ready(pane):
-            ready = True
-            break
-        time.sleep(CLAUDE_STARTUP_POLL_INTERVAL)
-
-    if not ready:
+    ready = _wait_for_claude_prompt(session)
+    if ready:
+        time.sleep(CLAUDE_STARTUP_BUFFER)
+    else:
         logger.warning(
             f"Claude Code prompt not detected within {CLAUDE_STARTUP_TIMEOUT}s; "
-            f"sending /rename anyway (session name may not be applied)."
+            f"attempting /rename anyway (session name may not be applied)."
         )
 
-    time.sleep(CLAUDE_STARTUP_BUFFER)
-
-    # Send the slash command text and submit it as a separate keystroke.
-    # Sending the text and Enter together lets the slash-command
-    # autocomplete popup swallow the Enter instead of submitting the input.
-    subprocess.run(
-        ["tmux", "send-keys", "-t", session, "-l", f"/rename {branch}"],
-        capture_output=True, text=True,
-    )
-    time.sleep(CLAUDE_STARTUP_BUFFER)
-    subprocess.run(
-        ["tmux", "send-keys", "-t", session, "Enter"],
-        capture_output=True, text=True,
-    )
+    if _rename_claude_session(session, branch):
+        logger.info(f"Renamed Claude Code conversation to '{branch}'.")
+    else:
+        logger.warning(
+            f"Could not confirm Claude Code rename to '{branch}'; "
+            f"rename it manually in the session with: /rename {branch}"
+        )
 
     logger.info(f"tmux session '{session}' created with Claude Code running.")
     logger.info(f"  Attach: tmux attach -t {session}")
