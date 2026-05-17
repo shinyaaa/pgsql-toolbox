@@ -6,6 +6,7 @@ Ported from the original bash script bin/pg_init.
 import fcntl
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -489,6 +490,19 @@ def _pane_title(session: str) -> str:
     return result.stdout or ""
 
 
+_SESSION_URL_RE = re.compile(r"https://claude\.ai/code/\S+")
+
+
+def _claude_session_url(session: str) -> str:
+    """Extract the Claude Code session URL from the tmux pane.
+
+    Claude Code prints this URL on startup when /remote-control is active;
+    returns "" when it is not shown.
+    """
+    match = _SESSION_URL_RE.search(_capture_pane(session))
+    return match.group(0) if match else ""
+
+
 def _send_keys(session: str, *keys: str, literal: bool = False):
     """Send keystrokes to a tmux session; `literal` sends text verbatim."""
     cmd = ["tmux", "send-keys", "-t", session]
@@ -617,6 +631,16 @@ def setup_tmux_claude(branch: str, src_dir: Path):
             f"Could not confirm Claude Code rename to '{branch}'; "
             f"rename it manually in the session with: /rename {branch}"
         )
+
+    # Record the Claude Code session URL so the dashboard can link to it.
+    url = _claude_session_url(session)
+    if url:
+        logger.info(f"Claude Code session: {url}")
+        try:
+            from lib.db import set_claude_session_url
+            set_claude_session_url(branch, url)
+        except Exception as e:
+            logger.warning(f"Could not store Claude Code session URL: {e}")
 
     logger.info(f"tmux session '{session}' created with Claude Code running.")
     logger.info(f"  Attach: tmux attach -t {session}")

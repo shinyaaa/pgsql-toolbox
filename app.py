@@ -151,7 +151,8 @@ def api_update_branch(name):
 
     fields = []
     values = []
-    for col in ("status", "mailing_list_url", "commitfest_url", "notes"):
+    for col in ("status", "mailing_list_url", "commitfest_url",
+                "claude_session_url", "notes"):
         if col in data:
             fields.append(f"{col} = ?")
             values.append(data[col])

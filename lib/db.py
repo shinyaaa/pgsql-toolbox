@@ -27,6 +27,7 @@ def init_db(db_path: Optional[Path] = None):
                 status TEXT NOT NULL DEFAULT 'active',
                 mailing_list_url TEXT DEFAULT '',
                 commitfest_url TEXT DEFAULT '',
+                claude_session_url TEXT DEFAULT '',
                 notes TEXT DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -41,6 +42,12 @@ def init_db(db_path: Optional[Path] = None):
                 PRIMARY KEY (primary_name, standby_index)
             )
         """)
+        # Migration: add columns introduced after the initial schema.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(branches)")}
+        if "claude_session_url" not in cols:
+            conn.execute(
+                "ALTER TABLE branches ADD COLUMN claude_session_url TEXT DEFAULT ''"
+            )
         conn.commit()
     finally:
         conn.close()
@@ -53,6 +60,21 @@ def update_branch_status(name: str, status: str, db_path: Optional[Path] = None)
         conn.execute(
             "UPDATE branches SET status = ?, updated_at = ? WHERE name = ?",
             (status, datetime.now().isoformat(), name),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_claude_session_url(name: str, url: str, db_path: Optional[Path] = None):
+    """Store the Claude Code session URL for a branch (insert or update)."""
+    init_db(db_path)  # ensure the table and claude_session_url column exist
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO branches (name, claude_session_url) VALUES (?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET claude_session_url = excluded.claude_session_url",
+            (name, url),
         )
         conn.commit()
     finally:
