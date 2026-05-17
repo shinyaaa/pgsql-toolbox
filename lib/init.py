@@ -471,8 +471,38 @@ def init_database(project_dir: Path, port: int):
     logger.info("PostgreSQL started.")
 
 
+_BOX_CHARS = " \t│╭╮╰╯─┌┐└┘├┤┬┴┼|"
+
+
+def _capture_pane(session: str) -> str:
+    """Return the visible text of a tmux pane."""
+    result = subprocess.run(
+        ["tmux", "capture-pane", "-t", session, "-p"],
+        capture_output=True, text=True,
+    )
+    return result.stdout or ""
+
+
+def _trust_dialog_visible(pane: str) -> bool:
+    """Detect Claude Code's folder-trust dialog, shown on first launch."""
+    lowered = pane.lower()
+    return "trust the files" in lowered or "do you trust" in lowered
+
+
+def _prompt_ready(pane: str) -> bool:
+    """Detect that Claude Code's input box is drawn and ready for input."""
+    if "? for shortcuts" in pane:
+        return True
+    # The input box line looks like "│ > ... │"; strip the box-drawing
+    # frame and check for the leading prompt character.
+    for line in pane.splitlines():
+        if line.strip(_BOX_CHARS).startswith(">"):
+            return True
+    return False
+
+
 def setup_tmux_claude(branch: str, src_dir: Path):
-    """Create a tmux session and start Claude Code."""
+    """Create a tmux session, start Claude Code, and rename the session."""
     session = branch
 
     # Check if session already exists
@@ -496,23 +526,47 @@ def setup_tmux_claude(branch: str, src_dir: Path):
         capture_output=True, text=True,
     )
 
-    # Wait for Claude Code prompt (poll quietly, no logging)
+    # Wait until Claude Code is idle at its input prompt. A fresh worktree
+    # triggers a folder-trust dialog on first launch; it must be accepted
+    # first, otherwise the /rename keystrokes land in the dialog and the
+    # Enter is consumed confirming it instead of submitting the command.
     logger.info("Waiting for Claude Code to start...")
-    for i in range(CLAUDE_STARTUP_TIMEOUT):
-        result = subprocess.run(
-            ["tmux", "capture-pane", "-t", session, "-p"],
-            capture_output=True, text=True,
-        )
-        if result.stdout:
-            lines = [line for line in result.stdout.splitlines() if line.strip()]
-            # Claude Code prompt: ">" or "❯" or contains input marker
-            if lines and (lines[-1].startswith(">") or "❯" in lines[-1]):
-                break
+    ready = False
+    trust_accepted = False
+    for _ in range(CLAUDE_STARTUP_TIMEOUT):
+        pane = _capture_pane(session)
+        if _trust_dialog_visible(pane):
+            if not trust_accepted:
+                subprocess.run(
+                    ["tmux", "send-keys", "-t", session, "Enter"],
+                    capture_output=True, text=True,
+                )
+                trust_accepted = True
+            time.sleep(CLAUDE_STARTUP_POLL_INTERVAL)
+            continue
+        if _prompt_ready(pane):
+            ready = True
+            break
         time.sleep(CLAUDE_STARTUP_POLL_INTERVAL)
 
+    if not ready:
+        logger.warning(
+            f"Claude Code prompt not detected within {CLAUDE_STARTUP_TIMEOUT}s; "
+            f"sending /rename anyway (session name may not be applied)."
+        )
+
+    time.sleep(CLAUDE_STARTUP_BUFFER)
+
+    # Send the slash command text and submit it as a separate keystroke.
+    # Sending the text and Enter together lets the slash-command
+    # autocomplete popup swallow the Enter instead of submitting the input.
+    subprocess.run(
+        ["tmux", "send-keys", "-t", session, "-l", f"/rename {branch}"],
+        capture_output=True, text=True,
+    )
     time.sleep(CLAUDE_STARTUP_BUFFER)
     subprocess.run(
-        ["tmux", "send-keys", "-t", session, f"/rename {branch}", "Enter"],
+        ["tmux", "send-keys", "-t", session, "Enter"],
         capture_output=True, text=True,
     )
 
