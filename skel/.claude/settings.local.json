@@ -1,0 +1,33 @@
+{
+  "plansDirectory": "./.claude/plans",
+  "permissions": {
+    "allow": [
+      "Bash(./configure:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(make:*)",
+      "Bash(meson:*)",
+      "Bash(ninja:*)",
+      "Bash(git:*)",
+      "Bash(initdb:*)",
+      "Bash(pg_ctl:*)",
+      "Bash(pg_config:*)",
+      "Bash(psql:*)",
+      "Bash(perl:*)",
+      "Bash(python3:*)",
+      "Bash(xargs:*)",
+      "Bash(export:*)",
+      "Bash(PERL5LIB=:*)",
+      "Bash(PATH=:*)",
+      "Bash(src/tools/pgindent/pgindent:*)",
+      "Bash(codex:*)",
+      "Bash(curl:*)",
+      "WebSearch",
+      "mcp__pgsql-ml-mcp"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "pgsql-ml-mcp"
+  ],
+  "enableAllProjectMcpServers": true
+}
