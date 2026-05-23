@@ -64,10 +64,10 @@ $ARGUMENTS
 
 ### Tags (Attribution Section)
 
-Tags go after the narrative body, each on its own line:
+Tags go after the narrative body, each on its own line. The general form is:
 
 ```
-Tag: Full Name <email@example.com>
+Tag: <attribution> [(optional brief context)]
 ```
 
 Order tags as follows:
@@ -75,9 +75,48 @@ Order tags as follows:
 2. Reported-by / Suggested-by / Diagnosed-by
 3. Reviewed-by (separate lines for multiple reviewers)
 4. Tested-by
-5. Bug
-6. Backpatch-through (omit for master-only; use version like "15" or range like "13-15")
+5. Bug (the bug number, written with a leading number sign, e.g. `Bug: #18888`)
+6. Backpatch-through (omit for master-only; use the oldest affected version
+   like "15", a range like "13-15", or "15 only" for a single branch)
 7. Discussion (use `https://postgr.es/m/MESSAGE_ID` format)
+
+Attribution rules (from the PostgreSQL wiki guidance):
+
+- When possible, the attribution should be a cut-and-paste of the attributed
+  person's list email "From:" field, with no alterations.
+- Within a single tag with multiple people, order the attributions
+  approximately from "most significant participant" to "least significant".
+- When committers include themselves in an attribution, they spell out their
+  own attribution exactly as it appears in the "From:" field of their emails,
+  just as for anyone else.
+- Verbose context belongs in the narrative body; only brief context belongs in
+  parentheses on a tag line.
+- When the committer refers to themself in the first person in a commit
+  authored or co-authored by someone else, they include a reference to their
+  own name after the pronoun (e.g. "per a suggestion from me (Shinya Kato)").
+
+### Version-specific footer
+
+The footer depends on whether this is the initial patch or a later revision.
+
+**v1 (initial patch):** use this fixed footer verbatim, leaving the
+`Reviewed-by:` and `Discussion:` values blank to be filled in later:
+
+```
+Author: Shinya Kato <shinya11.kato@gmail.com>
+Reviewed-by:
+Discussion: https://postgr.es/m/
+```
+
+**v2 or later:**
+
+- Keep the `Author:` line.
+- If reviewers have appeared on the thread, add one `Reviewed-by:` line per
+  reviewer (use each reviewer's exact "From:" field text).  If there are still
+  no reviewers, leave a blank `Reviewed-by:` line.
+- If the thread message ID is known, set
+  `Discussion: https://postgr.es/m/MESSAGE_ID`.  Otherwise leave it as
+  `Discussion: https://postgr.es/m/`.
 
 ### Anti-patterns to Avoid
 
