@@ -204,6 +204,7 @@
   .link-ml { background: rgba(34,211,238,0.12); color: var(--cyan); }
   .link-cf { background: rgba(251,146,60,0.12); color: var(--orange); }
   .link-cc { background: rgba(217,119,87,0.18); color: #e3906c; }
+  .link-gh { background: rgba(148,163,184,0.15); color: #cbd5e1; }
 
   /* VSCode links */
   .vscode-links { font-size: 0.8em; opacity: 0.7; }
@@ -1023,6 +1024,7 @@ function renderActiveRow(b) {
   if (b.mailing_list_url) links.push(`<a class="link-tag link-ml" href="${esc(b.mailing_list_url)}" target="_blank" title="${esc(b.mailing_list_url)}">ML</a>`);
   if (b.commitfest_url) links.push(`<a class="link-tag link-cf" href="${esc(b.commitfest_url)}" target="_blank" title="${esc(b.commitfest_url)}">CF</a>`);
   if (b.claude_session_url) links.push(`<a class="link-tag link-cc" href="${esc(b.claude_session_url)}" target="_blank" title="Claude Code session: ${esc(b.claude_session_url)}">CC</a>`);
+  if (b.github_url) links.push(`<a class="link-tag link-gh" href="${esc(b.github_url)}" target="_blank" title="GitHub commits: ${esc(b.github_url)}">GH</a>`);
 
   const isArchiving = archiving.has(b.name);
   const isCreating = b.pg_init_status === 'running';
@@ -1138,6 +1140,7 @@ function renderArchivedRow(b) {
   if (b.mailing_list_url) links.push(`<a class="link-tag link-ml" href="${esc(b.mailing_list_url)}" target="_blank" title="${esc(b.mailing_list_url)}">ML</a>`);
   if (b.commitfest_url) links.push(`<a class="link-tag link-cf" href="${esc(b.commitfest_url)}" target="_blank" title="${esc(b.commitfest_url)}">CF</a>`);
   if (b.claude_session_url) links.push(`<a class="link-tag link-cc" href="${esc(b.claude_session_url)}" target="_blank" title="Claude Code session: ${esc(b.claude_session_url)}">CC</a>`);
+  if (b.github_url) links.push(`<a class="link-tag link-gh" href="${esc(b.github_url)}" target="_blank" title="GitHub commits: ${esc(b.github_url)}">GH</a>`);
 
   const prefixBg = getPrefixBg(b.name);
   return `

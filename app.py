@@ -9,7 +9,7 @@ from pathlib import Path
 
 from flask import Flask, g, jsonify, render_template, request
 
-from lib.config import DB_PATH, HIDDEN_DIRS, LOG_PREVIEW_SIZE, LOGS_DIR, PGSQL_DIR, standby_port
+from lib.config import DB_PATH, GH_REPO, HIDDEN_DIRS, LOG_PREVIEW_SIZE, LOGS_DIR, PGSQL_DIR, standby_port
 from lib.db import get_standbys, init_db, remove_standbys
 from lib.init import init_branch
 from lib.operations import (
@@ -90,6 +90,7 @@ def sync_branches():
             continue
         d = dict(row)
         d["port"] = port_map.get(d["name"])
+        d["github_url"] = f"https://github.com/{GH_REPO}/commits/{d['name']}"
         d["exists_on_disk"] = d["name"] in worktrees
         src_dir = PGSQL_DIR / d["name"] / "postgres"
         d["src_dir"] = str(src_dir) if src_dir.exists() else None
