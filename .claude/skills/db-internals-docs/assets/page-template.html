@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<!--
+  章ページ用テンプレート。{{...}} を実際の内容に置換して chNN.html として保存する。
+  - {{SITE_TITLE}}     : サイト名（全ページ共通）
+  - {{VERSION_INFO}}   : "PostgreSQL <version> · <hash> · <date>"
+                         例: "PostgreSQL 18beta1 · 79c65b9 · 2026-06-14 18:30"
+                         git submodule update --remote 後に hash・date を取得して組み立てる
+  - {{PAGE_TITLE}}     : この章のタイトル（<title> 用）
+  - {{SIDEBAR_TOC}}    : サイドバー TOC（全ページ共通の <ol>...</ol>。現在章/節に class="current" を付与）
+  - {{CHAPTER_NUMBER}} : 例 "第1章"
+  - {{CHAPTER_TITLE}}  : 例 "データベースクラスタ"
+  - {{CHAPTER_BODY}}   : 本文 HTML（<h2>, <p>, <figure>, .example など）
+  - {{PAGER}}          : 前後ナビ（<a class="prev">…</a><a class="next">…</a>）
+  - {{FOOTER}}         : フッター文言
+-->
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{PAGE_TITLE}} | {{SITE_TITLE}} — {{VERSION_INFO}}</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">{{SITE_TITLE}}</a>
+    <span class="version-badge">{{VERSION_INFO}}</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      {{SIDEBAR_TOC}}
+    </nav>
+    <main class="content">
+      <article>
+        <h1>{{CHAPTER_NUMBER}}　{{CHAPTER_TITLE}}</h1>
+        {{CHAPTER_BODY}}
+      </article>
+      <nav class="pager">
+        {{PAGER}}
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">{{FOOTER}}</footer>
+</body>
+</html>

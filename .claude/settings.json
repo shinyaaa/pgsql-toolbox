@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 bin/pg_cluster --help)",
+      "Bash(python3 bin/pg_init --help)",
+      "Bash(python3 -c \"from lib.config import *; from lib.db import *; from lib.init import *; from lib.operations import *; from lib.replication import *; print\\(''All imports OK''\\)\")",
+      "Bash(python3 -c \":*)",
+      "Bash(~/pgsql/tmp-01/bin/pg_ctl status:*)",
+      "Bash(~/pgsql/tmp-01/bin/psql -p 50012 postgres -c \"SELECT application_name, sync_state, state FROM pg_stat_replication;\")",
+      "Bash(sqlite3 dashboard.db \"SELECT name, status FROM branches WHERE name IN \\(''master'', ''logs''\\);\")",
+      "Bash(python3 -c \"import sqlite3; db=sqlite3.connect\\(''dashboard.db''\\); print\\(db.execute\\(\"\"SELECT name,status FROM branches WHERE name IN \\(''master'',''logs''\\)\"\"\\).fetchall\\(\\)\\)\")",
+      "Bash(python3 -c \"import py_compile; [py_compile.compile\\(f, doraise=True\\) for f in [''lib/config.py'', ''lib/db.py'', ''lib/operations.py'', ''lib/init.py'', ''lib/replication.py'', ''app.py'']]\")",
+      "Bash(python3 -c \"import py_compile; [py_compile.compile\\(f, doraise=True\\) for f in [''bin/pg_init'', ''bin/pg_archive'', ''bin/pg_status'', ''bin/pg_cluster'']]\")",
+      "Bash(python3 -c \"from lib.config import PRIMARY_PORT_MIN, PRIMARY_PORT_MAX; print\\(f''Port range: {PRIMARY_PORT_MIN}-{PRIMARY_PORT_MAX}''\\)\")",
+      "Bash(python3 -c \"from lib.operations import run_cmd; print\\(''run_cmd imported OK''\\)\")",
+      "Bash(python3 -c \"from lib.db import get_connection, init_db, get_standbys, add_standby, remove_standbys, update_branch_status; print\\(''db imports OK''\\)\")",
+      "Bash(python3 -c \"from lib.init import init_branch; print\\(''init imports OK''\\)\")",
+      "Bash(python3 -c \"from lib.replication import start_cluster, stop_cluster; print\\(''replication imports OK''\\)\")",
+      "Bash(python3 -m py_compile app.py lib/*.py bin/*)",
+      "Bash(python3 bin/pg_status --json)",
+      "Bash(grep -n \"print\\(\" /home/shinya/git/pgsql-dashboard/lib/*.py)",
+      "Bash(git submodule *)",
+      "Bash(git -C postgres rev-parse --short HEAD)",
+      "Bash(git -C postgres rev-parse HEAD)",
+      "Bash(cd /home/shinya/git/pgsql-toolbox *)"
+    ],
+    "additionalDirectories": [
+      "/home/shinya/pgsql/tmp-01/data-s1",
+      "/home/shinya/pgsql/tmp-01/postgres",
+      "/home/shinya/git/pgsql-toolbox/.claude/skills/db-internals-docs/assets"
+    ]
+  }
+}
