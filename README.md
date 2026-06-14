@@ -103,7 +103,7 @@ Claude Code に `.mcp.json` で自動登録される。詳細は `mcp/README.md`
 
 ## サービス管理
 
-`pgsql-toolbox.target` で Dashboard と MCP サーバーを一括管理する。
+`pgsql-toolbox.target` で Dashboard・MCP サーバー・Internals の 3 サービスを一括管理する。
 
 ```bash
 # 全サービス起動 / 停止
@@ -114,22 +114,26 @@ systemctl --user stop pgsql-toolbox.target
 systemctl --user status pgsql-toolbox.target
 
 # 個別サービス確認
-systemctl --user status pgsql-toolbox.service   # Dashboard
-systemctl --user status pgsql-ml-mcp.service    # MCP
+systemctl --user status pgsql-toolbox.service    # Dashboard
+systemctl --user status pgsql-ml-mcp.service     # MCP
+systemctl --user status pgsql-internals.service  # Internals
 
 # ログ確認
-journalctl --user -u pgsql-toolbox -f           # Dashboard
-journalctl --user -u pgsql-ml-mcp -f            # MCP
+journalctl --user -u pgsql-toolbox -f            # Dashboard
+journalctl --user -u pgsql-ml-mcp -f             # MCP
+journalctl --user -u pgsql-internals -f          # Internals
 ```
 
-Dashboard を手動で起動する場合:
+各サービスを手動で起動する場合:
 
 ```bash
 cd ~/git/pgsql-toolbox
-python3 app.py
+python3 app.py            # Dashboard
+python3 internals/app.py  # Internals
 ```
 
-http://127.0.0.1:30001 でアクセス。
+- Dashboard: http://127.0.0.1:30001
+- Internals: http://127.0.0.1:30002
 
 ### systemd ユニット定義 (参考)
 
@@ -186,13 +190,34 @@ RestartSec=10
 WantedBy=pgsql-toolbox.target
 ```
 
+`pgsql-internals.service`:
+
+```ini
+[Unit]
+Description=PostgreSQL Internals Documentation Server
+PartOf=pgsql-toolbox.target
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/shinya/git/pgsql-toolbox
+ExecStart=/usr/bin/python3 internals/app.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/shinya/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=pgsql-toolbox.target
+```
+
 `pgsql-toolbox.service` の `PATH` に `~/.local/bin` を含めるのは、`pg_init` から `claude mcp add` を呼び出すため。
 
 ## 構成
 
 ```
 pgsql-toolbox/
-  app.py                # Flask バックエンド (API + SQLite)
+  app.py                # Flask バックエンド (API + SQLite) – Dashboard
   lib/
     config.py           # 共通定数
     db.py               # SQLite ヘルパー
@@ -204,7 +229,11 @@ pgsql-toolbox/
     pg_status           # CLI: ステータス表示
     pg_mcp              # CLI: MCP サーバー管理
   templates/
-    index.html          # シングルページフロントエンド
+    index.html          # シングルページフロントエンド (Dashboard)
+  internals/            # PostgreSQL 内部構造ドキュメントサーバー (port 30002)
+    app.py              # Flask サーバー – ~/pgsql/*/postgres/docs/ を配信
+    templates/
+      index.html        # ドキュメント一覧ページ
   mcp/                  # メーリングリスト検索 MCP サーバー
     docker-compose.yml  # Docker Compose 定義
     db/                 # PostgreSQL スキーマ・Dockerfile

@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第7章 バックエンドによるサブトランザクション状態判定 | PostgreSQL pg_subtrans 詳解 — PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 10:48</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:         '#ffffff',
+        primaryColor:       '#dbeafe',
+        primaryTextColor:   '#1a202c',
+        primaryBorderColor: '#2b6cb0',
+        lineColor:          '#4a5568',
+        secondaryColor:     '#e2e8f0',
+        tertiaryColor:      '#f7fafc',
+        edgeLabelBackground:'#ffffff',
+        clusterBkg:         '#f0f7ff',
+        clusterBorder:      '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL pg_subtrans 詳解</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 10:48</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li>
+          <a class="chap-title" href="ch01.html">第1章 サブトランザクションと親子関係</a>
+          <ol class="sect">
+            <li><a href="ch01.html#sec-1-1">1.1 サブトランザクションとは</a></li>
+            <li><a href="ch01.html#sec-1-2">1.2 SAVEPOINT による入れ子の例</a></li>
+            <li><a href="ch01.html#sec-1-3">1.3 親子関係を記録する理由</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch02.html">第2章 pg_subtrans の全体像と SLRU 基盤</a>
+          <ol class="sect">
+            <li><a href="ch02.html#sec-2-1">2.1 SLRU マネージャの役割</a></li>
+            <li><a href="ch02.html#sec-2-2">2.2 ディスク上の pg_subtrans ディレクトリ</a></li>
+            <li><a href="ch02.html#sec-2-3">2.3 クラッシュをまたがない設計</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch03.html">第3章 データ構造とページレイアウト</a>
+          <ol class="sect">
+            <li><a href="ch03.html#sec-3-1">3.1 エントリとページ</a></li>
+            <li><a href="ch03.html#sec-3-2">3.2 XID からページ・エントリへの写像</a></li>
+            <li><a href="ch03.html#sec-3-3">3.3 バンクとロック、バッファ数</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch04.html">第4章 親の記録と最上位XIDの解決</a>
+          <ol class="sect">
+            <li><a href="ch04.html#sec-4-1">4.1 SubTransSetParent — 親の記録</a></li>
+            <li><a href="ch04.html#sec-4-2">4.2 SubTransGetParent — 親の参照</a></li>
+            <li><a href="ch04.html#sec-4-3">4.3 SubTransGetTopmostTransaction — 最上位の解決</a></li>
+            <li><a href="ch04.html#sec-4-4">4.4 xact.c との連携</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch05.html">第5章 ライフサイクル管理</a>
+          <ol class="sect">
+            <li><a href="ch05.html#sec-5-1">5.1 初期化と起動（BootStrap / Startup）</a></li>
+            <li><a href="ch05.html#sec-5-2">5.2 ページ拡張（Extend）</a></li>
+            <li><a href="ch05.html#sec-5-3">5.3 チェックポイントと切り詰め（Checkpoint / Truncate）</a></li>
+            <li><a href="ch05.html#sec-5-4">5.4 XID ラップアラウンドの扱い</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch06.html">第6章 スナップショット・可視性での利用と運用</a>
+          <ol class="sect">
+            <li><a href="ch06.html#sec-6-1">6.1 subxid キャッシュの溢れ（オーバーフロー）</a></li>
+            <li><a href="ch06.html#sec-6-2">6.2 可視性判定での参照</a></li>
+            <li><a href="ch06.html#sec-6-3">6.3 性能と運用上の注意</a></li>
+          </ol>
+        </li>
+        <li class="current">
+          <a class="chap-title" href="ch07.html">第7章 バックエンドによるサブトランザクション状態判定</a>
+          <ol class="sect">
+            <li><a href="ch07.html#sec-7-1">7.1 エントリポイントと全体像</a></li>
+            <li><a href="ch07.html#sec-7-2">7.2 ステップ①：ヒントビット高速パス</a></li>
+            <li><a href="ch07.html#sec-7-3">7.3 ステップ②：自バックエンド判定（TransactionIdIsCurrentTransactionId）</a></li>
+            <li><a href="ch07.html#sec-7-4">7.4 ステップ③：他バックエンドの PGPROC 探索（TransactionIdIsInProgress）</a></li>
+            <li><a href="ch07.html#sec-7-5">7.5 ステップ④：スナップショット照合（XidInMVCCSnapshot）</a></li>
+            <li><a href="ch07.html#sec-7-6">7.6 ステップ⑤：CLOG 確認とヒントビット更新</a></li>
+            <li><a href="ch07.html#sec-7-7">7.7 pg_subtrans が呼ばれる条件のまとめ</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第7章　バックエンドによるサブトランザクション状態判定</h1>
+        <p>あるバックエンドが、タプルの <code>xmin</code> や <code>xmax</code> に記録されたサブXIDについて
+「コミット済みか・実行中か・中止済みか」を決める一連の処理を、ソースコードを参照しながら順を追って解説する。
+<code>pg_subtrans</code> が登場するのはこの判定の中の特定のステップに限られており、その手前でいくつかの
+高速パスが設けられている。</p>
+
+<h2 id="sec-7-1">7.1　エントリポイントと全体像</h2>
+<p>ヒープタプルの可視性判定は <code>HeapTupleSatisfiesMVCC()</code>
+（<code>src/backend/access/heap/heapam_visibility.c</code>）が行う。内部で <code>xmin</code> の状態を調べる
+際に実行する処理の全体像を図 7.1 に示す。大きく 5 段階あり、早いステップで答えが出るほどコストが低い。
+<code>pg_subtrans</code> の <code>SubTransGetTopmostTransaction()</code> が呼ばれるのは③と④の一部に
+すぎない。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    A["HeapTupleSatisfiesMVCC\nxmin の状態を確認"] --> B{"①ヒントビットが<br/>セットされている?"}
+    B -- "XMIN_COMMITTED" --> Vis["可視（確定）"]
+    B -- "XMIN_INVALID" --> Invis["不可視（確定）"]
+    B -- "セットなし" --> C{"②自バックエンドの<br/>トランザクションか?\nTransactionIdIsCurrentTransactionId"}
+    C -- true --> D["自分が書いたタプル<br/>（CID 比較へ）"]
+    C -- false --> E{"③他バックエンドで<br/>実行中か?\nTransactionIdIsInProgress"}
+    E -- true --> Invis2["実行中 → 不可視"]
+    E -- false --> F{"④スナップショット上で<br/>実行中か?\nXidInMVCCSnapshot"}
+    F -- true --> Invis2
+    F -- false --> G["⑤CLOG で確認\nTransactionIdDidCommit"]
+    G -- "コミット済み" --> SetC["XMIN_COMMITTED ヒントビット更新\n→ 可視"]
+    G -- "中止/クラッシュ" --> SetI["XMIN_INVALID ヒントビット更新\n→ 不可視"]
+  </pre>
+  <figcaption>図 7.1: xmin のサブXID状態判定の全体フロー</figcaption>
+</figure>
+
+<div class="note"><strong>注意</strong>図 7.1 は概念的な順序を示す。実際の <code>HeapTupleSatisfiesMVCC()</code> は
+<code>MVCC スナップショット</code>引数を受け取り、ステップ③（<code>TransactionIdIsInProgress</code>）は
+<code>HeapTupleSatisfiesUpdate()</code> など別のバリアントで使われる。MVCC スナップショットを使う
+<code>HeapTupleSatisfiesMVCC()</code> ではステップ④（<code>XidInMVCCSnapshot</code>）を中心に判定する。</div>
+
+<h2 id="sec-7-2">7.2　ステップ①：ヒントビット高速パス</h2>
+<p>タプルヘッダの <code>t_infomask</code> には、過去の判定結果を再利用するためのヒントビットが格納される。</p>
+
+<table>
+  <thead><tr><th>ビット</th><th>意味</th></tr></thead>
+  <tbody>
+    <tr><td><code>HEAP_XMIN_COMMITTED</code></td><td>xmin がコミット済みであると確定</td></tr>
+    <tr><td><code>HEAP_XMIN_INVALID</code></td><td>xmin が無効（アボートまたはクラッシュ）と確定</td></tr>
+  </tbody>
+</table>
+
+<p>いずれかがセットされていれば CLOG や PGPROC 配列を一切参照せずに即座に返れる。これが最も高速なパスで
+あり、ヒートアップしたワークロードでは大多数のタプルがここで判定される。</p>
+
+<div class="example">
+  <span class="example-label">heapam_visibility.c（抜粋）</span>
+  <pre><code>if (!HeapTupleHeaderXminCommitted(tuple))
+{
+    if (HeapTupleHeaderXminInvalid(tuple))
+        return false;   /* 不可視 */
+    /* ヒントビットなし → 以降のステップへ */
+    ...
+}</code></pre>
+</div>
+
+<h2 id="sec-7-3">7.3　ステップ②：自バックエンド判定（TransactionIdIsCurrentTransactionId）</h2>
+<p><code>TransactionIdIsCurrentTransactionId()</code>（<code>xact.c</code>）は、問い合わせ対象の XID が
+現在のバックエンドのトランザクション（あるいはそのサブトランザクション）かどうかを判定する。
+共有メモリを一切触らないローカル処理である。</p>
+
+<p>内部では図 7.2 の順に探索する。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    T0["xid が通常のXIDか?"] -- いいえ --> F["false"]
+    T0 -- はい --> T1{"トップXIDと一致?<br/>GetTopTransactionIdIfAny()"}
+    T1 -- はい --> Tr["true"]
+    T1 -- いいえ --> T2{"並列ワーカーか?\nnParallelCurrentXids > 0"}
+    T2 -- はい --> T3["ParallelCurrentXids[] を<br/>二分探索"]
+    T3 --> Tr
+    T2 -- いいえ --> T4["CurrentTransactionState スタックを<br/>上位（parent）に向かって走査"]
+    T4 --> T5{"各エントリの XID<br/>と一致?"}
+    T5 -- はい --> Tr
+    T5 -- いいえ --> T6["childXids[] (subcommitted children)<br/>を二分探索"]
+    T6 -- 一致 --> Tr
+    T6 -- 不一致 --> T4
+    T4 -- スタック末端 --> F
+  </pre>
+  <figcaption>図 7.2: TransactionIdIsCurrentTransactionId の探索ロジック</figcaption>
+</figure>
+
+<p><code>childXids[]</code> には、すでに SAVEPOINT を越えて subcommit されたサブXIDが昇順で格納される。
+これを二分探索するため、深くネストした SAVEPOINT でも高速に判定できる。ただし最大
+<code>PGPROC_MAX_CACHED_SUBXIDS</code>（= 64）を超えた分はここには入らず、<code>pg_subtrans</code> による
+解決が必要になる（後述）。</p>
+
+<h2 id="sec-7-4">7.4　ステップ③：他バックエンドの PGPROC 探索（TransactionIdIsInProgress）</h2>
+<p><code>TransactionIdIsInProgress()</code>（<code>src/backend/storage/ipc/procarray.c</code>）は、XID が
+<strong>他のバックエンドで現在実行中</strong>かどうかを調べる。図 7.3 のように最大 4 段階の探索を行い、
+早い段階で答えが出れば後の探索はスキップする。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    I0{"xid &lt; RecentXmin?"} -- はい --> F["false（古すぎて実行中でない）"]
+    I0 -- いいえ --> I1{"cachedXidIsNotInProgress<br/>キャッシュに一致?"}
+    I1 -- はい --> F
+    I1 -- いいえ --> I2{"自バックエンドの XID?\n(TransactionIdIsCurrentTransactionId)"}
+    I2 -- はい --> Tr["true"]
+    I2 -- いいえ --> I3["ProcArrayLock (SHARED) を取得"]
+    I3 --> I4{"latestCompletedXid &lt; xid?"} -- はい --> Tr2["true（まだ完了していない）"]
+    I4 -- いいえ --> I5["PGPROC 配列を全バックエンド分走査"]
+    I5 --> S1{"Step 1: ProcGlobal->xids[]<br/>（トップXID）と一致?"}
+    S1 -- はい --> Tr
+    S1 -- いいえ --> S2{"Step 2: PGPROC->subxids.xids[]<br/>（subxid キャッシュ）を線形探索"}
+    S2 -- 一致 --> Tr
+    S2 -- 不一致 --> S2b{"overflow フラグあり?"}
+    S2b -- はい --> Coll["トップXIDを xids[] に収集"]
+    S2b -- いいえ --> I5
+    I5 -- 全エンド走査完了 --> I6["ProcArrayLock 解放"]
+    I6 --> OvChk{"収集した overflow top-XIDs<br/>が空?"}
+    OvChk -- 空 --> F2["false（どこにもない）"]
+    OvChk -- 非空 --> S4a{"Step 4a: pg_xact で<br/>アボート済み確認"}
+    S4a -- アボート --> F2
+    S4a -- 非アボート --> S4b["SubTransGetTopmostTransaction(xid)\npg_subtrans を参照して最上位XID解決"]
+    S4b --> S4c{"解決した topxid が<br/>収集した xids[] にある?"}
+    S4c -- はい --> Tr
+    S4c -- いいえ --> F2
+  </pre>
+  <figcaption>図 7.3: TransactionIdIsInProgress の 4 段階探索（pg_subtrans はステップ4でのみ参照）</figcaption>
+</figure>
+
+<p>重要な設計上の点が 2 つある。</p>
+<ul>
+  <li><strong>subxid キャッシュ（Step 2）に入りきらなかった分</strong>は、overflow フラグが立ったバックエンドの
+    トップXIDを収集しておき、ロック解放後に <code>pg_subtrans</code> で最上位XIDまでさかのぼって
+    突き合わせる（Step 4）。これが <code>pg_subtrans</code> の主要な呼ばれ方である。</li>
+  <li><strong>Step 4 の前に必ず pg_xact（CLOG）でアボート確認</strong>する。すでにアボートしたサブ
+    トランザクションの XID は "実行中でない" と答えるべきで、親が実行中でも false を返す必要がある。</li>
+</ul>
+
+<div class="example">
+  <span class="example-label">procarray.c（Step 4 の抜粋）</span>
+  <pre><code>/* Step 4: overflow ありの場合のみ到達 */
+if (TransactionIdDidAbort(xid))
+{
+    cachedXidIsNotInProgress = xid;
+    return false;    /* すでにアボート済み */
+}
+
+topxid = SubTransGetTopmostTransaction(xid);  /* pg_subtrans を参照 */
+if (!TransactionIdEquals(topxid, xid) &&
+    pg_lfind32(topxid, xids, nxids))
+    return true;    /* 最上位XIDが実行中 */
+
+cachedXidIsNotInProgress = xid;
+return false;</code></pre>
+</div>
+
+<h2 id="sec-7-5">7.5　ステップ④：スナップショット照合（XidInMVCCSnapshot）</h2>
+<p>MVCC スナップショットを使う可視性判定では、<code>XidInMVCCSnapshot()</code>（<code>snapmgr.c</code>）が
+「スナップショット取得時点でその XID が実行中だったか」を返す。これは③とは異なり、<em>現在</em>の状態でなく
+<em>スナップショット取得時点</em>の状態を問う。</p>
+
+<p>図 7.4 にその処理を示す。オーバーフローの有無によって参照する配列が分岐するのがポイントである。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    X0{"xid &lt; snapshot->xmin?"} -- はい --> F["false（古いので実行中でない）"]
+    X0 -- いいえ --> X1{"xid >= snapshot->xmax?"} -- はい --> Tr["true（新しいので実行中）"]
+    X1 -- いいえ --> X2{"リカバリ中に取得した\nスナップショット?"}
+    X2 -- いいえ（通常） --> X3{"suboverflowed?"}
+    X3 -- いいえ --> X4["pg_lfind32(xid, subxip[], subxcnt)\nサブXIDを直接二分探索"]
+    X4 -- 一致 --> Tr
+    X4 -- 不一致 --> X5["pg_lfind32(xid, xip[], xcnt)\nトップXID配列を二分探索"]
+    X5 -- 一致 --> Tr
+    X5 -- 不一致 --> F
+    X3 -- はい（overflow） --> X6["SubTransGetTopmostTransaction(xid)\npg_subtrans で最上位XIDを解決"]
+    X6 --> X7{"解決後の topxid &lt; xmin?"} -- はい --> F
+    X7 -- いいえ --> X5
+    X2 -- はい（リカバリ中） --> X8{"suboverflowed?"}
+    X8 -- はい --> X6
+    X8 -- いいえ --> X9["pg_lfind32(xid, subxip[], subxcnt)\n（リカバリ時は xip が空のため subxip に統合）"]
+    X9 -- 一致 --> Tr
+    X9 -- 不一致 --> F
+  </pre>
+  <figcaption>図 7.4: XidInMVCCSnapshot の処理（pg_subtrans はオーバーフロー時のみ）</figcaption>
+</figure>
+
+<p>通常（非リカバリ）のオーバーフローなしのケースが最速で、<code>subxip[]</code> に対する線形探索
+（実装は <code>pg_lfind32()</code>、SIMD を活用）だけで完結する。</p>
+
+<p><code>subxip[]</code> にはスナップショット取得時点で各バックエンドが PGPROC にキャッシュしていた
+サブXIDがすべて格納される（最大 <code>TOTAL_MAX_CACHED_SUBXIDS</code>）。この配列はスナップショット
+ごとにコピーされるため、スナップショット取得後に他バックエンドがコミット・アボートしても影響を
+受けない。</p>
+
+<h2 id="sec-7-6">7.6　ステップ⑤：CLOG 確認とヒントビット更新</h2>
+<p>①〜④で答えが出なかった場合（ヒントビットなし・自分でもなく・現在実行中でもなく・スナップショット時点でも
+実行中でない）、コミットログ（<code>pg_xact</code>、CLOG）を参照する。</p>
+
+<div class="example">
+  <span class="example-label">heapam_visibility.c（抜粋）</span>
+  <pre><code>else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
+    SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+                HeapTupleHeaderGetRawXmin(tuple));
+else
+{
+    /* アボートまたはクラッシュ */
+    SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+                InvalidTransactionId);
+    return false;
+}</code></pre>
+</div>
+
+<p><code>TransactionIdDidCommit()</code> は内部で <code>pg_xact</code> の SLRU バッファを参照し、コミット状態
+ビットを確認する。CLOG ページがバッファにない場合はディスクから読み込む（待機イベント
+<code>CLogBuffer</code>）。</p>
+
+<p>判定後に <code>SetHintBits()</code> でヒントビットを書き込むことで、次回同じタプルにアクセスした際には
+①の高速パスで即座に返れる。ヒントビットの書き込みは WAL を出さない（クラッシュ後はヒントビットが
+消えるが、再度ステップを踏めばよい）。</p>
+
+<h2 id="sec-7-7">7.7　pg_subtrans が呼ばれる条件のまとめ</h2>
+<p>以上をまとめると、<code>SubTransGetTopmostTransaction()</code> が実際に呼ばれる条件は以下の 2 つに
+限定される。</p>
+
+<table>
+  <thead>
+    <tr><th>呼び出し元</th><th>条件</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>TransactionIdIsInProgress()</code> ステップ4</td>
+      <td>いずれかのバックエンドの subxid キャッシュが<strong>オーバーフロー</strong>しており、かつ PGPROC の
+      トップXIDおよびキャッシュ内サブXID どちらにも対象 XID が見つからなかった</td>
+    </tr>
+    <tr>
+      <td><code>XidInMVCCSnapshot()</code></td>
+      <td>スナップショット取得時点でいずれかのバックエンドが overflow しており、スナップショットの
+      <code>suboverflowed</code> フラグが立っている</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>逆に言えば、サブトランザクションの数が全バックエンドにわたって合計
+<code>TOTAL_MAX_CACHED_SUBXIDS</code>（= <code>PGPROC_MAX_CACHED_SUBXIDS</code> × 最大バックエンド数）以内に
+収まっている間は、<code>pg_subtrans</code> は一度も参照されない。オーバーフローは
+「1 つのバックエンドが 64 個を超えるサブトランザクションを生む」ことで発生する
+（<a href="ch06.html#sec-6-1">6.1節</a>）。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph 高速パス（pg_subtrans 不要）
+        H["①ヒントビット"] --> C["②自バックエンド判定\n（ローカルスタック）"]
+        C --> P["③PGPROC のトップXID\nおよびサブXID キャッシュ"]
+        P --> S["④subxip[] 直接検索\n（overflow なし）"]
+    end
+    subgraph 低速パス（pg_subtrans 参照）
+        OF["③ overflow バックエンドあり\n→ SubTransGetTopmostTransaction"] --> R["③ トップXIDと照合"]
+        SF["④ suboverflowed スナップショット\n→ SubTransGetTopmostTransaction"] --> R2["④ xip[] と照合"]
+    end
+  </pre>
+  <figcaption>図 7.5: 高速パスと低速パス（pg_subtrans 参照）の分岐</figcaption>
+</figure>
+
+<div class="note"><strong>まとめ</strong>バックエンドがサブXIDの状態を判定するとき、まずヒントビット・ローカルスタック・
+PGPROC キャッシュという共有メモリロック不要ないし軽量ロックで完結する高速パスを順に試みる。
+これらをすべて通過してはじめて <code>pg_subtrans</code> の <code>SubTransGetTopmostTransaction()</code>
+が呼ばれ、SLRU バッファ上の親XIDチェーンをたどる。<code>pg_subtrans</code> の参照はオーバーフロー時の
+例外的なパスであり、通常ワークロードでは現れない。</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch06.html"><span class="dir">← 前の章</span><span class="ttl">第6章 スナップショット・可視性での利用と運用</span></a>
+        <a class="next" href="ch08.html"><span class="dir">次の章 →</span><span class="ttl">第8章 性能劣化の議論と改善パッチ</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL 19beta1 のソースコードに基づく解説 ・ db-internals-docs スキルで生成</footer>
+</body>
+</html>

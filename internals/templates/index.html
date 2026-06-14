@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PostgreSQL Internals Docs</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #222533;
+    --border: #2d3044;
+    --text: #e2e4ed;
+    --text-muted: #7a7f96;
+    --accent: #6c8cff;
+    --accent-hover: #8da6ff;
+    --cyan: #22d3ee;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    padding: 24px 32px;
+    min-height: 100vh;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 28px;
+  }
+  .header h1 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .header h1 span { color: var(--text-muted); font-weight: 400; margin-left: 8px; font-size: 0.85rem; }
+  .empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 80px 20px;
+    font-size: 0.9rem;
+    line-height: 2;
+  }
+  .empty code {
+    display: block;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 0.8rem;
+    color: var(--cyan);
+    margin-top: 8px;
+  }
+  .topic-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+  .topic-link {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    text-decoration: none;
+    color: var(--text);
+    transition: border-color 0.15s;
+  }
+  .topic-link:hover { border-color: var(--accent); }
+  .topic-name {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--cyan);
+  }
+  .topic-version {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+  .open-label {
+    font-size: 0.72rem;
+    color: var(--accent);
+    opacity: 0;
+    transition: opacity 0.1s;
+    white-space: nowrap;
+    margin-left: 12px;
+  }
+  .topic-link:hover .open-label { opacity: 1; }
+  @media (max-width: 700px) {
+    body { padding: 12px; }
+    .topic-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>PostgreSQL Internals <span>{{ topics|length }} topic{{ 's' if topics|length != 1 else '' }}</span></h1>
+
+</div>
+
+{% if not topics %}
+<div class="empty">
+  <div>ドキュメントがまだありません。</div>
+  <div>db-internals-docs スキルを使って生成してください。</div>
+  <code>internals/docs/&lt;topic&gt;/index.html</code>
+</div>
+{% else %}
+<div class="topic-grid">
+  {% for topic in topics %}
+  <a class="topic-link" href="/{{ topic.name }}/">
+    <div>
+      <span class="topic-name">{{ topic.name }}</span>
+      {% if topic.version %}<div class="topic-version">{{ topic.version }}</div>{% endif %}
+    </div>
+    <span class="open-label">Open →</span>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
+</body>
+</html>

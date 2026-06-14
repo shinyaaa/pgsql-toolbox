@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第8章 性能劣化の議論と改善パッチ | PostgreSQL pg_subtrans 詳解 — PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 10:48</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:         '#ffffff',
+        primaryColor:       '#dbeafe',
+        primaryTextColor:   '#1a202c',
+        primaryBorderColor: '#2b6cb0',
+        lineColor:          '#4a5568',
+        secondaryColor:     '#e2e8f0',
+        tertiaryColor:      '#f7fafc',
+        edgeLabelBackground:'#ffffff',
+        clusterBkg:         '#f0f7ff',
+        clusterBorder:      '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL pg_subtrans 詳解</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 10:48</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li>
+          <a class="chap-title" href="ch01.html">第1章 サブトランザクションと親子関係</a>
+          <ol class="sect">
+            <li><a href="ch01.html#sec-1-1">1.1 サブトランザクションとは</a></li>
+            <li><a href="ch01.html#sec-1-2">1.2 SAVEPOINT による入れ子の例</a></li>
+            <li><a href="ch01.html#sec-1-3">1.3 親子関係を記録する理由</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch02.html">第2章 pg_subtrans の全体像と SLRU 基盤</a>
+          <ol class="sect">
+            <li><a href="ch02.html#sec-2-1">2.1 SLRU マネージャの役割</a></li>
+            <li><a href="ch02.html#sec-2-2">2.2 ディスク上の pg_subtrans ディレクトリ</a></li>
+            <li><a href="ch02.html#sec-2-3">2.3 クラッシュをまたがない設計</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch03.html">第3章 データ構造とページレイアウト</a>
+          <ol class="sect">
+            <li><a href="ch03.html#sec-3-1">3.1 エントリとページ</a></li>
+            <li><a href="ch03.html#sec-3-2">3.2 XID からページ・エントリへの写像</a></li>
+            <li><a href="ch03.html#sec-3-3">3.3 バンクとロック、バッファ数</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch04.html">第4章 親の記録と最上位XIDの解決</a>
+          <ol class="sect">
+            <li><a href="ch04.html#sec-4-1">4.1 SubTransSetParent — 親の記録</a></li>
+            <li><a href="ch04.html#sec-4-2">4.2 SubTransGetParent — 親の参照</a></li>
+            <li><a href="ch04.html#sec-4-3">4.3 SubTransGetTopmostTransaction — 最上位の解決</a></li>
+            <li><a href="ch04.html#sec-4-4">4.4 xact.c との連携</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch05.html">第5章 ライフサイクル管理</a>
+          <ol class="sect">
+            <li><a href="ch05.html#sec-5-1">5.1 初期化と起動（BootStrap / Startup）</a></li>
+            <li><a href="ch05.html#sec-5-2">5.2 ページ拡張（Extend）</a></li>
+            <li><a href="ch05.html#sec-5-3">5.3 チェックポイントと切り詰め（Checkpoint / Truncate）</a></li>
+            <li><a href="ch05.html#sec-5-4">5.4 XID ラップアラウンドの扱い</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch06.html">第6章 スナップショット・可視性での利用と運用</a>
+          <ol class="sect">
+            <li><a href="ch06.html#sec-6-1">6.1 subxid キャッシュの溢れ（オーバーフロー）</a></li>
+            <li><a href="ch06.html#sec-6-2">6.2 可視性判定での参照</a></li>
+            <li><a href="ch06.html#sec-6-3">6.3 性能と運用上の注意</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch07.html">第7章 バックエンドによるサブトランザクション状態判定</a>
+          <ol class="sect">
+            <li><a href="ch07.html#sec-7-1">7.1 エントリポイントと全体像</a></li>
+            <li><a href="ch07.html#sec-7-2">7.2 ステップ①：ヒントビット高速パス</a></li>
+            <li><a href="ch07.html#sec-7-3">7.3 ステップ②：自バックエンド判定（TransactionIdIsCurrentTransactionId）</a></li>
+            <li><a href="ch07.html#sec-7-4">7.4 ステップ③：他バックエンドの PGPROC 探索（TransactionIdIsInProgress）</a></li>
+            <li><a href="ch07.html#sec-7-5">7.5 ステップ④：スナップショット照合（XidInMVCCSnapshot）</a></li>
+            <li><a href="ch07.html#sec-7-6">7.6 ステップ⑤：CLOG 確認とヒントビット更新</a></li>
+            <li><a href="ch07.html#sec-7-7">7.7 pg_subtrans が呼ばれる条件のまとめ</a></li>
+          </ol>
+        </li>
+        <li class="current">
+          <a class="chap-title" href="ch08.html">第8章 性能劣化の議論と改善パッチ</a>
+          <ol class="sect">
+            <li><a href="ch08.html#sec-8-1">8.1 「破滅的劣化」とは何か</a></li>
+            <li><a href="ch08.html#sec-8-2">8.2 SubtransSLRULock 競合問題（2021年）</a></li>
+            <li><a href="ch08.html#sec-8-3">8.3 Smoothing the subtrans performance catastrophe（2022年）</a></li>
+            <li><a href="ch08.html#sec-8-4">8.4 SubTransSetParent() 呼び出しの最小化（コミット済み）</a></li>
+            <li><a href="ch08.html#sec-8-5">8.5 議論のまとめと残された課題</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第8章　性能劣化の議論と改善パッチ</h1>
+        <p>本章は pgsql-hackers で行われた 3 つのスレッドをまとめる。いずれも
+<code>pg_subtrans</code> の性能問題を起点とし、それぞれ異なるアプローチで解決策を探っている。</p>
+
+<table>
+  <thead>
+    <tr><th>スレッド</th><th>投稿者</th><th>期間</th><th>結果</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>suboverflowed subtransactions concurrency performance optimize</td>
+      <td>Pengchengliu（天津大学）</td>
+      <td>2021-08〜2022-05</td>
+      <td>一部コミット（後に revert）</td>
+    </tr>
+    <tr>
+      <td>Smoothing the subtrans performance catastrophe</td>
+      <td>Simon Riggs（EDB）</td>
+      <td>2022-08〜2022-09</td>
+      <td>Withdrawn（次スレッドに統合）</td>
+    </tr>
+    <tr>
+      <td>SUBTRANS: Minimizing calls to SubTransSetParent()</td>
+      <td>Simon Riggs（EDB）</td>
+      <td>2022-08〜2022-09</td>
+      <td>Committed（PG 16）</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="sec-8-1">8.1　「破滅的劣化」とは何か</h2>
+<p>Simon Riggs は 2022 年の投稿でサブトランザクション起因の性能劣化を「数学的な
+<em>破局（catastrophe）</em>」と表現した。数学では、入力のわずかな変化が出力を急激に変化させる
+臨界点のことを指す言葉である。</p>
+
+<p>PostgreSQL におけるその臨界点は「<strong>スナップショットの subxid キャッシュが 1 個でも溢れる</strong>」
+ことにある。溢れた瞬間から、スナップショットに <code>suboverflowed</code> フラグが立ち、可視性判定を
+行うすべてのバックエンドが <code>XidInMVCCSnapshot()</code> 内で pg_subtrans を参照せざるを得なくなる
+（<a href="ch07.html#sec-7-5">7.5節</a>）。オーバーフローを起こしたバックエンドが 1 つであっても影響は
+<strong>全バックエンド</strong>に及ぶ。さらに長時間トランザクションが同時に存在していると
+<code>TransactionXmin</code> が進まず、切り詰めも行われないため、問題が長期化する。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    A["1バックエンドが\n65個目のサブXIDを取得"] --> B["suboverflowed = true"]
+    B --> C["GetSnapshotData が\nすべてのスナップショットに\nsuboverflowed を伝播"]
+    C --> D["全バックエンドが XidInMVCCSnapshot で\npg_subtrans 参照"]
+    D --> E["SubtransSLRULock 競合\nor I/O 増大"]
+    E --> F["全体スループット急落"]
+  </pre>
+  <figcaption>図 8.1: 「破滅的劣化」の伝播経路（1 バックエンドの溢れが全体に波及する）</figcaption>
+</figure>
+
+<h2 id="sec-8-2">8.2　SubtransSLRULock 競合問題（2021 年）</h2>
+
+<h3>8.2.1　問題の発見と再現</h3>
+<p>天津大学の Pengchengliu は 2021 年 8 月、高並行ワークロードで全バックエンドが
+<code>SubtransSLRULock</code> 取得待ちで停止する現象を報告した。再現条件は以下の通り。</p>
+
+<div class="example">
+  <span class="example-label">再現手順の概要</span>
+  <pre><code>-- 1トランザクションあたり 128 サブトランザクションを使う pgbench スクリプト
+-- (subtrans_128.sql) を 500 並行で実行
+pgbench -d postgres -n -r -f subtrans_128.sql -c 500 -j 500 -T 3600</code></pre>
+</div>
+
+<p>しばらく経過すると全セッションが <code>SubtransSLRULock</code> 待機状態となり、<code>perf top</code>
+では以下のプロファイルが得られた。</p>
+
+<div class="example">
+  <span class="example-label">perf top 出力（抜粋）</span>
+  <pre><code>66.20%  postgres  [.] pg_atomic_compare_exchange_u32_impl   ← LWLock の CAS ループ
+29.30%  postgres  [.] pg_atomic_fetch_sub_u32_impl          ← LWLock の解放
+ 0.75%  postgres  [.] SimpleLruReadPage_ReadOnly             ← SLRU 読み取り
+ 0.02%  postgres  [.] SubTransGetParent</code></pre>
+</div>
+
+<p>CPU 時間の 95% 以上が LWLock の競合ループに費やされており、実際の SLRU 読み取り
+（<code>SimpleLruReadPage_ReadOnly</code>）はわずか 0.75% にすぎない。根本原因は
+<strong>共有 SLRU バンクロック（<code>SubtransSLRULock</code>）の排他競合</strong>であった。</p>
+
+<h3>8.2.2　提案されたアプローチとその評価</h3>
+<p>Pengchengliu はバックエンドローカルに SLRU ページのコピーを持つ方法を提案した。
+pg_subtrans に問い合わせた際にページを丸ごとローカルキャッシュへコピーし、次回以降は
+ロックなしでローカルから読む方式である。500 並行での計測では処理時間が 86 秒から 6 秒に
+短縮されたと報告された。</p>
+
+<p>しかし Andrey Borodin（Yandex）が指摘したように、<strong>SLRU ページ全体のコピーはメモリ
+消費が過剰</strong>になりうる懸念があった。</p>
+
+<p>これを受けて Simon Riggs が 2021 年 11 月に別のアプローチを提示した。
+<code>transam.c</code>（CLOG 参照）や <code>multixact.c</code> が持つ「<strong>単一エントリキャッシュ</strong>」を
+pg_subtrans にも導入するというものである。</p>
+
+<div class="example">
+  <span class="example-label">単一エントリキャッシュの概念（subtrans.c への追加）</span>
+  <pre><code>/* SubTransGetTopmostTransaction の結果を 1 エントリだけキャッシュ */
+static TransactionId cachedFetchSubXid  = InvalidTransactionId;
+static TransactionId cachedFetchTopXid  = InvalidTransactionId;</code></pre>
+</div>
+
+<p>同一サブXIDに対して繰り返し <code>SubTransGetTopmostTransaction()</code> が呼ばれる場合（例: ODBC
+ドライバが SAVEPOINT を多用するシナリオ）には、このキャッシュで SLRU 参照を削減できる。</p>
+
+<h3>8.2.3　コミットと後日の revert</h3>
+<p>Michael Paquier がこの単一エントリキャッシュを <strong>PostgreSQL 15</strong> に取り込んだ
+（2022 年 4 月）。ただし変数名の整理として <code>cachedFetchXid</code> → <code>cachedFetchSubXid</code>
+へのリネームも合わせて行われた。</p>
+
+<p>しかし 2022 年 5 月、Andres Freund がこのキャッシュに対して正当性の懸念を表明した。</p>
+
+<div class="note">
+  <strong>Andres Freund の指摘（2022-05-24）</strong>
+  <ol>
+    <li><code>SubTransGetTopmostTransaction()</code> の返り値は固定でない。<code>TransactionXmin</code> が
+    進むと途中で打ち切られる XID が変わり、キャッシュのヒット結果が変化しうる。</li>
+    <li>XID ラップアラウンドへの対処がない。長期間 <code>SubTransGetTopmostTransaction()</code> が
+    呼ばれないまま XID が折り返すと、キャッシュが古い値を返しつづける危険がある。</li>
+    <li><code>SubTransGetTopmostTransaction()</code> ではなく <code>SubTransGetParent()</code> 側でキャッシュ
+    すべきでは？ <code>TransactionIdDidCommit()</code> 経由のアクセスは後者を使う。</li>
+    <li>ベンチマーク結果が存在せず、効果の検証が不十分。</li>
+  </ol>
+</div>
+
+<p>Michael Paquier はこれらの指摘を受け入れ、キャッシュ部分を revert する方が安全と判断した
+（Amit Kapila は「<code>TransactionXmin</code> が進んだときにキャッシュを無効化する」という回避策を
+提案したが、議論は収束しないまま終了した）。</p>
+
+<h2 id="sec-8-3">8.3　Smoothing the subtrans performance catastrophe（2022 年）</h2>
+
+<h3>8.3.1　Simon Riggs のパッチ方針</h3>
+<p>2022 年 8 月 1 日、Simon Riggs は「<em>Smoothing the subtrans performance catastrophe</em>」
+として新しいパッチを投稿した。目的は <code>pg_subtrans</code> 自体を速くするのではなく、
+<strong>pg_subtrans への問い合わせ回数そのものを減らす</strong>ことである。</p>
+
+<p>パッチが実施する変更は 3 つ。</p>
+
+<ol>
+  <li><strong><code>XidInMVCCSnapshot()</code> の再設計</strong><br>
+  あるバックエンドがオーバーフローしていても、他バックエンド分のサブXIDは引き続き
+  スナップショット内の <code>subxip[]</code> に保持する（最大 1 バックエンドあたり 64 件）。
+  これにより、<code>suboverflowed</code> フラグが立っていても多くの XID はスナップショット内で
+  直接照合でき、pg_subtrans を引く必要がなくなる。</li>
+  <li><strong>スタンバイスナップショットへの二分探索導入</strong><br>
+  スタンバイの <code>subxip[]</code> は昇順ソート済みなので、線形探索を二分探索に変える。</li>
+  <li><strong><code>SubTransGetTopmostTransaction()</code> の改善</strong><br>
+  チェーンをたどる途中で <code>TransactionXmin</code> との比較を挟み、不要な SLRU 参照を削る。
+  スタンバイスナップショットでは 1 回のイテレーションで打ち切る。</li>
+</ol>
+
+<p>このパッチの効果は「一部のバックエンドがオーバーフローしたとき、他のバックエンドへの
+波及を最小化する」ことであり、<strong>全バックエンドがオーバーフローした場合には
+従来と同様に劣化する</strong>。"panacea（万能薬）ではない" と Simon 自身が述べている。</p>
+
+<h3>8.3.2　Andres Freund による根本的再設計の提案</h3>
+<p>Andres Freund はこのパッチへの応答として、より抜本的な変更を提案した。</p>
+
+<blockquote>
+「pg_subtrans の SLRU を丸ごと廃止し、純粋なインメモリのハッシュテーブルに置き換える
+べきではないか。CLOG や multixact とは異なり、pg_subtrans には古いエントリへのアクセスも
+永続性も必要ない。ほぼゼロのページが占める I/O は無駄でしかない。<code>dshash</code> テーブルに
+一定量の静的メモリを割り当て、動的に確保する設計にすれば、スナップショットや procarray
+でのサブXID の予約メモリも削減できる。」
+— Andres Freund, 2022-08-03
+</blockquote>
+
+<p>この提案は技術的に正鵠を射ており、Simon Riggs も長期目標として同意した。ただし
+「現在のリリースサイクルに間に合う短期的な緩和策」と「将来的な根本再設計」は別問題であり、
+両者を並行して進めるべきという立場を取った。</p>
+
+<h3>8.3.3　スレッドの結末</h3>
+<p>Robert Haas が提案の一部について正当性を懸念し、議論が続いた。Simon Riggs は最終的に
+このパッチを Commitfest から<strong>取り下げ（Withdrawn）</strong>、重複する要素を次節の
+「SubTransSetParent() 最小化」パッチに統合することを選んだ。</p>
+
+<h2 id="sec-8-4">8.4　SubTransSetParent() 呼び出しの最小化（コミット済み）</h2>
+
+<h3>8.4.1　コアアイデア</h3>
+<p>2022 年 8 月 8 日、Simon Riggs は「<em>SUBTRANS: Minimizing calls to
+SubTransSetParent()</em>」を投稿した。このスレッドは最終的にコミットに至った。</p>
+
+<p>発想の核心はシンプルである。<strong>pg_subtrans に親XIDを書くのは、その情報が後で実際に
+参照されるときだけでよい</strong>。現在のコードは <code>AssignTransactionId()</code> でサブXIDに
+XID を割り当てるたびに無条件で <code>SubTransSetParent()</code> を呼んでいる。しかし
+第7章で見たとおり、pg_subtrans が参照されるのはオーバーフロー時のみである。</p>
+
+<p>オーバーフローが発生しない限り、PGPROC のサブXIDキャッシュ（最大 64 個）に親子関係が
+保持されるため、pg_subtrans を書く必要は一切ない。つまり<strong>サブXIDの総数が 64 以下に
+収まる間は <code>SubTransSetParent()</code> を呼ばなくてよい</strong>。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph 変更前（全サブXIDに書き込む）
+        A1["サブXIDが割り当てられる\n（何個目でも）"] --> B1["SubTransSetParent() を呼ぶ\n（SLRU 書き込み）"]
+    end
+    subgraph 変更後（必要な場合のみ書き込む）
+        A2["サブXIDが割り当てられる"] --> C2{"64個目を超えた?\n（オーバーフロー）"}
+        C2 -- いいえ --> D2["PGPROC キャッシュに格納するだけ\n（pg_subtrans には書かない）"]
+        C2 -- はい --> E2["SubTransSetParent() を呼ぶ\n（SLRU 書き込み）"]
+    end
+  </pre>
+  <figcaption>図 8.2: SubTransSetParent() 呼び出しの前後比較</figcaption>
+</figure>
+
+<p>Simon によれば、PL/pgSQL で少数のサブトランザクションを使う典型的なワークロードでは、
+変更後の <code>SubTransSetParent()</code> 呼び出し頻度は変更前の <strong>1% 以下</strong>になる。</p>
+
+<h3>8.4.2　現行コードの「穴」という概念</h3>
+<p>パッチを理解するうえで重要な前提知識がある。pg_subtrans は現在でも XID 空間全体に
+対応するページを持つが、「サブトランザクションでない通常の XID」のエントリは
+<code>InvalidTransactionId</code>（= 0）のままである。これを Simon は<strong>「穴（holes）」</strong>
+と表現した。</p>
+
+<p>このパッチはそのような穴を意図的に増やす。ただし増やしてよい穴は
+「後で誰かが親を問い合わせることが証明できないもの」に限る。実際には
+「PGPROC キャッシュに収まり、オーバーフローしない場合」がこれに該当する。</p>
+
+<div class="example">
+  <span class="example-label">Simon Riggs のコメント（メーリングリスト）</span>
+  <pre><code>/* PL/pgSQL で少数の SAVEPOINT を使うだけなら、
+ * それらの subxid の親は PGPROC キャッシュから直接わかる。
+ * pg_subtrans を書いても誰も読まないなら、書く必要はない。
+ * 穴が増えても、その穴に対するアクセスは決して発生しない。 */</code></pre>
+</div>
+
+<h3>8.4.3　パッチの構成と主な変更点</h3>
+<p>このスレッドで提出されたパッチセット（最終版 v9）は以下の 2 本立てである。</p>
+
+<ol>
+  <li><strong>001: サブXID の isolation テスト追加</strong><br>
+  overflow 境界付近の動作を検証する新規テストケース。</li>
+
+  <li><strong>002: SubTransSetParent() 最小化の本体</strong><br>
+  主な変更は以下の通り。
+  <ul>
+    <li><code>AssignTransactionId()</code>（<code>xact.c</code>）で、サブXID 数が 64 以下のときは
+    <code>SubTransSetParent()</code> を呼ばない。</li>
+    <li><code>XactLockTableWait()</code> のロック待機処理を変更。サブXIDを一つ一つたどる代わりに、
+    直接 <code>GetTopTransactionId()</code> で最上位XIDを取得して待機する。これにより
+    途中のサブXIDの親が pg_subtrans に書かれていなくても正しく動作する。</li>
+    <li>オーバーフロー時に pg_subtrans へ書く際は、<strong>直接の親でなく最上位XID
+    （top-level XID）を記録する</strong>。これにより
+    <code>SubTransGetTopmostTransaction()</code> がチェーンを複数回たどる必要がなくなる。</li>
+    <li>スナップショット取得時（<code>GetSnapshotData()</code>）に、オーバーフローしている
+    バックエンドについても他バックエンドのサブXIDは <code>subxip[]</code> に保持し続ける
+    （Smoothing パッチとの共通要素）。</li>
+  </ul>
+  </li>
+</ol>
+
+<h3>8.4.4　Dilip Kumar によるレビューと議論</h3>
+<p>Dilip Kumar（EDB）が詳細なレビューを行い、いくつかの点を指摘した。</p>
+
+<ul>
+  <li><strong>パッチ間の依存関係</strong>：最小化パッチ単体では
+  <code>SubTransGetTopmostTransaction()</code> のループが不整合を起こす（Smoothing パッチとの
+  共通部品が必要）と指摘。Simon はこれを認め v3 以降でパッチを統合した。</li>
+  <li><strong><code>XactLockTableWait()</code> の変更の妥当性</strong>：「アボートしたサブトランザクションの
+  ロック解放が遅れる可能性がある」というコメントについて、Dilip が実際にその状況が
+  発生するかを問うた。Simon は「現行コードでもサブトランザクションがコミット済みなら
+  最上位XIDで待機するため、本質的な差はない」と回答した。</li>
+  <li><strong>リカバリ時のコメント整合性</strong>：リカバリ時には以前から直接トップXIDを親として
+  記録していたが、通常処理でもそうなったことを反映してコメントを修正すべきとの指摘。</li>
+</ul>
+
+<h3>8.4.5　コミット</h3>
+<p>最終的にこのパッチは <strong>PostgreSQL 16</strong> に取り込まれた。これにより、サブトランザクション
+数が PGPROC キャッシュ内（≤ 64）に収まるワークロードでは <code>pg_subtrans</code> への書き込みが
+ほぼ発生しなくなった。一般的な PL/pgSQL による EXCEPTION ハンドリングや少数の
+SAVEPOINT であれば、pg_subtrans は完全にアイドルのままとなる。</p>
+
+<h2 id="sec-8-5">8.5　議論のまとめと残された課題</h2>
+
+<h3>8.5.1　3スレッドの関係性</h3>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    P["Pengchengliu 2021-08\n問題報告: SubtransSLRULock 競合"]
+    S1["Simon Riggs 2021-11\n単一エントリキャッシュ提案\n→ 一部コミット（後に revert）"]
+    S2["Simon Riggs 2022-08\nSmoothing the catastrophe\n→ Withdrawn"]
+    S3["Simon Riggs 2022-08\nMinimizing SubTransSetParent()\n→ Committed (PG16)"]
+    AF["Andres Freund 2022-08\n根本再設計提案\n(SLRU → dshash)"]
+
+    P --> S1
+    P --> S3
+    S2 --> S3
+    S3 -. "将来の課題" .-> AF
+  </pre>
+  <figcaption>図 8.3: 3つのスレッドの派生関係</figcaption>
+</figure>
+
+<h3>8.5.2　コミットされた改善の効果と限界</h3>
+<p>PostgreSQL 16 で取り込まれた「SubTransSetParent() 最小化」により、通常ワークロードでの
+pg_subtrans への<strong>書き込みコスト</strong>はほぼ解消した。しかし以下の状況では
+依然として問題が残る。</p>
+
+<ul>
+  <li>1 トランザクションあたりのサブトランザクション数が 64 を超えるケース（深い PL/pgSQL
+  の EXCEPTION ネスト、ODBC の多数 SAVEPOINT など）では、オーバーフロー後に書き込みが
+  発生する。</li>
+  <li>オーバーフローが起きると読み取り側（<code>XidInMVCCSnapshot()</code>、
+  <code>TransactionIdIsInProgress()</code>）の pg_subtrans <strong>読み取りコスト</strong>は残る。
+  「Smoothing」パッチで緩和されたものの、全バックエンドがオーバーフローする
+  極端なケースでは従来と変わらない。</li>
+</ul>
+
+<h3>8.5.3　Andres Freund の長期展望</h3>
+<p>Andres Freund が提案した「<strong>SLRU を廃止して dshash テーブルに置き換える</strong>」方針は、
+現時点（PostgreSQL 19）では未着手のままである。この方針が実現された場合のメリットは
+以下の通り。</p>
+
+<table>
+  <thead>
+    <tr><th>観点</th><th>現状（SLRU）</th><th>dshash 案</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ロック競合</td>
+      <td>バンクロック（LWLock）が必要</td>
+      <td>ハッシュテーブルのバケット単位でロック分割が容易</td>
+    </tr>
+    <tr>
+      <td>ディスク I/O</td>
+      <td>ほぼ空のページが大量に存在</td>
+      <td>実際に存在するエントリ分だけメモリを使う</td>
+    </tr>
+    <tr>
+      <td>メモリ使用</td>
+      <td>XID 空間全体に比例したページ数を確保</td>
+      <td>実行中サブXID 数に比例（通常はずっと少ない）</td>
+    </tr>
+    <tr>
+      <td>永続性</td>
+      <td>ディスクに残るが再起動時には不要（クラッシュ非永続）</td>
+      <td>最初からインメモリ、設計と実装が一致する</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="note"><strong>まとめ</strong>3 つのスレッドはいずれも「オーバーフローによる catastrophic な性能劣化」
+という同じ問題を異なる角度から攻略しようとした。Pengchengliu がローカルキャッシュで
+SLRU 競合を直接減らそうとし、Simon Riggs がスナップショット内の情報量を増やして参照回数を
+削り、最終的にはそもそも pg_subtrans に書く頻度を大幅に減らすことでコミットに至った。
+Andres Freund が描く「SLRU をハッシュテーブルで置き換える」という根本的な再設計は、
+これらの議論が積み上げた問題の整理を土台として、将来のリリースで取り組まれることが
+期待されている。</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch07.html"><span class="dir">← 前の章</span><span class="ttl">第7章 バックエンドによるサブトランザクション状態判定</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL 19beta1 のソースコードに基づく解説 ・ db-internals-docs スキルで生成</footer>
+</body>
+</html>

@@ -6,7 +6,5 @@ dist/
 build/
 .eggs/
 dashboard.db
-.claude/
-!skel/.claude/
-!skel/.claude/settings.local.json
+/.claude/settings.local.json
 mcp/data/mbox/
