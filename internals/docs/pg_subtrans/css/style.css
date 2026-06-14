@@ -218,7 +218,9 @@ th { background: var(--bg-alt); font-weight: 700; }
 .pager a:hover { border-color: var(--accent); background: #eef4fb; }
 .pager .dir { display: block; font-size: 0.78rem; color: var(--muted); }
 .pager .ttl { font-weight: 600; color: var(--accent-dark); }
-.pager .next { text-align: right; margin-left: auto; }
+.pager .next { text-align: right; }
+.pager .up { flex: 0 1 auto; max-width: none; text-align: center; }
+.pager-spacer { flex: 1 1 0; max-width: 48%; }
 
 /* フッター ------------------------------------------------------------- */
 .site-footer {
