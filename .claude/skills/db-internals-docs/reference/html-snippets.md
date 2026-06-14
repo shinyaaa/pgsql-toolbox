@@ -132,10 +132,17 @@ grep -n '関数名\|型名' postgres/src/path/to/file.c
 
 ## 前後ナビ（`{{PAGER}}`）
 
+前後の章リンクに加え、中央に**トップページ（目次）へのリンク**を必ず置く。`prev`／`next` が無い章でも
+中央リンクが中央に来るよう、欠けた側を `pager-spacer` で埋める（順序は prev → up → next）。
+
 ```html
 <a class="prev" href="ch01.html">
   <span class="dir">← 前の章</span>
   <span class="ttl">第1章 データベースクラスタ</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
 </a>
 <a class="next" href="ch03.html">
   <span class="dir">次の章 →</span>
@@ -143,7 +150,11 @@ grep -n '関数名\|型名' postgres/src/path/to/file.c
 </a>
 ```
 
-先頭章では `prev` を省略、最終章では `next` を省略する。
+先頭章では `prev` を、最終章では `next` を、それぞれ次のスペーサーに置き換える（中央リンクの中央寄せを保つため）。
+
+```html
+<span class="pager-spacer" aria-hidden="true"></span>
+```
 
 ## トップページの章カード（`{{TOC_CARDS}}`）
 
