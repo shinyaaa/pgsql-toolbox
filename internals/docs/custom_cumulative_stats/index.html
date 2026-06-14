@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Custom Cumulative Statistics API の内部構造 — PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 13:18</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">Custom Cumulative Statistics API の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 13:18</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+<ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 累積統計システムと拡張点</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 累積統計システムの全体像</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 統計種別と ID 空間</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 Custom Cumulative Stats API の位置づけ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PgStat_KindInfo — 種別を定義するメタデータ</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 構造体の全体像</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 共通フィールド</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 可変個数向けのコールバック</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 固定個数向けのコールバック</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 種別の登録 — pgstat_register_kind()</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 登録の前提と流れ</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ID の割り当てと PGSTAT_KIND_EXPERIMENTAL</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 登録時の検証</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 レジストリと種別の解決</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 可変個数の統計を実装する</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 データ構造の設計</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 更新：pending から共有メモリへ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 ディスクへの永続化</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 SQL からの観察</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 固定個数の統計を実装する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 共有メモリレイアウトと changecount</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 init / snapshot / reset コールバック</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 SQL からの観察とリセット</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 ライフサイクルと運用</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 起動から永続化までのタイミング</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 クラッシュリカバリでの扱い</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 既存の統計機構との統合</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 注意点とベストプラクティス</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>Custom Cumulative Statistics API の内部構造</h1>
+        <p class="version-hero">PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 13:18</p>
+        <p class="lead">PostgreSQL の累積統計システム（cumulative statistics system）を拡張し、拡張機能（extension）が独自の統計種別を定義するための仕組みが <strong>Custom Cumulative Statistics API</strong> である。本ドキュメントは、種別を記述する <code>PgStat_KindInfo</code>、登録関数 <code>pgstat_register_kind()</code>、および公式テストモジュール <code>src/test/modules/test_custom_stats</code> を題材に、API の構造と内部動作を PostgreSQL 19beta1 のソースコードに基づいて図と実例で解説する。対象読者は累積統計を拡張する開発者、および pgstat 内部に関心のあるエンジニア。</p>
+      </div>
+      <div class="toc-grid">
+<a class="toc-card" href="ch01.html">
+  <span class="num">第1章</span>
+  <span class="title">累積統計システムと拡張点</span>
+  <span class="desc">固定個数・可変個数の統計、pending から共有メモリへの流れ、統計種別 ID の空間、そして本 API がどこに位置づくかを概観する。</span>
+</a>
+<a class="toc-card" href="ch02.html">
+  <span class="num">第2章</span>
+  <span class="title">PgStat_KindInfo — 種別を定義するメタデータ</span>
+  <span class="desc">統計種別の振る舞いをすべて決める PgStat_KindInfo 構造体を、共通フィールド・可変個数向けコールバック・固定個数向けコールバックに分けて読み解く。</span>
+</a>
+<a class="toc-card" href="ch03.html">
+  <span class="num">第3章</span>
+  <span class="title">種別の登録 — pgstat_register_kind()</span>
+  <span class="desc">shared_preload_libraries と _PG_init での登録、ID の割り当てと実験枠、登録時に課される検証、そしてレジストリ配列による種別の解決を追う。</span>
+</a>
+<a class="toc-card" href="ch04.html">
+  <span class="num">第4章</span>
+  <span class="title">可変個数の統計を実装する</span>
+  <span class="desc">test_custom_var_stats を題材に、共有エントリと pending 構造体の設計、pending から共有メモリへの反映、ディスク永続化、そして SQL からの観察までを追う。</span>
+</a>
+<a class="toc-card" href="ch05.html">
+  <span class="num">第5章</span>
+  <span class="title">固定個数の統計を実装する</span>
+  <span class="desc">test_custom_fixed_stats を題材に、固定共有メモリのレイアウトと changecount による低オーバーヘッド更新、init/snapshot/reset の各コールバック、SQL からの観察とリセットを追う。</span>
+</a>
+<a class="toc-card" href="ch06.html">
+  <span class="num">第6章</span>
+  <span class="title">ライフサイクルと運用</span>
+  <span class="desc">登録から起動・スナップショット・永続化までのタイミング、クラッシュリカバリでの可変／固定の違い、既存の統計機構との統合、そして ID 衝突をはじめとする運用上の注意点をまとめる。</span>
+</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL 19beta1 のソースコードに基づく解説 ・ db-internals-docs スキルで生成</footer>
+</body>
+</html>

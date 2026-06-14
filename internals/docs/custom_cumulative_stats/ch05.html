@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章 固定個数の統計を実装する | Custom Cumulative Statistics API の内部構造 — PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 13:18</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">Custom Cumulative Statistics API の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 13:18</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+<ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 累積統計システムと拡張点</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 累積統計システムの全体像</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 統計種別と ID 空間</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 Custom Cumulative Stats API の位置づけ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PgStat_KindInfo — 種別を定義するメタデータ</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 構造体の全体像</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 共通フィールド</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 可変個数向けのコールバック</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 固定個数向けのコールバック</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 種別の登録 — pgstat_register_kind()</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 登録の前提と流れ</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ID の割り当てと PGSTAT_KIND_EXPERIMENTAL</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 登録時の検証</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 レジストリと種別の解決</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 可変個数の統計を実装する</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 データ構造の設計</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 更新：pending から共有メモリへ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 ディスクへの永続化</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 SQL からの観察</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch05.html">第5章 固定個数の統計を実装する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 共有メモリレイアウトと changecount</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 init / snapshot / reset コールバック</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 SQL からの観察とリセット</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 ライフサイクルと運用</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 起動から永続化までのタイミング</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 クラッシュリカバリでの扱い</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 既存の統計機構との統合</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 注意点とベストプラクティス</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第5章　固定個数の統計を実装する</h1>
+
+<p>
+固定個数の統計は、サーバ全体で決まった数（この例では 1 つ）の対象を数えるものである。テストモジュールの
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_fixed_stats.c"><code>test_custom_fixed_stats.c</code></a>
+は、可変個数版と対をなす最小の固定個数例で、pending を介さず共有メモリを直接更新する点が特徴である。
+</p>
+
+<h2 id="sec-5-1">5.1　共有メモリレイアウトと changecount</h2>
+<p>
+固定個数の統計エントリは、通常の共有メモリ領域に置かれる。読み取りより書き込みが性能上重要なため、組み込みの
+<code>PgStatShared_Archiver</code> などと同じく <strong>changecount 機構</strong>を使う。これは「書き込み開始・終了でカウンタを増やし、
+読み手は読み取り前後でカウンタが一致するまで再読する」ことで、ロックなしの一貫読み取りを実現する仕組みである。
+リセット時のために、現在値 <code>stats</code> とは別にリセット基準 <code>reset_offset</code> を保持する。
+</p>
+
+<div class="example">
+  <span class="example-label">C — test_custom_fixed_stats.c:29</span>
+  <pre><code>typedef struct PgStat_StatCustomFixedEntry
+{
+    PgStat_Counter numcalls;          /* update 関数が呼ばれた回数 */
+    TimestampTz    stat_reset_timestamp;
+} PgStat_StatCustomFixedEntry;
+
+typedef struct PgStatShared_CustomFixedEntry
+{
+    LWLock      lock;                 /* カウンタを保護 */
+    uint32      changecount;          /* アトミック読み取り用 */
+    PgStat_StatCustomFixedEntry stats;        /* 現在のカウンタ */
+    PgStat_StatCustomFixedEntry reset_offset; /* リセット基準 */
+} PgStatShared_CustomFixedEntry;</code></pre>
+</div>
+
+<p>
+図 5.1 に固定エントリのレイアウトと、更新・読み取り・リセットの関係を示す。<code>KindInfo</code> では
+<code>fixed_amount = true</code> とし、<code>init_shmem_cb</code> / <code>snapshot_cb</code> / <code>reset_all_cb</code> を設定する。
+固定個数では <code>track_entry_count</code> は使えない（<a href="ch03.html#sec-3-3">3.3 節</a>の検証を参照）。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    subgraph FE["PgStatShared_CustomFixedEntry（固定共有メモリ）"]
+        L["lock"]
+        CC["changecount"]
+        ST["stats（現在値）"]
+        RO["reset_offset（基準）"]
+    end
+    UPD["_update: lock + changecount で stats++"] --> ST
+    SNAP["snapshot_cb: stats − reset_offset をコピー"] --> SNAPDST["snapshot.custom_data[]"]
+    RST["reset_all_cb: stats を reset_offset へ退避"] --> RO
+    ST -.-> SNAP
+    RO -.-> SNAP
+  </pre>
+  <figcaption>図 5.1: 固定エントリのレイアウトと操作。読み取りは stats から reset_offset を差し引いた値を返す。</figcaption>
+</figure>
+
+<h2 id="sec-5-2">5.2　init / snapshot / reset コールバック</h2>
+<p>
+固定個数の共有メモリは pgstat が確保し、その直後に <code>init_shmem_cb</code> が呼ばれる。ここで LWLock を初期化する。
+共有メモリ／スナップショット領域へのアクセスには、<a href="ch02.html#sec-2-4">2.4 節</a>で触れた専用アクセサ
+<code>pgstat_get_custom_shmem_data()</code> / <code>pgstat_get_custom_snapshot_data()</code> を使う。
+</p>
+
+<div class="example">
+  <span class="example-label">C — test_custom_fixed_stats.c:87（init_shmem_cb）</span>
+  <pre><code>static void
+test_custom_stats_fixed_init_shmem_cb(void *stats)
+{
+    PgStatShared_CustomFixedEntry *stats_shmem =
+        (PgStatShared_CustomFixedEntry *) stats;
+
+    LWLockInitialize(&amp;stats_shmem-&gt;lock, LWTRANCHE_PGSTATS_DATA);
+}</code></pre>
+</div>
+
+<p>
+更新関数
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_fixed_stats.c#L154"><code>test_custom_stats_fixed_update()</code></a>
+は、LWLock を排他で取り、changecount の書き込み区間でカウンタを増やす。可変個数と違い pending を経由しない。
+</p>
+
+<div class="example">
+  <span class="example-label">C — test_custom_fixed_stats.c:154（update）</span>
+  <pre><code>stats_shmem = pgstat_get_custom_shmem_data(PGSTAT_KIND_TEST_CUSTOM_FIXED_STATS);
+
+LWLockAcquire(&amp;stats_shmem-&gt;lock, LW_EXCLUSIVE);
+pgstat_begin_changecount_write(&amp;stats_shmem-&gt;changecount);
+stats_shmem-&gt;stats.numcalls++;
+pgstat_end_changecount_write(&amp;stats_shmem-&gt;changecount);
+LWLockRelease(&amp;stats_shmem-&gt;lock);</code></pre>
+</div>
+
+<p>
+読み取りの一貫性は <code>snapshot_cb</code> が担う。
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_fixed_stats.c#L120"><code>test_custom_stats_fixed_snapshot_cb()</code></a>
+は changecount を使って現在値をスナップショット領域へコピーし、<strong>リセット基準を差し引いて</strong>「リセット以降の増分」に直す。
+</p>
+
+<div class="example">
+  <span class="example-label">C — test_custom_fixed_stats.c:120（snapshot_cb 抜粋）</span>
+  <pre><code>pgstat_copy_changecounted_stats(stat_snap,
+                                &amp;stats_shmem-&gt;stats,
+                                sizeof(stats_shmem-&gt;stats),
+                                &amp;stats_shmem-&gt;changecount);
+
+LWLockAcquire(&amp;stats_shmem-&gt;lock, LW_SHARED);
+memcpy(&amp;reset, reset_offset, sizeof(stats_shmem-&gt;stats));
+LWLockRelease(&amp;stats_shmem-&gt;lock);
+
+/* リセット基準を適用 */
+#define FIXED_COMP(fld) stat_snap-&gt;fld -= reset.fld;
+FIXED_COMP(numcalls);
+#undef FIXED_COMP</code></pre>
+</div>
+
+<p>
+リセットは <code>reset_all_cb</code>
+（<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_fixed_stats.c#L100">100 行</a>）が、
+現在値を <code>reset_offset</code> へ退避し、<code>stat_reset_timestamp</code> を更新することで実現する。
+共有メモリ上の値そのものは書き換えない（他バックエンドが書き込み中かもしれないため）。これは組み込みの
+<code>PgStatShared_Archiver</code> と同じリセットプロトコルである。
+</p>
+
+<h2 id="sec-5-3">5.3　SQL からの観察とリセット</h2>
+<p>
+観察関数
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_fixed_stats.c#L190"><code>test_custom_stats_fixed_report()</code></a>
+は、<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/backend/utils/activity/pgstat.c#L1105"><code>pgstat_snapshot_fixed()</code></a>
+でスナップショットを取り、<code>(numcalls, stats_reset)</code> を返す。リセット前は <code>stats_reset</code> が NULL になる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>CREATE EXTENSION test_custom_fixed_stats;
+
+SELECT test_custom_stats_fixed_update();
+SELECT test_custom_stats_fixed_update();
+SELECT test_custom_stats_fixed_update();
+
+SELECT * FROM test_custom_stats_fixed_report();</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果</span>
+  <pre><code> numcalls | stats_reset
+----------+-------------
+        3 |</code></pre>
+</div>
+
+<p>
+3 回の更新が <code>numcalls = 3</code> として観察され、まだリセットしていないので <code>stats_reset</code> は NULL である。
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_fixed_stats.c#L177"><code>test_custom_stats_fixed_reset()</code></a>
+は <a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/backend/utils/activity/pgstat.c"><code>pgstat_reset_of_kind()</code></a> を呼んでリセットする。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>SELECT test_custom_stats_fixed_reset();
+SELECT * FROM test_custom_stats_fixed_report();</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果</span>
+  <pre><code> numcalls |          stats_reset
+----------+-------------------------------
+        0 | 2026-06-14 13:20:00.123456+09</code></pre>
+</div>
+
+<p>
+リセット後は増分が 0 になり、<code>stats_reset</code> にリセット時刻が入る。固定個数の統計は通常再起動では保持され、
+クラッシュリカバリでは（破棄ではなく）リセットされた状態になる。この違いは次章で整理する。
+</p>
+
+      </article>
+      <nav class="pager">
+<a class="prev" href="ch04.html"><span class="dir">← 前の章</span><span class="ttl">第4章 可変個数の統計を実装する</span></a>
+<a class="next" href="ch06.html"><span class="dir">次の章 →</span><span class="ttl">第6章 ライフサイクルと運用</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL 19beta1 のソースコードに基づく解説 ・ db-internals-docs スキルで生成</footer>
+</body>
+</html>

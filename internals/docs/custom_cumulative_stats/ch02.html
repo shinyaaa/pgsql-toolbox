@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第2章 PgStat_KindInfo — 種別を定義するメタデータ | Custom Cumulative Statistics API の内部構造 — PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 13:18</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">Custom Cumulative Statistics API の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 13:18</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+<ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 累積統計システムと拡張点</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 累積統計システムの全体像</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 統計種別と ID 空間</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 Custom Cumulative Stats API の位置づけ</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch02.html">第2章 PgStat_KindInfo — 種別を定義するメタデータ</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 構造体の全体像</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 共通フィールド</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 可変個数向けのコールバック</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 固定個数向けのコールバック</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 種別の登録 — pgstat_register_kind()</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 登録の前提と流れ</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ID の割り当てと PGSTAT_KIND_EXPERIMENTAL</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 登録時の検証</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 レジストリと種別の解決</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 可変個数の統計を実装する</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 データ構造の設計</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 更新：pending から共有メモリへ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 ディスクへの永続化</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 SQL からの観察</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 固定個数の統計を実装する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 共有メモリレイアウトと changecount</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 init / snapshot / reset コールバック</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 SQL からの観察とリセット</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 ライフサイクルと運用</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 起動から永続化までのタイミング</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 クラッシュリカバリでの扱い</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 既存の統計機構との統合</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 注意点とベストプラクティス</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第2章　PgStat_KindInfo — 種別を定義するメタデータ</h1>
+
+<p>
+カスタム統計種別の性質は、ただ一つの構造体
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/include/utils/pgstat_internal.h#L231"><code>PgStat_KindInfo</code></a>
+に集約される。固定個数か可変個数か、ディスクに書き出すか、エントリのサイズはいくつか、
+保留データをどう反映するか――こうした問いへの答えがすべてこの構造体のフィールドとして表現される。
+本章ではこの構造体を 3 つのグループに分けて読み解く。
+</p>
+
+<h2 id="sec-2-1">2.1　構造体の全体像</h2>
+<p>
+<code>PgStat_KindInfo</code> は、先頭にビットフィールドのフラグ群、続いてサイズ・オフセット群、
+そして多数のコールバック関数ポインタ、最後に種別名 <code>name</code> を持つ。図 2.1 に主要フィールドの分類を示す。
+コールバックの多くは可変個数向けか固定個数向けのいずれかであり、種別の性質に応じて必要なものだけを設定する。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    subgraph KI["PgStat_KindInfo"]
+        subgraph COM["共通フィールド"]
+            C1["name / fixed_amount"]
+            C2["write_to_file / shared_size"]
+            C3["shared_data_off / shared_data_len"]
+        end
+        subgraph VAR["可変個数向け"]
+            V1["pending_size / track_entry_count"]
+            V2["flush_pending_cb"]
+            V3["to/from_serialized_data など"]
+        end
+        subgraph FIX["固定個数向け"]
+            F1["init_shmem_cb"]
+            F2["snapshot_cb"]
+            F3["reset_all_cb / flush_static_cb"]
+        end
+    end
+  </pre>
+  <figcaption>図 2.1: PgStat_KindInfo の主要フィールドの分類。共通・可変個数向け・固定個数向けの 3 群からなる。</figcaption>
+</figure>
+
+<h2 id="sec-2-2">2.2　共通フィールド</h2>
+<p>
+種別の基本的な性格を決めるのが共通フィールドである。代表的なものを挙げる。
+</p>
+<ul>
+  <li><code>fixed_amount</code> — この種別が固定個数か可変個数かを表すブール値。API の二分岐の起点。</li>
+  <li><code>write_to_file</code> — 統計をディスクの統計ファイルへ書き出すか。</li>
+  <li><code>shared_size</code> — 共有メモリ上の 1 エントリのサイズ。固定個数では <code>PgStat_ShmemControl-&gt;custom_data</code> の要素サイズになる。</li>
+  <li><code>shared_data_off</code> / <code>shared_data_len</code> — エントリ内で「統計データ本体」が占めるオフセットと長さ。
+      ディスクとの直列化（serialize）で用いる。LWLock などのメモリ上の状態を除くため <code>shared_size</code> とは別に持つ。</li>
+  <li><code>name</code> — 種別名。空文字列は許されない（登録時に検査される）。</li>
+</ul>
+<p>
+<code>shared_data_off</code> と <code>shared_data_len</code> は、エントリ構造体を <code>offsetof</code> と <code>sizeof</code> で記述するのが定石である。
+たとえば可変個数の例では次のように設定する（詳細は <a href="ch04.html">第4章</a>）。
+</p>
+
+<div class="example">
+  <span class="example-label">C — test_custom_var_stats.c の KindInfo（抜粋）</span>
+  <pre><code>static const PgStat_KindInfo custom_stats = {
+    .name = "test_custom_var_stats",
+    .fixed_amount = false,        /* variable number of entries */
+    .write_to_file = true,        /* persist across restarts */
+    .shared_size     = sizeof(PgStatShared_CustomVarEntry),
+    .shared_data_off = offsetof(PgStatShared_CustomVarEntry, stats),
+    .shared_data_len = sizeof(((PgStatShared_CustomVarEntry *) 0)-&gt;stats),
+    ...
+};</code></pre>
+</div>
+
+<h2 id="sec-2-3">2.3　可変個数向けのコールバック</h2>
+<p>
+可変個数の統計は、各プロセスのローカルな pending エントリを共有メモリへ反映する必要があるため、
+それに対応するフィールドとコールバックを持つ。
+</p>
+<ul>
+  <li><code>pending_size</code> — <code>PgStat_EntryRef-&gt;pending</code> のサイズ。0 はこの種別が pending を持たないことを示す。</li>
+  <li><code>track_entry_count</code> — エントリ数を <code>PgStat_ShmemControl.entry_counts</code> で追跡するか。</li>
+  <li><code>flush_pending_cb</code> — <strong>pending を共有統計へ統合する</strong>必須コールバック（pending を使う場合）。</li>
+  <li><code>delete_pending_cb</code> — pending を破棄する（任意）。</li>
+  <li><code>to_serialized_data</code> / <code>from_serialized_data</code> — エントリに付随する補助データをファイルへ読み書きする（任意）。</li>
+  <li><code>to_serialized_name</code> / <code>from_serialized_name</code>、<code>reset_timestamp_cb</code> — 直列化名やリセット時刻の扱い（任意）。</li>
+</ul>
+<p>
+<code>flush_pending_cb</code> のシグネチャは <code>bool (*)(PgStat_EntryRef *sr, bool nowait)</code> で、
+ロックを取れなかった場合に <code>false</code> を返す。実装例は <a href="ch04.html#sec-4-2">4.2 節</a>で詳述する。
+</p>
+
+<h2 id="sec-2-4">2.4　固定個数向けのコールバック</h2>
+<p>
+固定個数の統計は pending を介さず共有メモリを直接更新するのが一般的で、代わりに共有メモリの初期化やスナップショット生成のための
+コールバックを持つ。
+</p>
+<ul>
+  <li><code>init_shmem_cb</code> — 割り当てられた共有メモリ領域を初期化する（LWLock の初期化など）。</li>
+  <li><code>snapshot_cb</code> — 読み取り一貫性のために、現在値をスナップショット領域へコピーする。</li>
+  <li><code>reset_all_cb</code> — その種別の統計をすべてリセットする。</li>
+  <li><code>flush_static_cb</code> — <code>PgStat_EntryRef-&gt;pending</code> を使わない種別が保留統計を反映する（任意）。</li>
+  <li><code>init_backend_cb</code> / <code>finish</code> — バックエンド初期化時・統計ファイル処理完了時の任意フック（固定・可変共通）。</li>
+</ul>
+<p>
+固定個数の統計は、共有メモリ制御構造体 <code>PgStat_ShmemControl</code> の
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/include/utils/pgstat_internal.h#L588"><code>custom_data[]</code></a> に、
+スナップショットは <code>PgStat_Snapshot</code> の <code>custom_data[]</code>
+（<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/include/utils/pgstat_internal.h#L625">同 625 行</a>）に格納される。
+これらは <code>kind − PGSTAT_KIND_CUSTOM_MIN</code> を添字とする配列で、アクセスには専用のインライン関数
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/include/utils/pgstat_internal.h#L1034"><code>pgstat_get_custom_shmem_data()</code></a> と
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/include/utils/pgstat_internal.h#L1049"><code>pgstat_get_custom_snapshot_data()</code></a> を用いる。
+実装例は <a href="ch05.html">第5章</a>で扱う。
+</p>
+
+<div class="info"><strong>関連</strong>　<code>PgStat_KindInfo</code> の全フィールドの API 詳細は
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/include/utils/pgstat_internal.h#L231"><code>pgstat_internal.h</code></a> のコメントに記されている。
+公式ドキュメントも「API の詳細は <code>pgstat_internal.h</code> を参照」と案内している。</div>
+
+      </article>
+      <nav class="pager">
+<a class="prev" href="ch01.html"><span class="dir">← 前の章</span><span class="ttl">第1章 累積統計システムと拡張点</span></a>
+<a class="next" href="ch03.html"><span class="dir">次の章 →</span><span class="ttl">第3章 種別の登録 — pgstat_register_kind()</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL 19beta1 のソースコードに基づく解説 ・ db-internals-docs スキルで生成</footer>
+</body>
+</html>

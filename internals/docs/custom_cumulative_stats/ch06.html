@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第6章 ライフサイクルと運用 | Custom Cumulative Statistics API の内部構造 — PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 13:18</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">Custom Cumulative Statistics API の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 13:18</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+<ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 累積統計システムと拡張点</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 累積統計システムの全体像</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 統計種別と ID 空間</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 Custom Cumulative Stats API の位置づけ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PgStat_KindInfo — 種別を定義するメタデータ</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 構造体の全体像</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 共通フィールド</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 可変個数向けのコールバック</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 固定個数向けのコールバック</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 種別の登録 — pgstat_register_kind()</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 登録の前提と流れ</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ID の割り当てと PGSTAT_KIND_EXPERIMENTAL</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 登録時の検証</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 レジストリと種別の解決</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 可変個数の統計を実装する</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 データ構造の設計</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 更新：pending から共有メモリへ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 ディスクへの永続化</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 SQL からの観察</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 固定個数の統計を実装する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 共有メモリレイアウトと changecount</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 init / snapshot / reset コールバック</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 SQL からの観察とリセット</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch06.html">第6章 ライフサイクルと運用</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 起動から永続化までのタイミング</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 クラッシュリカバリでの扱い</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 既存の統計機構との統合</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 注意点とベストプラクティス</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第6章　ライフサイクルと運用</h1>
+
+<p>
+最後に、カスタム統計種別の<strong>ライフサイクル</strong>と運用上の論点を整理する。
+登録から永続化までのタイミング、クラッシュ時の挙動、既存ツールとの関係、そして衝突回避のための作法を順に見る。
+</p>
+
+<h2 id="sec-6-1">6.1　起動から永続化までのタイミング</h2>
+<p>
+カスタム統計種別は、サーバの起動から停止まで一連のフェーズに沿って動く（図 6.1）。
+登録は <code>shared_preload_libraries</code> のロード時（<a href="ch03.html">第3章</a>）、
+読み込みは起動プロセス、書き出しはチェックポインタが担当する。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    A["起動: shared_preload_libraries ロード"] --> B["_PG_init で pgstat_register_kind"]
+    B --> C["起動プロセスが統計ファイルを読み込み"]
+    C --> D["稼働中: 更新（pending または直接）"]
+    D --> E["flush / snapshot で共有・読み取りへ反映"]
+    E --> D
+    D --> F["シャットダウン: チェックポインタが書き出し"]
+    F --> G["次回起動で C へ"]
+  </pre>
+  <figcaption>図 6.1: カスタム統計のライフサイクル。登録は起動初期、永続化はシャットダウン直前に行われる。</figcaption>
+</figure>
+
+<p>
+読み取り一貫性は GUC <code>stats_fetch_consistency</code> に従う。<code>snapshot</code> や <code>cache</code> を選ぶと、
+固定個数では <code>snapshot_cb</code> が、可変個数ではエントリ単位のコピーが、ローカルのスナップショット領域
+<code>pgStatLocal.snapshot</code> に取り込まれる。これにより同一トランザクション内で安定した値が読める。
+</p>
+
+<h2 id="sec-6-2">6.2　クラッシュリカバリでの扱い</h2>
+<p>
+統計ファイルは「直前にクラッシュした場合は破棄する」（<a href="ch01.html#sec-1-1">1.1 節</a>）。この性質により、
+可変個数と固定個数で観察される結果が異なる。公式 TAP テスト
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/t/001_custom_stats.pl"><code>t/001_custom_stats.pl</code></a>
+はこの差を明示的に検証している。
+</p>
+
+<figure>
+  <pre class="mermaid">
+stateDiagram-v2
+    state "稼働中" as Running
+    state "通常停止 (clean)" as CleanStop
+    state "クラッシュ (immediate)" as Crash
+    state "再起動: ファイルから復元" as RestartA
+    state "再起動: ファイルを破棄" as RestartB
+    [*] --> Running
+    Running --> CleanStop: stop
+    CleanStop --> RestartA
+    RestartA --> Running: 可変=保持 / 固定=保持
+    Running --> Crash: stop immediate
+    Crash --> RestartB
+    RestartB --> Running: 可変=消失 / 固定=リセット
+  </pre>
+  <figcaption>図 6.2: 再起動経路による統計の扱い。通常停止では両者とも保持、クラッシュでは可変は消失し固定はリセットされる。</figcaption>
+</figure>
+
+<ul>
+  <li><strong>通常のシャットダウン → 再起動</strong>：可変個数・固定個数とも値が保持される（テストは <code>entry1=2</code>、固定 <code>numcalls=3</code> の維持を確認）。</li>
+  <li><strong>クラッシュ（<code>stop immediate</code>）→ 再起動</strong>：統計ファイルが破棄されるため、可変個数のエントリは<strong>消失</strong>し
+      （<code>_report</code> が空を返す）、固定個数は初期状態すなわち<strong>リセット相当</strong>になる。</li>
+</ul>
+
+<h2 id="sec-6-3">6.3　既存の統計機構との統合</h2>
+<p>
+カスタム種別は組み込み種別と同じインフラに乗るため、汎用の統計関数からも透過的に扱える。種別名から ID を引く
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/backend/utils/activity/pgstat.c#L1445"><code>pgstat_get_kind_from_str()</code></a>
+を通じて、<code>pg_stat_have_stats()</code> のような関数に種別名（例: <code>'test_custom_var_stats'</code>）を渡してエントリの有無を問い合わせられる。
+リセットも <code>pgstat_reset_of_kind()</code> を種別 ID で呼ぶだけでよい（<a href="ch05.html#sec-5-3">5.3 節</a>）。
+</p>
+<p>
+拡張側が用意すべきなのは、内部統計を SQL に見せるための<strong>観察用関数</strong>である。テストモジュールが
+<code>_report</code> 関数を提供しているのはこのためで、収集（pgstat 側）と公開（拡張の SQL 関数）は分離して設計する。
+</p>
+
+<h2 id="sec-6-4">6.4　注意点とベストプラクティス</h2>
+<ul>
+  <li><strong><code>shared_preload_libraries</code> 必須</strong>：登録はプリロード初期化中のみ。通常の <code>CREATE EXTENSION</code> だけでは
+      種別は登録されない。モジュールを <code>shared_preload_libraries</code> に入れること。</li>
+  <li><strong>ID は一意に</strong>：本番配布前に Wiki で専用 ID を予約する。開発中は <code>PGSTAT_KIND_EXPERIMENTAL</code>（24）を使い、
+      他の実験中拡張と同時にロードしない（<a href="ch03.html#sec-3-2">3.2 節</a>）。</li>
+  <li><strong>名前も一意に</strong>：同名種別は登録時に拒否される。種別名は SQL から種別を指す識別子になるため、衝突しにくい名前を選ぶ。</li>
+  <li><strong>固定個数の制約</strong>：<code>fixed_amount</code> では <code>shared_size &gt; 0</code> が必須で、<code>track_entry_count</code> は使えない。</li>
+  <li><strong>直列化の範囲</strong>：標準の永続化は <code>shared_data_off</code>〜<code>shared_data_len</code> の固定サイズ部分のみ。
+      エントリ外の可変長データは <code>to/from_serialized_data</code> で自前処理する（<a href="ch04.html#sec-4-3">4.3 節</a>）。</li>
+  <li><strong>クラッシュ耐性を過信しない</strong>：累積統計はクラッシュで失われ得る前提で設計する。厳密な永続性が必要なデータには不向き。</li>
+</ul>
+
+<p>
+以上で、Custom Cumulative Statistics API の構造（<code>PgStat_KindInfo</code>）、登録（<code>pgstat_register_kind()</code>）、
+可変個数・固定個数それぞれの実装、そしてライフサイクルと運用までを一巡した。拡張機能は、これらの部品を組み合わせることで、
+組み込み統計と同等の品質を持つ独自統計を最小限のコードで実装できる。
+</p>
+
+      </article>
+      <nav class="pager">
+<a class="prev" href="ch05.html"><span class="dir">← 前の章</span><span class="ttl">第5章 固定個数の統計を実装する</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL 19beta1 のソースコードに基づく解説 ・ db-internals-docs スキルで生成</footer>
+</body>
+</html>

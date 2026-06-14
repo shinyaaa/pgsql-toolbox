@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第4章 可変個数の統計を実装する | Custom Cumulative Statistics API の内部構造 — PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 13:18</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">Custom Cumulative Statistics API の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 79c65b9 · 2026-06-14 13:18</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+<ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 累積統計システムと拡張点</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 累積統計システムの全体像</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 統計種別と ID 空間</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 Custom Cumulative Stats API の位置づけ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PgStat_KindInfo — 種別を定義するメタデータ</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 構造体の全体像</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 共通フィールド</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 可変個数向けのコールバック</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 固定個数向けのコールバック</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 種別の登録 — pgstat_register_kind()</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 登録の前提と流れ</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ID の割り当てと PGSTAT_KIND_EXPERIMENTAL</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 登録時の検証</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 レジストリと種別の解決</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch04.html">第4章 可変個数の統計を実装する</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 データ構造の設計</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 更新：pending から共有メモリへ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 ディスクへの永続化</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 SQL からの観察</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 固定個数の統計を実装する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 共有メモリレイアウトと changecount</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 init / snapshot / reset コールバック</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 SQL からの観察とリセット</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 ライフサイクルと運用</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 起動から永続化までのタイミング</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 クラッシュリカバリでの扱い</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 既存の統計機構との統合</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 注意点とベストプラクティス</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第4章　可変個数の統計を実装する</h1>
+
+<p>
+可変個数の統計とは、テーブルや関数のように<strong>対象の数が実行時に増減する</strong>統計である。
+公式テストモジュールの
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_var_stats.c"><code>test_custom_var_stats.c</code></a>
+は、名前付きのエントリごとに「呼び出し回数」を数える最小の例で、可変個数 API の使い方を一通り示している。
+本章ではこれを題材に実装の流れを読み解く。
+</p>
+
+<h2 id="sec-4-1">4.1　データ構造の設計</h2>
+<p>
+可変個数の統計には二つの構造体を用意する。一つは<strong>共有メモリ上のエントリ</strong>、もう一つは<strong>各プロセスのローカルな pending</strong> である。
+共有エントリは必ず先頭に共通ヘッダ <code>PgStatShared_Common</code> を置き、その後ろに統計データ本体を続ける。
+</p>
+
+<div class="example">
+  <span class="example-label">C — test_custom_var_stats.c:54</span>
+  <pre><code>/* バックエンドローカルの pending 統計（共有へ反映される前） */
+typedef struct PgStat_StatCustomVarEntry
+{
+    PgStat_Counter numcalls;    /* インクリメント回数 */
+} PgStat_StatCustomVarEntry;
+
+/* 全バックエンドから見える共有メモリ上のエントリ */
+typedef struct PgStatShared_CustomVarEntry
+{
+    PgStatShared_Common header;         /* 標準の pgstat エントリヘッダ */
+    PgStat_StatCustomVarEntry stats;    /* カスタム統計データ */
+    dsa_pointer description;            /* DSA 上の説明文字列へのポインタ */
+} PgStatShared_CustomVarEntry;</code></pre>
+</div>
+
+<p>
+これらを <code>PgStat_KindInfo</code> に結びつける（図 4.1）。<code>shared_data_off</code> / <code>shared_data_len</code> は
+<code>offsetof</code> と <code>sizeof</code> で <code>stats</code> 部分だけを指すようにし、<code>pending_size</code> に pending 構造体のサイズを設定する。
+<code>track_entry_count</code> を真にしてエントリ数を追跡し、<code>accessed_across_databases</code> を真にしてデータベース横断でアクセス可能にしている。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    subgraph SE["PgStatShared_CustomVarEntry（共有メモリ）"]
+        H["header: PgStatShared_Common"]
+        S["stats: numcalls"]
+        D["description: dsa_pointer"]
+    end
+    subgraph KI["PgStat_KindInfo"]
+        O1["shared_data_off → stats の位置"]
+        O2["shared_data_len → stats のサイズ"]
+        O3["pending_size → pending のサイズ"]
+    end
+    O1 -.-> S
+    O2 -.-> S
+  </pre>
+  <figcaption>図 4.1: 共有エントリのレイアウトと KindInfo のオフセット指定。直列化対象は stats 部分のみ。</figcaption>
+</figure>
+
+<div class="example">
+  <span class="example-label">C — test_custom_var_stats.c:108（KindInfo）</span>
+  <pre><code>static const PgStat_KindInfo custom_stats = {
+    .name = "test_custom_var_stats",
+    .fixed_amount = false,
+    .write_to_file = true,
+    .track_entry_count = true,
+    .accessed_across_databases = true,
+    .shared_size     = sizeof(PgStatShared_CustomVarEntry),
+    .shared_data_off = offsetof(PgStatShared_CustomVarEntry, stats),
+    .shared_data_len = sizeof(((PgStatShared_CustomVarEntry *) 0)-&gt;stats),
+    .pending_size    = sizeof(PgStat_StatCustomVarEntry),
+    .flush_pending_cb     = test_custom_stats_var_flush_pending_cb,
+    .to_serialized_data   = test_custom_stats_var_to_serialized_data,
+    .from_serialized_data = test_custom_stats_var_from_serialized_data,
+    .finish               = test_custom_stats_var_finish,
+};</code></pre>
+</div>
+
+<h2 id="sec-4-2">4.2　更新：pending から共有メモリへ</h2>
+<p>
+可変個数の統計更新は二段階で進む。図 4.2 に示すように、まず更新側はローカルの pending を増やすだけで、共有メモリには触れない。
+後で <code>pgstat_report_stat()</code> が走るタイミングで、<code>flush_pending_cb</code> が pending を共有エントリへ加算する。
+</p>
+
+<figure>
+  <pre class="mermaid">
+sequenceDiagram
+    participant SQL as SQL 関数（_update）
+    participant LOC as pending（ローカル）
+    participant RPT as pgstat_report_stat()
+    participant SHM as 共有エントリ
+    SQL->>LOC: pgstat_prep_pending_entry() で pending 取得
+    SQL->>LOC: pending の numcalls を加算
+    Note over RPT: コミット後やアイドル時に発火
+    RPT->>SHM: flush_pending_cb(entry_ref, nowait)
+    SHM->>SHM: 共有の stats へ pending を加算
+  </pre>
+  <figcaption>図 4.2: 可変個数統計の更新と反映。更新は pending を増やすだけで、共有メモリへの統合は flush で行う。</figcaption>
+</figure>
+
+<p>
+更新を行う SQL 関数
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_var_stats.c#L571"><code>test_custom_stats_var_update()</code></a>
+は、<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/backend/utils/activity/pgstat.c#L1310"><code>pgstat_prep_pending_entry()</code></a>
+で pending を確保し、カウンタを増やすだけである。
+</p>
+
+<div class="example">
+  <span class="example-label">C — test_custom_var_stats.c:571</span>
+  <pre><code>entry_ref = pgstat_prep_pending_entry(PGSTAT_KIND_TEST_CUSTOM_VAR_STATS, InvalidOid,
+                                      PGSTAT_CUSTOM_VAR_STATS_IDX(stat_name), NULL);
+
+pending_entry = (PgStat_StatCustomVarEntry *) entry_ref-&gt;pending;
+pending_entry-&gt;numcalls++;</code></pre>
+</div>
+
+<p>
+反映を担う
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_var_stats.c#L155"><code>test_custom_stats_var_flush_pending_cb()</code></a>
+は、エントリをロックしてから pending の値を共有側へ加算する。ロックを取れない（<code>nowait</code>）場合は <code>false</code> を返し、後で再試行される。
+</p>
+
+<div class="example">
+  <span class="example-label">C — test_custom_var_stats.c:155</span>
+  <pre><code>pending_entry = (PgStat_StatCustomVarEntry *) entry_ref-&gt;pending;
+shared_entry  = (PgStatShared_CustomVarEntry *) entry_ref-&gt;shared_stats;
+
+if (!pgstat_lock_entry(entry_ref, nowait))
+    return false;
+
+/* pending を共有の合計へ加算 */
+shared_entry-&gt;stats.numcalls += pending_entry-&gt;numcalls;
+
+pgstat_unlock_entry(entry_ref);
+return true;</code></pre>
+</div>
+
+<p>
+エントリの生成は
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_var_stats.c#L512"><code>test_custom_stats_var_create()</code></a>
+が <code>pgstat_get_entry_ref_locked()</code> で行い、削除は
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_var_stats.c#L595"><code>test_custom_stats_var_drop()</code></a>
+が <code>pgstat_drop_entry()</code> で行う。エントリのキーには統計名のハッシュ値を用いている。
+</p>
+
+<h2 id="sec-4-3">4.3　ディスクへの永続化</h2>
+<p>
+<code>write_to_file = true</code> の種別は、統計データ本体（<code>shared_data_off</code>〜<code>shared_data_len</code> の範囲）が
+標準の統計ファイルへ自動的に直列化される。ただしこの例では、エントリに付随する<strong>可変長の説明文字列</strong>を
+DSA 上に保持しているため、それは標準の直列化に乗らない。そこで <code>to_serialized_data</code> /
+<code>from_serialized_data</code> コールバックを用い、補助ファイル <code>pg_stat/test_custom_var_stats_desc.stats</code>
+へ説明文字列を別途読み書きしている（実装は
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_var_stats.c#L195"><code>test_custom_stats_var_to_serialized_data()</code></a> 以降）。
+<code>finish</code> コールバック
+（<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_var_stats.c#L409">409 行</a>）は、
+読み書き・破棄といったファイル操作の完了時に補助ファイルの後始末を行う。
+</p>
+<div class="note"><strong>メモ</strong>　固定サイズの統計データは標準の直列化だけで永続化できる。
+<code>to/from_serialized_data</code> が必要になるのは、この例の説明文字列のように<strong>エントリ外の可変長データ</strong>を持つ場合である。</div>
+
+<h2 id="sec-4-4">4.4　SQL からの観察</h2>
+<p>
+拡張は観察用の SQL 関数も提供する。
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/test_custom_var_stats.c#L618"><code>test_custom_stats_var_report()</code></a>
+は名前を受け取り、<code>(name, calls, description)</code> を返す。公式 TAP テスト
+<a href="https://github.com/shinyaaa/postgres/blob/79c65b9d97fe92ea2792be09479cf4bbea7cefe1/src/test/modules/test_custom_stats/t/001_custom_stats.pl"><code>t/001_custom_stats.pl</code></a>
+が示す再現可能な手順を以下に示す。前提として両モジュールを <code>shared_preload_libraries</code> に登録しておく。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>CREATE EXTENSION test_custom_var_stats;
+
+SELECT test_custom_stats_var_create('entry1', 'Test entry 1');
+SELECT test_custom_stats_var_update('entry1');
+SELECT test_custom_stats_var_update('entry1');
+
+SELECT * FROM test_custom_stats_var_report('entry1');</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果</span>
+  <pre><code>  name  | calls | description
+--------+-------+--------------
+ entry1 |     2 | Test entry 1</code></pre>
+</div>
+
+<p>
+2 回の <code>_update</code> が pending を経て共有エントリへ反映され、<code>numcalls = 2</code> として観察される。
+エントリを削除すると以後の <code>_report</code> は行を返さない。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>SELECT test_custom_stats_var_drop('entry1');
+SELECT * FROM test_custom_stats_var_report('entry1');   -- 0 行</code></pre>
+</div>
+
+<p>
+この可変個数の統計は、通常のシャットダウン／再起動では保持されるが、クラッシュリカバリでは失われる
+（<a href="ch06.html#sec-6-2">6.2 節</a>）。次章では、もう一方の固定個数の統計を見る。
+</p>
+
+      </article>
+      <nav class="pager">
+<a class="prev" href="ch03.html"><span class="dir">← 前の章</span><span class="ttl">第3章 種別の登録 — pgstat_register_kind()</span></a>
+<a class="next" href="ch05.html"><span class="dir">次の章 →</span><span class="ttl">第5章 固定個数の統計を実装する</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL 19beta1 のソースコードに基づく解説 ・ db-internals-docs スキルで生成</footer>
+</body>
+</html>
