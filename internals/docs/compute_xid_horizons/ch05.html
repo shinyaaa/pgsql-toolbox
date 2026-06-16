@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章 ホライズンの利用者たち | ComputeXidHorizons の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-16 12:29</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">ComputeXidHorizons の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-16 12:29</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 XID ホライズンの背景と必要性</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 MVCC と不要タプル</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 下界としての oldest xmin</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 GetSnapshotData が正確値をやめた理由</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 ComputeXidHorizons の位置づけ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 ComputeXidHorizonsResult — 計算される地平線たち</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 4種のリレーションと地平線</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 構造体の全フィールド</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 地平線の大小関係</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 ComputeXidHorizons の実装を読む</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 ロックと初期値</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ProcArray の走査</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 フラグとデータベースの考慮</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 リカバリと KnownAssignedXids</a></li>
+      <li><a href="ch03.html#sec-3-5">3.5 スロットの反映と整合性検証</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 GlobalVisState と近似境界</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 二つの境界</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 GetSnapshotData による更新</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 GlobalVisTest* による判定</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 再計算のヒューリスティック</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch05.html">第5章 ホライズンの利用者たち</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 VACUUM の刈り取り境界</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 pg_subtrans の切り詰め</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 hot_standby_feedback</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 ホライズンを観察する</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 backend_xmin を覗く</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 スロットによる引き戻し</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 巻き戻りと運用上の注意</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第5章　ホライズンの利用者たち</h1>
+        <p>
+  本章は <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1674"><code>ComputeXidHorizons()</code></a> を呼ぶ三つの公開ラッパを取り上げ、それぞれがどの地平線を
+  どう使うのかを見る。リレーション種別の選択 <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1909"><code>GlobalVisHorizonKindForRel()</code></a> も併せて確認する。
+</p>
+
+<h2 id="sec-5-1">5.1　VACUUM の刈り取り境界</h2>
+<p>
+  VACUUM は <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1943"><code>GetOldestNonRemovableTransactionId()</code></a> を呼び、対象リレーションに応じた地平線を受け取る。
+  種別の判定は <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1909"><code>GlobalVisHorizonKindForRel()</code></a> が行う。
+</p>
+<div class="example">
+  <span class="example-label">procarray.c（抜粋・GlobalVisHorizonKindForRel）</span>
+  <pre><code>if (rel == NULL || rel-&gt;rd_rel-&gt;relisshared || RecoveryInProgress())
+    return VISHORIZON_SHARED;
+else if (IsCatalogRelation(rel) || RelationIsAccessibleInLogicalDecoding(rel))
+    return VISHORIZON_CATALOG;
+else if (!RELATION_IS_LOCAL(rel))
+    return VISHORIZON_DATA;
+else
+    return VISHORIZON_TEMP;</code></pre>
+</div>
+<p>
+  <code>rel</code> が <code>NULL</code> のときは最も保守的な SHARED が返る。実際 <code>vacuum.c</code> では、
+  個々のテーブル用に <code>OldestXmin = GetOldestNonRemovableTransactionId(rel)</code> を、
+  新しい <code>relfrozenxid</code> 下限の算出には <code>GetOldestNonRemovableTransactionId(NULL)</code> を
+  使い分けている。
+</p>
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    REL["対象リレーション"] --> KIND["GlobalVisHorizonKindForRel()"]
+    KIND -->|SHARED| A["shared_oldest_nonremovable"]
+    KIND -->|CATALOG| B["catalog_oldest_nonremovable"]
+    KIND -->|DATA| C["data_oldest_nonremovable"]
+    KIND -->|TEMP| D["temp_oldest_nonremovable"]
+  </pre>
+  <figcaption>図 5.1: リレーション種別から返す地平線へのマッピング</figcaption>
+</figure>
+
+<h2 id="sec-5-2">5.2　pg_subtrans の切り詰め</h2>
+<p>
+  <code>pg_subtrans</code>（サブトランザクションの親子関係を記録する SLRU）は、どこまで切り詰めてよいかに
+  別の地平線を使う。可視性判定用ではなく <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1972"><code>GetOldestTransactionIdConsideredRunning()</code></a> が返す
+  <code>oldest_considered_running</code> である。チェックポイント／リスタートポイント処理で
+  <code>TruncateSUBTRANS(GetOldestTransactionIdConsideredRunning())</code> として呼ばれる
+  （<code>xlog.c</code>）。
+</p>
+<div class="info"><strong>関連</strong>
+  なぜ可視性用の地平線では駄目なのか。VACUUM 中のバックエンドは自分の xmin より新しい行が消えても
+  困らない（だから shared/data 地平線では除外される）が、可視性判定のために <code>pg_subtrans</code> を
+  参照する。よって <code>oldest_considered_running</code> は VACUUM 中プロセスも含めて算出され、
+  これらが参照しうる範囲の <code>pg_subtrans</code> を残す。詳細は <a href="ch02.html#sec-2-2">2.2</a> を参照。
+</div>
+
+<h2 id="sec-5-3">5.3　hot_standby_feedback</h2>
+<p>
+  スタンバイは、自分のクエリが必要とするタプルをプライマリが消さないよう、xmin を上流へ送る
+  （hot_standby_feedback）。walsender はそのために <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1985"><code>GetReplicationHorizons()</code></a> を呼ぶ。
+</p>
+<div class="example">
+  <span class="example-label">procarray.c（抜粋・GetReplicationHorizons）</span>
+  <pre><code>ComputeXidHorizons(&amp;horizons);
+
+/* shared_oldest_nonremovable ではなく raw を使う。
+   data テーブルをより積極的に刈れるよう catalog_xmin を別送するため。 */
+*xmin         = horizons.shared_oldest_nonremovable_raw;
+*catalog_xmin = horizons.slot_catalog_xmin;</code></pre>
+</div>
+<p>
+  ここで <code>shared_oldest_nonremovable</code> ではなく 3.5 で退避した
+  <code>shared_oldest_nonremovable_raw</code> を使うのが肝心である。catalog_xmin を分けて送ることで、
+  上流はカタログテーブルにアクセスするときだけその制限を適用でき、通常テーブルの不要タプルを
+  より積極的に回収できる。
+</p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch04.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第4章 GlobalVisState と近似境界</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch06.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第6章 ホライズンを観察する</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">ComputeXidHorizons の内部構造 — PostgreSQL のソースコード (shinyaaa/postgres @0131e8fc508) を基に作成。本文中のコードリンクは当該コミットのパーマリンク。</footer>
+</body>
+</html>
