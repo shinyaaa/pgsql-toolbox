@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第1章 XID ホライズンの背景と必要性 | ComputeXidHorizons の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-16 12:29</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">ComputeXidHorizons の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-16 12:29</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li class="current">
+    <a class="chap-title" href="ch01.html">第1章 XID ホライズンの背景と必要性</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 MVCC と不要タプル</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 下界としての oldest xmin</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 GetSnapshotData が正確値をやめた理由</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 ComputeXidHorizons の位置づけ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 ComputeXidHorizonsResult — 計算される地平線たち</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 4種のリレーションと地平線</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 構造体の全フィールド</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 地平線の大小関係</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 ComputeXidHorizons の実装を読む</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 ロックと初期値</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ProcArray の走査</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 フラグとデータベースの考慮</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 リカバリと KnownAssignedXids</a></li>
+      <li><a href="ch03.html#sec-3-5">3.5 スロットの反映と整合性検証</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 GlobalVisState と近似境界</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 二つの境界</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 GetSnapshotData による更新</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 GlobalVisTest* による判定</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 再計算のヒューリスティック</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ホライズンの利用者たち</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 VACUUM の刈り取り境界</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 pg_subtrans の切り詰め</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 hot_standby_feedback</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 ホライズンを観察する</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 backend_xmin を覗く</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 スロットによる引き戻し</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 巻き戻りと運用上の注意</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第1章　XID ホライズンの背景と必要性</h1>
+        <p>
+  PostgreSQL の追記型ストレージでは、行を更新・削除しても古いバージョン（タプル）は即座に消えず、
+  「もう誰からも見えない」と確定したときに初めて <strong>VACUUM</strong> が回収する。
+  その「誰からも見えない」を判定する境界が <strong>XID ホライズン（地平線, horizon）</strong> であり、
+  本章ではなぜこの境界が必要で、<a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1674"><code>ComputeXidHorizons()</code></a> がそこで何を担うのかを概観する。
+</p>
+
+<h2 id="sec-1-1">1.1　MVCC と不要タプル</h2>
+<p>
+  多版型同時実行制御（Multiversion Concurrency Control, MVCC）では、各タプルに挿入トランザクションの
+  <code>xmin</code> と削除トランザクションの <code>xmax</code> が刻まれる。あるタプルが不要（dead）になるのは、
+  それを削除したトランザクションがコミット済みで、かつ <strong>実行中のどのスナップショットからも見えなくなった</strong>
+  ときである。逆に言えば、いま動いているトランザクションのうち最も古いものが見ている地点より新しい変更は、
+  まだ消してはならない。
+</p>
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    A["タプル v1<br/>xmin=100, xmax=150"] -->|UPDATE 150| B["タプル v2<br/>xmin=150"]
+    A -. "xmax=150 はコミット済み" .-> C{"v1 は除去可能か?"}
+    C -->|"古いスナップショットが<br/>まだ v1 を見るかも"| D["保持"]
+    C -->|"誰も v1 を見ない"| E["除去可"]
+  </pre>
+  <figcaption>図 1.1: 削除済みタプル v1 を除去してよいかは「最古の観測者」が決める</figcaption>
+</figure>
+<p>
+  図 1.1 に示すように、v1 の除去可否は「v1 を見うる最古のトランザクション」が存在するかどうかに帰着する。
+  この最古の地点を XID で表したものが地平線である。
+</p>
+
+<h2 id="sec-1-2">1.2　下界としての oldest xmin</h2>
+<p>
+  各バックエンドは自分のスナップショットの最小 xmin を <code>MyProc-&gt;xmin</code> に公示する
+  （生きたスナップショットを持たないときは 0）。システム全体の地平線は、原理的には全バックエンドの
+  有効な <code>xmin</code> の最小値である。<a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/access/transam/README#L296"><code>access/transam/README</code></a> はこの計算が満たすべき正確性を次のように述べる。
+</p>
+<div class="note"><strong>READMEより</strong>
+  ComputeXidHorizons は ProcArrayLock を<em>共有</em>ロックで取りながら有効な xmin の MIN() を取る。
+  その際、まだ xmin を設定していない開始直後のトランザクションが後から自分より小さい xmin を
+  設定してしまわないよう、<strong>実行中のすべての XID も MIN() の対象に含める</strong>。これにより、
+  並行する GetSnapshotData が後で見る最小 xmin を、こちらが過大評価することはない。
+</div>
+<p>
+  実行中トランザクションが一つも無い場合は <code>latestCompletedXid + 1</code> を下界として用いる。
+  これは「これ以降に ProcArray へ現れうる XID の下限」であり、XidGenLock による
+  インターロック（新しい XID は ProcArray へ格納してから可視になる）によって保証される。
+</p>
+
+<h2 id="sec-1-3">1.3　GetSnapshotData が正確値をやめた理由</h2>
+<p>
+  PostgreSQL 14 より前は、スナップショット取得 <code>GetSnapshotData()</code> のたびに正確な oldest xmin を
+  計算していた。しかし xmin は xid よりはるかに頻繁に変化するため、全バックエンドの xmin を毎回読むと
+  キャッシュラインの奪い合い（ping-pong）が激しく、性能が出ない。そこで現在の <code>GetSnapshotData()</code> は
+  正確な地平線を計算せず、<strong>近似的な閾値</strong>だけを更新する（第4章）。正確な値が要るときにだけ
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1674"><code>ComputeXidHorizons()</code></a> を呼ぶ、という二段構えになっている。
+</p>
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    GSD["GetSnapshotData()<br/>(高頻度・性能重視)"] --> APX["近似境界<br/>GlobalVisState を更新"]
+    APX --> TEST["GlobalVisTest*()<br/>大半はここで判定"]
+    TEST -->|"境界の中間でグレー"| CXH["ComputeXidHorizons()<br/>(正確だが高コスト)"]
+    CXH --> APX
+  </pre>
+  <figcaption>図 1.2: 高頻度の近似更新と、必要時のみの正確計算という二段構え</figcaption>
+</figure>
+<p>
+  図 1.2 のとおり、ホライズン計算は「速いが粗い経路」と「遅いが正確な経路」に分離されている。
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1674"><code>ComputeXidHorizons()</code></a> は後者の中心にあり、VACUUM や <code>pg_subtrans</code> 切り詰めなど、
+  正確さが要る場面から呼び出される。
+</p>
+
+<h2 id="sec-1-4">1.4　ComputeXidHorizons の位置づけ</h2>
+<p>
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1674"><code>ComputeXidHorizons()</code></a> は <code>storage/ipc/procarray.c</code> に置かれた静的関数で、
+  単一の構造体 <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L196"><code>ComputeXidHorizonsResult</code></a> に複数の地平線をまとめて書き込む。直接の呼び出し口は次の三つの
+  ラッパ関数（および近似境界更新用の内部関数）である。
+</p>
+<ul>
+  <li><a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1943"><code>GetOldestNonRemovableTransactionId()</code></a>　— VACUUM が、どのリレーションの不要タプルを保持すべきかを決める。</li>
+  <li><a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1972"><code>GetOldestTransactionIdConsideredRunning()</code></a>　— <code>pg_subtrans</code> をどこまで切り詰めてよいかを決める。</li>
+  <li><a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1985"><code>GetReplicationHorizons()</code></a>　— hot_standby_feedback で上流へ送る xmin / catalog_xmin を決める。</li>
+</ul>
+<p>
+  次章では、これらが取り出す <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L196"><code>ComputeXidHorizonsResult</code></a> の各フィールドが何を意味するのかを一つずつ見ていく。
+</p>
+      </article>
+      <nav class="pager">
+        <span class="pager-spacer" aria-hidden="true"></span>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch02.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第2章 ComputeXidHorizonsResult — 計算される地平線たち</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">ComputeXidHorizons の内部構造 — PostgreSQL のソースコード (shinyaaa/postgres @0131e8fc508) を基に作成。本文中のコードリンクは当該コミットのパーマリンク。</footer>
+</body>
+</html>

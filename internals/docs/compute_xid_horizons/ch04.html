@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第4章 GlobalVisState と近似境界 | ComputeXidHorizons の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-16 12:29</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">ComputeXidHorizons の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-16 12:29</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 XID ホライズンの背景と必要性</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 MVCC と不要タプル</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 下界としての oldest xmin</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 GetSnapshotData が正確値をやめた理由</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 ComputeXidHorizons の位置づけ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 ComputeXidHorizonsResult — 計算される地平線たち</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 4種のリレーションと地平線</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 構造体の全フィールド</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 地平線の大小関係</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 ComputeXidHorizons の実装を読む</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 ロックと初期値</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ProcArray の走査</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 フラグとデータベースの考慮</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 リカバリと KnownAssignedXids</a></li>
+      <li><a href="ch03.html#sec-3-5">3.5 スロットの反映と整合性検証</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch04.html">第4章 GlobalVisState と近似境界</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 二つの境界</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 GetSnapshotData による更新</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 GlobalVisTest* による判定</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 再計算のヒューリスティック</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ホライズンの利用者たち</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 VACUUM の刈り取り境界</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 pg_subtrans の切り詰め</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 hot_standby_feedback</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 ホライズンを観察する</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 backend_xmin を覗く</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 スロットによる引き戻し</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 巻き戻りと運用上の注意</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第4章　GlobalVisState と近似境界</h1>
+        <p>
+  1.3 で触れたとおり、性能のため正確なホライズン計算は常時は行わない。代わりに <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L184"><code>GlobalVisState</code></a>
+  という<strong>近似境界</strong>を持ち、大半の可視性判定をそれで済ませる。本章はこの仕組みを読む。
+</p>
+
+<h2 id="sec-4-1">4.1　二つの境界</h2>
+<p>
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L184"><code>GlobalVisState</code></a> は二つの <code>FullTransactionId</code> を持つ。32bit ではなく 64bit を使うのは、
+  境界が古くなったときの周回（wraparound）を避けるためである。
+</p>
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph Axis["XID 軸（左ほど古い）"]
+        direction LR
+        OLD["…古い"] --> MN["maybe_needed"] --> MID["（グレーゾーン）"] --> DN["definitely_needed"] --> NEW["新しい…"]
+    end
+  </pre>
+  <figcaption>図 4.1: maybe_needed 未満は除去可、definitely_needed 以上は実行中とみなす</figcaption>
+</figure>
+<p>図 4.1 のとおり、ある XID に対する判定は次の三つに分かれる。</p>
+<ul>
+  <li><code>XID &lt; maybe_needed</code>: 確実に全員に見えない → <strong>除去可能</strong>。</li>
+  <li><code>XID &gt;= definitely_needed</code>: まだ実行中とみなされる可能性が高い → <strong>除去不可</strong>。</li>
+  <li>その中間（グレーゾーン）: 必要なら <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1674"><code>ComputeXidHorizons()</code></a> を呼んで境界を更新し再判定する。</li>
+</ul>
+
+<h2 id="sec-4-2">4.2　GetSnapshotData による更新</h2>
+<p>
+  <code>maybe_needed</code> は、<a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L1674"><code>ComputeXidHorizons()</code></a> 末尾の <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L4164"><code>GlobalVisUpdateApply()</code></a> によって
+  各リレーション種別の <code>*_oldest_nonremovable</code> から計算される。
+  <code>FullXidRelativeTo()</code> を使い 64bit 化しているのが <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L4352"><code>FullXidRelativeTo()</code></a> である。
+</p>
+<div class="example">
+  <span class="example-label">procarray.c（抜粋・GlobalVisUpdateApply）</span>
+  <pre><code>GlobalVisSharedRels.maybe_needed =
+    FullXidRelativeTo(horizons-&gt;latest_completed,
+                      horizons-&gt;shared_oldest_nonremovable);
+/* catalog / data / temp も同様 */
+
+/* 長時間Txでは以前 running 扱いだった Tx が消えていることがあるので
+   definitely_needed が maybe_needed より古くならないよう引き上げる */
+GlobalVisSharedRels.definitely_needed =
+    FullTransactionIdNewer(GlobalVisSharedRels.maybe_needed,
+                           GlobalVisSharedRels.definitely_needed);</code></pre>
+</div>
+<p>
+  <code>definitely_needed</code> は通常の <code>GetSnapshotData()</code> 経路で「実行中とみなすべき XID の上限」
+  として進む一方、ここで <code>maybe_needed</code> を下回らないよう引き上げられる。両境界は単調に新しい方へ
+  動こうとする。
+</p>
+
+<h2 id="sec-4-3">4.3　GlobalVisTest* による判定</h2>
+<p>
+  実際の除去可否判定は <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L4225"><code>GlobalVisTestIsRemovableFullXid()</code></a> が担う。引数の XID が <code>maybe_needed</code> 未満なら即 true、
+  <code>definitely_needed</code> 以上なら即 false、中間なら（許可されていれば）境界を更新して再判定する。
+</p>
+<figure>
+  <pre class="mermaid">
+sequenceDiagram
+    participant V as VACUUM/HOT
+    participant T as GlobalVisTestIsRemovableFullXid
+    participant U as GlobalVisUpdate → ComputeXidHorizons
+    V->>T: この fxid は除去可能か?
+    alt fxid < maybe_needed
+        T-->>V: true（除去可）
+    else fxid >= definitely_needed
+        T-->>V: false（保持）
+    else グレーゾーン
+        T->>U: 境界を再計算（allow_update 時）
+        U-->>T: maybe_needed/definitely_needed 更新
+        T-->>V: fxid < maybe_needed ?
+    end
+  </pre>
+  <figcaption>図 4.2: GlobalVisTestIsRemovableFullXid の判定経路</figcaption>
+</figure>
+<p>
+  図 4.2 のグレーゾーン処理が、近似と正確計算をつなぐ要である。32bit XID 版の
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L4268"><code>GlobalVisTestIsRemovableXid()</code></a> は <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L4352"><code>FullXidRelativeTo()</code></a> で 64bit 化してから本体を呼ぶ。
+  どのリレーションのどの <code>GlobalVisState</code> を使うかは <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L4105"><code>GlobalVisTestFor()</code></a> が選ぶ。
+</p>
+
+<h2 id="sec-4-4">4.4　再計算のヒューリスティック</h2>
+<p>
+  正確計算は高コストなので、グレーゾーンに入っても無制限には再計算しない。<a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L4145"><code>GlobalVisTestShouldUpdate()</code></a>
+  が次の条件で再計算の要否を判断する。
+</p>
+<ul>
+  <li>まだ一度も更新していない（<code>ComputeXidHorizonsResultLastXmin</code> が無効）なら更新する。</li>
+  <li><code>maybe_needed &gt;= definitely_needed</code>（境界が重なっている）なら更新しても益が薄いので更新しない。</li>
+  <li>最後の更新以降に <code>RecentXmin</code> が変化していなければ、最古の実行中 Tx が終わっていない可能性が高く、更新を見送る。</li>
+</ul>
+<p>
+  すなわち「直近のスナップショットの xmin が動いたとき」に限って正確計算を許す。これにより、地平線が
+  進む見込みの薄い局面での無駄な ProcArray 走査を抑えている。
+</p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch03.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第3章 ComputeXidHorizons の実装を読む</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch05.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第5章 ホライズンの利用者たち</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">ComputeXidHorizons の内部構造 — PostgreSQL のソースコード (shinyaaa/postgres @0131e8fc508) を基に作成。本文中のコードリンクは当該コミットのパーマリンク。</footer>
+</body>
+</html>
