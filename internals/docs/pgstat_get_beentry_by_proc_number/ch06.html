@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第6章 まとめと注意点 | pgstat_get_beentry_by_proc_number の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:51</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">pgstat_get_beentry_by_proc_number の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:51</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 バックエンドステータスと ProcNumber</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 バックエンドの「現在の活動」を共有する仕組み</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 ProcNumber — エントリを指すインデックス</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 関数の役割と呼び出し階層</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 データ構造</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 PgBackendStatus — 共有メモリ上の活動エントリ</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 BackendStatusArray と NumBackendStatSlots</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 LocalPgBackendStatus — ローカルスナップショット</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 ローカルスナップショットの構築</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 トランザクション内で一度だけコピーする</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 changecount プロトコルによる無ロック読み取り</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 有効エントリの抽出と proc_number 順の保証</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 検索の実装を読む</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 pgstat_get_beentry_by_proc_number</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 pgstat_get_local_beentry_by_proc_number と bsearch</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 by_index との違い</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 SQL 関数からの利用と権限</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 pgstatfuncs.c での呼び出しパターン</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 権限チェックは呼び出し側の責任</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 実行例で観察する</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch06.html">第6章 まとめと注意点</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 スナップショットの寿命</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 補助プロセスと無効な ProcNumber</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 まとめ</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第6章　まとめと注意点</h1>
+        <p>
+  最終章では、本関数を使う／読むうえで押さえておきたい振る舞いを整理する。
+  スナップショットの寿命、補助プロセスや無効な ProcNumber の扱い、そして全体のまとめである。
+</p>
+
+<h2 id="sec-6-1">6.1　スナップショットの寿命</h2>
+<p>
+  3.1 節で見たとおり、本関数が参照するローカル表はトランザクション内で一度だけ作られ、
+  その後は同じ静止画を返し続ける。これは「同じクエリ内では各バックエンドの状態が一貫して見える」という
+  利点である反面、<strong>リアルタイムの最新値ではない</strong>ことを意味する。
+  本当にいまこの瞬間の活動を共有配列から直接読みたい特殊用途（デッドロック報告など）には、
+  スナップショットを介さない
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/utils/activity/backend_status.c#L961"><code>pgstat_get_backend_current_activity()</code></a> が別途用意されている。
+  両者の使い分けを図 6.1 に示す。
+</p>
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    NEED{"必要なのは?"}
+    NEED -->|"一貫したスナップショット<br/>(pg_stat_activity 等)"| SNAP["pgstat_get_beentry_by_proc_number<br/>→ ローカル表 (静止画)"]
+    NEED -->|"いま現在の生の値<br/>(デッドロック報告)"| LIVE["pgstat_get_backend_current_activity<br/>→ 共有配列を直接走査"]
+  </pre>
+  <figcaption>図 6.1: スナップショット経由の本関数と、生の共有配列を読む関数の使い分け</figcaption>
+</figure>
+
+<h2 id="sec-6-2">6.2　補助プロセスと無効な ProcNumber</h2>
+<p>
+  <code>NumBackendStatSlots</code> には補助プロセスぶんのスロットも含まれるため（2.2 節）、
+  本関数は client backend だけでなく checkpointer などのエントリも引ける。
+  渡した ProcNumber に対応するスロットが未使用（<code>st_procpid == 0</code>）であれば、
+  そのスロットはそもそもローカル表に取り込まれていないため（3.3 節）、<code>bsearch</code> は一致を見つけられず
+  <code>NULL</code> を返す。<code>INVALID_PROC_NUMBER</code>（-1）のような範囲外の値でも、
+  単に該当なしとして <code>NULL</code> が返るだけで、エラーにはならない。
+</p>
+<div class="note"><strong>メモ</strong>呼び出し側は戻り値の <code>NULL</code> を必ず確認する必要がある。
+<code>pgstatfuncs.c</code> の各関数はいずれも <code>== NULL</code> を最初に判定し、<code>PG_RETURN_NULL()</code> や
+代替文字列でフォールバックしている。</div>
+
+<h2 id="sec-6-3">6.3　まとめ</h2>
+<p>
+  本ドキュメントで読み解いた要点を整理する。
+</p>
+<ul>
+  <li><a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/utils/activity/backend_status.c#L1162"><code>pgstat_get_beentry_by_proc_number()</code></a> は、
+      <code>ProcNumber</code> から <code>PgBackendStatus</code> を引く内部 API で、<code>pg_stat_get_backend_*</code> 系関数の土台である。</li>
+  <li>探索対象は共有メモリの生配列ではなく、トランザクションローカルに作られる
+      <code>localBackendStatusTable</code>（<code>LocalPgBackendStatus</code> の配列）である。</li>
+  <li>このローカル表は <code>BackendStatusArray</code> の添字（= ProcNumber）昇順を引き継ぐため、
+      <code>bsearch()</code> による <code>O(log n)</code> 検索が成立する。</li>
+  <li>スナップショット構築は <code>st_changecount</code> プロトコルで無ロックに行われ、トランザクション内で一度だけ実行される。</li>
+  <li>権限チェックは本関数の責務ではなく、呼び出し側が <code>HAS_PGSTAT_PERMISSIONS()</code> で行う。</li>
+</ul>
+<p>
+  小さな関数だが、その背後には「共有メモリの無ロック読み取り」「ローカルスナップショットの一貫性」
+  「ProcNumber を添字とする設計」という、PostgreSQL のバックエンドステータス機構の要が凝縮されている。
+</p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch05.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第5章 SQL 関数からの利用と権限</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<span class="pager-spacer" aria-hidden="true"></span>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgstat_get_beentry_by_proc_number の内部構造 — PostgreSQL のソースコード (shinyaaa/postgres @0131e8fc508) を基に作成。本文中のコードリンクは当該コミットのパーマリンク。</footer>
+</body>
+</html>

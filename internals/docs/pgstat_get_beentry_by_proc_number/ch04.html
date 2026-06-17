@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第4章 検索の実装を読む | pgstat_get_beentry_by_proc_number の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:51</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">pgstat_get_beentry_by_proc_number の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:51</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 バックエンドステータスと ProcNumber</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 バックエンドの「現在の活動」を共有する仕組み</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 ProcNumber — エントリを指すインデックス</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 関数の役割と呼び出し階層</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 データ構造</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 PgBackendStatus — 共有メモリ上の活動エントリ</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 BackendStatusArray と NumBackendStatSlots</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 LocalPgBackendStatus — ローカルスナップショット</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 ローカルスナップショットの構築</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 トランザクション内で一度だけコピーする</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 changecount プロトコルによる無ロック読み取り</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 有効エントリの抽出と proc_number 順の保証</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch04.html">第4章 検索の実装を読む</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 pgstat_get_beentry_by_proc_number</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 pgstat_get_local_beentry_by_proc_number と bsearch</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 by_index との違い</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 SQL 関数からの利用と権限</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 pgstatfuncs.c での呼び出しパターン</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 権限チェックは呼び出し側の責任</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 実行例で観察する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 まとめと注意点</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 スナップショットの寿命</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 補助プロセスと無効な ProcNumber</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 まとめ</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第4章　検索の実装を読む</h1>
+        <p>
+  ここまでで、探索対象である <code>proc_number</code> 昇順のローカル表が用意できた。本章では、その表から
+  目的のエントリを取り出す本体三関数 —
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/utils/activity/backend_status.c#L1162"><code>pgstat_get_beentry_by_proc_number()</code></a>、
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/utils/activity/backend_status.c#L1188"><code>pgstat_get_local_beentry_by_proc_number()</code></a>、
+  比較関数 <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/utils/activity/backend_status.c#L1139"><code>cmp_lbestatus()</code></a> —
+  を読み、添字版 <code>by_index</code> との違いを整理する。
+</p>
+
+<h2 id="sec-4-1">4.1　pgstat_get_beentry_by_proc_number</h2>
+<p>
+  本関数の実装はごく短い。下請けの <code>local</code> 版を呼び、結果があればその先頭メンバ
+  <code>backendStatus</code> へのポインタを返すだけである。
+</p>
+<div class="example">
+  <span class="example-label">実装 (backend_status.c)</span>
+  <pre><code>PgBackendStatus *
+pgstat_get_beentry_by_proc_number(ProcNumber procNumber)
+{
+    LocalPgBackendStatus *ret = pgstat_get_local_beentry_by_proc_number(procNumber);
+
+    if (ret)
+        return &amp;ret-&gt;backendStatus;
+
+    return NULL;
+}</code></pre>
+</div>
+<p>
+  追加の XID 情報まで要らず、共有エントリ相当の値だけが欲しい呼び出し側はこちらを使う。
+  XID・xmin・サブトランザクション情報まで要る呼び出し側は、<code>local</code> 版を直接呼ぶ（5.1 節参照）。
+</p>
+
+<h2 id="sec-4-2">4.2　pgstat_get_local_beentry_by_proc_number と bsearch</h2>
+<p>
+  実際の探索を行うのが
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/utils/activity/backend_status.c#L1188"><code>pgstat_get_local_beentry_by_proc_number()</code></a> である。
+  まずスナップショットを用意し、検索キーの <code>proc_number</code> を立て、標準ライブラリの <code>bsearch()</code> で
+  ローカル表を二分探索する。
+</p>
+<div class="example">
+  <span class="example-label">実装 (backend_status.c)</span>
+  <pre><code>LocalPgBackendStatus *
+pgstat_get_local_beentry_by_proc_number(ProcNumber procNumber)
+{
+    LocalPgBackendStatus key;
+
+    pgstat_read_current_status();
+
+    /*
+     * Since the localBackendStatusTable is in order by proc_number, we can
+     * use bsearch() to search it efficiently.
+     */
+    key.proc_number = procNumber;
+    return bsearch(&amp;key, localBackendStatusTable, localNumBackends,
+                   sizeof(LocalPgBackendStatus), cmp_lbestatus);
+}</code></pre>
+</div>
+<p>
+  比較関数 <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/utils/activity/backend_status.c#L1139"><code>cmp_lbestatus()</code></a> は、
+  二つの要素の <code>proc_number</code> の差を返すだけの素直な実装である。
+</p>
+<div class="example">
+  <span class="example-label">比較関数 (backend_status.c)</span>
+  <pre><code>static int
+cmp_lbestatus(const void *a, const void *b)
+{
+    const LocalPgBackendStatus *lbestatus1 = (const LocalPgBackendStatus *) a;
+    const LocalPgBackendStatus *lbestatus2 = (const LocalPgBackendStatus *) b;
+
+    return lbestatus1-&gt;proc_number - lbestatus2-&gt;proc_number;
+}</code></pre>
+</div>
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    START["pgstat_get_local_beentry_by_proc_number(PN)"] --> RCS["pgstat_read_current_status()<br/>(未取得ならスナップショット作成)"]
+    RCS --> KEY["key.proc_number = PN"]
+    KEY --> BS["bsearch(key, localBackendStatusTable,<br/>localNumBackends, cmp_lbestatus)"]
+    BS --> HIT{"一致あり?"}
+    HIT -->|"はい"| RET["LocalPgBackendStatus* を返す"]
+    HIT -->|"いいえ"| NUL["NULL を返す"]
+  </pre>
+  <figcaption>図 4.1: スナップショット取得から二分探索までの流れ</figcaption>
+</figure>
+<p>
+  図 4.1 のとおり、3.3 節で保証した昇順のおかげで線形走査ではなく <code>O(log n)</code> の二分探索が使える。
+  該当 <code>ProcNumber</code> のセッションが存在しなければ <code>bsearch</code> は <code>NULL</code> を返し、
+  それがそのまま上位へ伝播する。
+</p>
+
+<h2 id="sec-4-3">4.3　by_index との違い</h2>
+<p>
+  紛らわしい兄弟関数に
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/utils/activity/backend_status.c#L1219"><code>pgstat_get_local_beentry_by_index()</code></a> がある。
+  名前は似ているが、引数の意味がまったく異なる。
+</p>
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph BY_PN["by_proc_number"]
+        K1["引数 = ProcNumber"]
+        K1 --> M1["bsearch で proc_number 一致を探す"]
+    end
+    subgraph BY_IDX["by_index"]
+        K2["引数 = 1始まりの配列添字"]
+        K2 --> M2["localBackendStatusTable[idx-1] を直接返す"]
+    end
+  </pre>
+  <figcaption>図 4.2: by_proc_number は ProcNumber で探索、by_index は 1 始まり添字で直接参照</figcaption>
+</figure>
+<p>
+  図 4.2 に示すように、<code>by_index</code> はローカル表の <strong>1 始まりの添字</strong>を受け取り、範囲外なら <code>NULL</code> を返す。
+  全バックエンドを <code>1 .. pgstat_fetch_stat_numbackends()</code> で順に列挙する
+  <code>pg_stat_get_activity</code> のような用途に向く。一方 <code>by_proc_number</code> は、
+  特定の ProcNumber を狙い撃ちで引くための関数である。両者のヘッダコメントは互いに
+  「これは <code>by_index</code> とは違う」「これは <code>by_proc_number</code> とは違う」と明示し合っている。
+</p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch03.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第3章 ローカルスナップショットの構築</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch05.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第5章 SQL 関数からの利用と権限</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgstat_get_beentry_by_proc_number の内部構造 — PostgreSQL のソースコード (shinyaaa/postgres @0131e8fc508) を基に作成。本文中のコードリンクは当該コミットのパーマリンク。</footer>
+</body>
+</html>
