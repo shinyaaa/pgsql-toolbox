@@ -123,6 +123,9 @@ they are what make a draft sound like the user rather than a generic AI.
   as `[N]`.
 - **Tone:** plain, technical, courteous, concise. No marketing language, no
   hedging filler, no exclamation marks in the argument.
+- **No semicolons.** Don't use semicolons in the prose. Split into separate
+  sentences, or use a dash or "and" instead. (Quoted text from others stays
+  verbatim.)
 
 ## Committer conventions to layer in
 
