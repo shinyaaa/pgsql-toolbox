@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第3章 ローカルスナップショットの構築 | pgstat_get_beentry_by_proc_number の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:51</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">pgstat_get_beentry_by_proc_number の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:51</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 バックエンドステータスと ProcNumber</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 バックエンドの「現在の活動」を共有する仕組み</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 ProcNumber — エントリを指すインデックス</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 関数の役割と呼び出し階層</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 データ構造</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 PgBackendStatus — 共有メモリ上の活動エントリ</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 BackendStatusArray と NumBackendStatSlots</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 LocalPgBackendStatus — ローカルスナップショット</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch03.html">第3章 ローカルスナップショットの構築</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 トランザクション内で一度だけコピーする</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 changecount プロトコルによる無ロック読み取り</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 有効エントリの抽出と proc_number 順の保証</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 検索の実装を読む</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 pgstat_get_beentry_by_proc_number</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 pgstat_get_local_beentry_by_proc_number と bsearch</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 by_index との違い</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 SQL 関数からの利用と権限</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 pgstatfuncs.c での呼び出しパターン</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 権限チェックは呼び出し側の責任</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 実行例で観察する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 まとめと注意点</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 スナップショットの寿命</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 補助プロセスと無効な ProcNumber</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 まとめ</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第3章　ローカルスナップショットの構築</h1>
+        <p>
+  本関数は探索の前に必ず
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/utils/activity/backend_status.c#L784"><code>pgstat_read_current_status()</code></a> を呼ぶ。
+  この関数は共有メモリの <code>BackendStatusArray</code> をトランザクションローカルへコピーし、
+  有効なエントリだけを詰め直した <code>localBackendStatusTable</code> を作る。
+  本章では、このコピーが「いつ」「どのように安全に」行われ、なぜ結果が <code>proc_number</code> 昇順になるのかを読む。
+</p>
+
+<h2 id="sec-3-1">3.1　トランザクション内で一度だけコピーする</h2>
+<p>
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/utils/activity/backend_status.c#L784"><code>pgstat_read_current_status()</code></a> は冒頭で
+  <code>localBackendStatusTable</code> が既に存在すれば即座に戻る。
+</p>
+<div class="example">
+  <span class="example-label">先頭のガード (backend_status.c)</span>
+  <pre><code>if (localBackendStatusTable)
+    return;                  /* already done */</code></pre>
+</div>
+<p>
+  つまりスナップショットはトランザクション（厳密にはスナップショットの寿命）ごとに一度だけ作られ、
+  同一トランザクション内で本関数を何度呼んでも同じ静止画を見ることになる。
+  このローカル表は専用メモリコンテキスト <code>backendStatusSnapContext</code> 上に確保され、
+  トランザクションの終了時に
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/utils/activity/backend_status.c#L501"><code>pgstat_clear_backend_activity_snapshot()</code></a> が
+  コンテキストを破棄して <code>localBackendStatusTable</code> を <code>NULL</code> に戻す。
+  次回の要求で改めて新しいスナップショットが読み直される。
+</p>
+
+<h2 id="sec-3-2">3.2　changecount プロトコルによる無ロック読み取り</h2>
+<p>
+  コピーはロックを取らずに行われる。書き手は自分のエントリを変更する前後で <code>st_changecount</code> を
+  インクリメントし、読み手はコピーの前後でこのカウンタを読んで突き合わせる。
+  前後の値が一致し、かつ偶数であればコピーは整合していると判断できる。
+  奇数や不一致なら、書き込み途中に出くわしたとみなして読み直す。
+  判定は <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/utils/backend_status.h#L236"><code>pgstat_read_activity_complete()</code></a> マクロが担う。
+</p>
+<figure>
+  <pre class="mermaid">
+sequenceDiagram
+    participant R as 読み手 (read_current_status)
+    participant E as 共有エントリ (PgBackendStatus)
+    R->>E: before = st_changecount (read barrier)
+    R->>E: エントリをローカルへ memcpy
+    R->>E: after = st_changecount (read barrier)
+    alt before == after かつ 偶数
+        R->>R: コピー確定 → 次のエントリへ
+    else 不一致 または 奇数
+        R->>R: CHECK_FOR_INTERRUPTS 後にやり直し
+    end
+  </pre>
+  <figcaption>図 3.1: st_changecount による楽観的・無ロックのエントリ読み取り</figcaption>
+</figure>
+<p>
+  図 3.1 のループは <code>for (;;)</code> で書かれ、確定するまで繰り返される。
+  無限ループに陥らないよう、各反復で <code>CHECK_FOR_INTERRUPTS()</code> を挟む。
+  ポインタ型フィールド（<code>st_appname</code> 等）は <code>memcpy</code> 後に <code>strcpy</code> で別バッファへ複写し、
+  ローカル側のポインタをローカルバッファへ向け直す。文字列末尾には必ず <code>\0</code> があるため、
+  並行更新中でも <code>strcpy</code> は安全に終端する、とソースコメントは述べる。
+</p>
+
+<h2 id="sec-3-3">3.3　有効エントリの抽出と proc_number 順の保証</h2>
+<p>
+  共有配列の全スロット <code>0 .. NumBackendStatSlots-1</code> を走査するが、
+  ローカル表に取り込むのは <code>st_procpid &gt; 0</code> の有効エントリだけである。
+  取り込む際、そのスロットの添字 <code>procNumber</code> をそのまま <code>localentry-&gt;proc_number</code> に記録し、
+  併せて <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L3112"><code>ProcNumberGetTransactionIds()</code></a> で
+  XID・xmin・サブトランザクション情報を取得して埋める。
+</p>
+<div class="example">
+  <span class="example-label">有効エントリの取り込み (backend_status.c)</span>
+  <pre><code>/* Only valid entries get included into the local array */
+if (localentry-&gt;backendStatus.st_procpid &gt; 0)
+{
+    /*
+     * The BackendStatusArray index is exactly the ProcNumber of the
+     * source backend.  Note that this means localBackendStatusTable
+     * is in order by proc_number.
+     */
+    localentry-&gt;proc_number = procNumber;
+    ProcNumberGetTransactionIds(procNumber, ...);
+    localentry++;
+    localNumBackends++;
+}</code></pre>
+</div>
+<p>
+  ここがソースコードで最も重要なコメントである。元配列の添字が ProcNumber に等しく、
+  走査を添字昇順で行うため、有効エントリだけを前詰めしてできた <code>localBackendStatusTable</code> も
+  自然と <strong><code>proc_number</code> 昇順</strong>になる。図 3.2 にこの圧縮の様子を示す。
+</p>
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph SRC["BackendStatusArray (疎)"]
+        A0["[0] pid&gt;0 PN=0"]
+        A1["[1] pid=0 空き"]
+        A2["[2] pid&gt;0 PN=2"]
+        A3["[3] pid&gt;0 PN=3"]
+        A4["[4] pid=0 空き"]
+    end
+    subgraph DST["localBackendStatusTable (密)"]
+        B0["proc_number=0"]
+        B1["proc_number=2"]
+        B2["proc_number=3"]
+    end
+    A0 --> B0
+    A2 --> B1
+    A3 --> B2
+  </pre>
+  <figcaption>図 3.2: 空きスロットを除いて前詰めしても proc_number 昇順は保たれる</figcaption>
+</figure>
+<p>
+  この昇順という不変条件が、次章の二分探索（<code>bsearch</code>）の前提となる。
+  有効エントリ数は <code>localNumBackends</code> に記録され、<code>bsearch</code> の要素数として使われる。
+</p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch02.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第2章 データ構造</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch04.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第4章 検索の実装を読む</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgstat_get_beentry_by_proc_number の内部構造 — PostgreSQL のソースコード (shinyaaa/postgres @0131e8fc508) を基に作成。本文中のコードリンクは当該コミットのパーマリンク。</footer>
+</body>
+</html>
