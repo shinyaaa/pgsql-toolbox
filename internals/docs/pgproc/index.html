@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PGPROC の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PGPROC の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 PGPROCとは</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 PGPROCの役割</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 MyProc と ProcNumber</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 PGPROC を持つプロセスの種類</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PGPROC構造体のレイアウト</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バックエンドの識別情報</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 トランザクションとスナップショット</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 プロセス間シグナリングと待機</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ロックマネージャ関連フィールド</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 ProcGlobal と共有メモリ配置</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PROC_HDR と allProcs 配列</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 フリーリストとプロセス種別</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 密な並列配列とミラーリング</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 PGPROCのライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 共有メモリの確保</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PGPROC の割り当て</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 ProcArray への登録</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 PGPROC の解放</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 PGPROCを介した協調動作</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 ヘビーウェイトロックの待機キュー</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 グループ XID クリア</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 ロックグループと並列クエリ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 同期レプリケーションの待機</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 PGPROCを観察する</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 pg_stat_activity との対応</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pg_locks と待機関係</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 待機イベントの確認</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>PGPROC の内部構造</h1>
+        <p class="version-hero">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</p>
+        <p class="lead">本ドキュメントは、PostgreSQL がプロセスごとに共有メモリ上へ確保する <code>PGPROC</code> 構造体の内部構造を、ソースコードを根拠に解き明かす技術解説である。<code>PGPROC</code> は、各バックエンドや補助プロセスが「いま何のトランザクションを実行し、どのロックを待ち、どのスナップショット地平を持つか」を他プロセスへ広告するための中核データ構造であり、MVCC・ロックマネージャ・スナップショット取得・同期レプリケーションといった PostgreSQL の根幹機能が ここに集約される。対象バージョンは <strong>PostgreSQL 19beta1</strong>。PostgreSQL のアーキテクチャに一通り触れたことのある開発者・運用者を想定読者とする。</p>
+      </div>
+      <div class="toc-grid">
+        <a class="toc-card" href="ch01.html">
+  <span class="num">第1章</span>
+  <span class="title">PGPROCとは</span>
+  <span class="desc">プロセスごとに共有メモリ上に確保される PGPROC 構造体の役割と、バックエンドとの対応関係を概観する。</span>
+</a>
+<a class="toc-card" href="ch02.html">
+  <span class="num">第2章</span>
+  <span class="title">PGPROC構造体のレイアウト</span>
+  <span class="desc">PGPROC のフィールドを識別情報・トランザクション・シグナリング・ロックの観点で分類して読み解く。</span>
+</a>
+<a class="toc-card" href="ch03.html">
+  <span class="num">第3章</span>
+  <span class="title">ProcGlobal と共有メモリ配置</span>
+  <span class="desc">全 PGPROC を束ねる PROC_HDR、フリーリスト、そして密にパックされたミラー配列の設計を解説する。</span>
+</a>
+<a class="toc-card" href="ch04.html">
+  <span class="num">第4章</span>
+  <span class="title">PGPROCのライフサイクル</span>
+  <span class="desc">共有メモリ確保から割り当て・ProcArray 登録・解放までの一連の流れを追う。</span>
+</a>
+<a class="toc-card" href="ch05.html">
+  <span class="num">第5章</span>
+  <span class="title">PGPROCを介した協調動作</span>
+  <span class="desc">待機キュー・グループ XID クリア・ロックグループ・同期レプリケーションなど協調動作の実装を見る。</span>
+</a>
+<a class="toc-card" href="ch06.html">
+  <span class="num">第6章</span>
+  <span class="title">PGPROCを観察する</span>
+  <span class="desc">pg_stat_activity や pg_locks など、PGPROC の状態を外から観察する方法を示す。</span>
+</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風の内部構造解説 · PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41 · ソース: <a href="https://github.com/shinyaaa/postgres">shinyaaa/postgres</a></footer>
+</body>
+</html>
