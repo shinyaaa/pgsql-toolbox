@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """PostgreSQL Internals Documentation Server."""
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
-from flask import Flask, abort, render_template, send_from_directory
+from flask import Flask, abort, jsonify, render_template, send_from_directory
 
 app = Flask(__name__, template_folder="templates")
 
 DOCS_DIR = Path(__file__).parent / "docs"
+REPO_DIR = Path(__file__).resolve().parent.parent
 
 _VERSION_RE = re.compile(r'<span class="version-badge">(?:PostgreSQL\s+)?([^<]+)</span>')
 
@@ -32,10 +35,50 @@ def scan_docs():
     ]
 
 
+def _git_env():
+    """Environment for git over SSH on this host.
+
+    The system-wide /etc/ssh/ssh_config carries invalid client options that make
+    the ssh client abort, so force ssh to ignore it with `-F /dev/null` and pass
+    our own non-interactive settings (so the button never hangs on a prompt).
+    """
+    env = os.environ.copy()
+    known_hosts = os.path.expanduser("~/.ssh/known_hosts")
+    env["GIT_SSH_COMMAND"] = (
+        "ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=accept-new "
+        f"-o UserKnownHostsFile={known_hosts}"
+    )
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
 @app.route("/")
 def index():
     topics = scan_docs()
     return render_template("index.html", topics=topics)
+
+
+@app.route("/api/pull", methods=["POST"])
+def api_pull():
+    """Fast-forward the local repo from origin so newly merged docs appear."""
+    try:
+        result = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=str(REPO_DIR),
+            env=_git_env(),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return jsonify({"ok": False, "output": "git pull timed out after 120s"}), 504
+    except OSError as e:
+        return jsonify({"ok": False, "output": str(e)}), 500
+
+    output = (result.stdout + result.stderr).strip()
+    if result.returncode != 0:
+        return jsonify({"ok": False, "output": output or "git pull failed"}), 500
+    return jsonify({"ok": True, "output": output or "Already up to date."})
 
 
 

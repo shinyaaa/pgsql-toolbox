@@ -89,6 +89,42 @@
     margin-left: 12px;
   }
   .topic-link:hover .open-label { opacity: 1; }
+  .pull-area {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+  }
+  .pull-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 14px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, opacity 0.15s;
+  }
+  .pull-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-hover); }
+  .pull-btn:disabled { opacity: 0.6; cursor: default; }
+  .pull-btn .icon { display: inline-block; font-size: 0.95rem; line-height: 1; }
+  .pull-btn.loading .icon { animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .pull-status {
+    font-size: 0.78rem;
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    max-width: 40ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pull-status.ok { color: #4ade80; }
+  .pull-status.err { color: #f87171; }
   @media (max-width: 700px) {
     body { padding: 12px; }
     .topic-grid { grid-template-columns: 1fr; }
@@ -99,7 +135,12 @@
 
 <div class="header">
   <h1>PostgreSQL Internals <span>{{ topics|length }} topic{{ 's' if topics|length != 1 else '' }}</span></h1>
-
+  <div class="pull-area">
+    <span id="pull-status" class="pull-status"></span>
+    <button id="pull-btn" class="pull-btn" onclick="pullDocs()" title="origin から git pull してドキュメントを最新化">
+      <span class="icon">&#x21bb;</span> 更新
+    </button>
+  </div>
 </div>
 
 {% if not topics %}
@@ -121,6 +162,46 @@
   {% endfor %}
 </div>
 {% endif %}
+
+<script>
+async function pullDocs() {
+  const btn = document.getElementById('pull-btn');
+  const status = document.getElementById('pull-status');
+  btn.disabled = true;
+  btn.classList.add('loading');
+  status.className = 'pull-status';
+  status.textContent = '更新中…';
+  status.title = '';
+  try {
+    const res = await fetch('/api/pull', { method: 'POST' });
+    const data = await res.json();
+    const out = (data.output || '').trim();
+    if (data.ok) {
+      if (/already up( |-)to( |-)date/i.test(out)) {
+        status.textContent = '最新です';
+        status.classList.add('ok');
+        btn.disabled = false;
+        btn.classList.remove('loading');
+      } else {
+        status.textContent = '更新しました。再読み込み中…';
+        status.classList.add('ok');
+        setTimeout(() => location.reload(), 700);
+      }
+    } else {
+      status.textContent = (out.split('\n')[0]) || '更新に失敗しました';
+      status.title = out;
+      status.classList.add('err');
+      btn.disabled = false;
+      btn.classList.remove('loading');
+    }
+  } catch (e) {
+    status.textContent = '通信エラー: ' + e;
+    status.classList.add('err');
+    btn.disabled = false;
+    btn.classList.remove('loading');
+  }
+}
+</script>
 
 </body>
 </html>
