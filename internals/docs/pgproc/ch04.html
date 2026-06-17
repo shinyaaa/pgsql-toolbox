@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第4章 PGPROCのライフサイクル | PGPROC の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PGPROC の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 PGPROCとは</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 PGPROCの役割</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 MyProc と ProcNumber</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 PGPROC を持つプロセスの種類</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PGPROC構造体のレイアウト</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バックエンドの識別情報</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 トランザクションとスナップショット</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 プロセス間シグナリングと待機</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ロックマネージャ関連フィールド</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 ProcGlobal と共有メモリ配置</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PROC_HDR と allProcs 配列</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 フリーリストとプロセス種別</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 密な並列配列とミラーリング</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch04.html">第4章 PGPROCのライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 共有メモリの確保</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PGPROC の割り当て</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 ProcArray への登録</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 PGPROC の解放</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 PGPROCを介した協調動作</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 ヘビーウェイトロックの待機キュー</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 グループ XID クリア</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 ロックグループと並列クエリ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 同期レプリケーションの待機</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 PGPROCを観察する</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 pg_stat_activity との対応</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pg_locks と待機関係</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 待機イベントの確認</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第4章　PGPROCのライフサイクル</h1>
+        
+<p>
+  PGPROC は postmaster 起動時に共有メモリ上へまとめて確保され、各プロセスの
+  起動・終了に応じて貸し出し・返却される。本章ではこのライフサイクルを、
+  確保 → 割り当て → ProcArray 登録 → 解放の順に追う。
+</p>
+
+<figure>
+  <pre class="mermaid">
+stateDiagram-v2
+    [*] --> 確保済み: ProcGlobalShmemInit()
+    確保済み --> フリーリスト: フリーリストへ push
+    フリーリスト --> 割当済み: InitProcess() が pop
+    割当済み --> ProcArray登録: InitProcessPhase2()
+    ProcArray登録 --> 解放中: バックエンド終了
+    解放中 --> フリーリスト: ProcKill() が push
+    フリーリスト --> [*]
+  </pre>
+  <figcaption>図 4.1: PGPROC のライフサイクル状態遷移</figcaption>
+</figure>
+
+<h2 id="sec-4-1">4.1　共有メモリの確保</h2>
+<p>
+  必要な PGPROC の総数は <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/lmgr/proc.c#L147"><code>ProcGlobalShmemRequest()</code></a> で計算される。
+  <code>TotalProcs = MaxBackends + NUM_AUXILIARY_PROCS + max_prepared_xacts</code>
+  であり、PGPROC 本体に加えて密配列 3 本ぶんの共有メモリも同時に予約される。
+</p>
+<p>
+  実際の初期化は <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/lmgr/proc.c#L221"><code>ProcGlobalShmemInit()</code></a> が行う。この関数は、フリーリストの初期化、allProcs と
+  密配列の領域切り出し、バックエンドあたりのセマフォ作成、そして各 PGPROC の
+  共通初期化（ファストパス配列の割り当て、ラッチ・セマフォ・<code>fpInfoLock</code> の
+  セットアップ、<code>myProcLocks[]</code> の初期化）を行う。セマフォを起動時に
+  まとめて確保するのは、カーネルのセマフォ上限超過を「あとで」ではなく「すぐに」
+  検知させるためである。
+</p>
+<div class="info"><strong>関連</strong>各 PGPROC はこのループの末尾でいずれかのフリーリストへ
+push される（<a href="ch03.html#sec-3-2">3.2 節</a>）。プリペアドトランザクション用の
+PGPROC だけは <code>TwoPhaseShmemInit()</code> が別途フリーリストに繋ぐ。</div>
+
+<h2 id="sec-4-2">4.2　PGPROC の割り当て</h2>
+<p>
+  バックエンドは起動時に <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/lmgr/proc.c#L392"><code>InitProcess()</code></a> を呼び、自分の種別に対応するフリーリストから
+  PGPROC を 1 つ取り出して <code>MyProc</code> にセットする。リストが空なら
+  「sorry, too many clients already」エラーになる ― これが接続数上限を
+  検知する地点の一つである。
+</p>
+
+<div class="example">
+  <span class="example-label">proc.c — InitProcess() のフリーリスト選択（要約）</span>
+  <pre><code>if (AmAutoVacuumWorkerProcess() || AmSpecialWorkerProcess())
+    procgloballist = &amp;ProcGlobal-&gt;autovacFreeProcs;
+else if (AmBackgroundWorkerProcess())
+    procgloballist = &amp;ProcGlobal-&gt;bgworkerFreeProcs;
+else if (AmWalSenderProcess())
+    procgloballist = &amp;ProcGlobal-&gt;walsenderFreeProcs;
+else
+    procgloballist = &amp;ProcGlobal-&gt;freeProcs;
+...
+MyProc = dlist_container(PGPROC, freeProcsLink,
+                         dlist_pop_head_node(procgloballist));
+MyProcNumber = GetNumberFromPGProc(MyProc);</code></pre>
+</div>
+
+<p>
+  PGPROC を取得した後、<code>InitProcess()</code> は <code>xid</code>、<code>xmin</code>、
+  <code>pid</code>、<code>vxid</code> などほぼ全フィールドを初期値にリセットし、
+  共有ラッチの所有権を取得して（<code>OwnLatch</code> → <code>SwitchToSharedLatch</code>）、
+  終了時クリーンアップとして <code>ProcKill</code> を登録する。補助プロセスは
+  代わりに <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/lmgr/proc.c#L618"><code>InitAuxiliaryProcess()</code></a> を呼び、フリーリストではなく線形探索で空きスロットを得る。
+</p>
+
+<h2 id="sec-4-3">4.3　ProcArray への登録</h2>
+<p>
+  PGPROC を確保しただけでは、まだ他プロセスから「実行中トランザクション」として
+  見えない。<a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/lmgr/proc.c#L583"><code>InitProcessPhase2()</code></a> が <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L464"><code>ProcArrayAdd()</code></a> を呼び、PGPROC を共有 ProcArray に追加して初めて可視になる。
+  この関数は <strong>ProcArrayLock と XidGenLock の両方を排他で</strong>取得する
+  （この順序が重要）。
+</p>
+<p>
+  ProcArrayAdd は、参照局所性を高めるため配列を PGPROC ポインタ順にソート状態で
+  保つ。挿入位置を見つけたら、それ以降の <code>pgprocnos</code> と 3 本の密配列を
+  <code>memmove</code> で 1 つずらし、新しいエントリを書き込み、後続すべての
+  <code>pgxactoff</code> を振り直す。これが「ProcArrayAdd/Remove で pgxactoff が
+  変化する」（<a href="ch03.html#sec-3-3">3.3 節</a>の注意）の正体である。
+  ロックは取得と逆順（XidGenLock → ProcArrayLock）で解放される。
+</p>
+
+<h2 id="sec-4-4">4.4　PGPROC の解放</h2>
+<p>
+  バックエンド終了時には、登録の逆順で後始末が行われる。まず
+  <code>RemoveProcFromArray</code>（内部で <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L561"><code>ProcArrayRemove()</code></a>）が PGPROC を ProcArray から外し、
+  続いて <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/lmgr/proc.c#L924"><code>ProcKill()</code></a> が PGPROC をフリーリストへ返す。
+</p>
+<p>
+  <code>ProcKill()</code> は、保持中の LWLock の解放、同期レプリケーション
+  リストからの離脱、共有ラッチの返却（<code>DisownLatch</code>）などを行う。
+  特に注意深いのが<strong>ロックグループからの離脱</strong>である。自分が
+  グループのリーダーかフォロワーか、最後のメンバーかどうかに応じて、自分自身と
+  リーダーのどちらをフリーリストへ戻すかを決める。リーダーが先に抜けても
+  PGPROC は最後のフォロワーが返すまで解放されない。
+</p>
+<div class="warn"><strong>注意</strong><code>DisownLatch()</code> は PGPROC がフリーリストへ
+載るより前に行わなければならない。さもないと、空いたスロットを pop した新しい
+バックエンドが <code>OwnLatch()</code> で「まだ所有されているラッチ」に出くわして
+PANIC する。解放処理の順序にはこうした制約が織り込まれている。</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch03.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第3章 ProcGlobal と共有メモリ配置</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch05.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第5章 PGPROCを介した協調動作</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風の内部構造解説 · PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41 · ソース: <a href="https://github.com/shinyaaa/postgres">shinyaaa/postgres</a></footer>
+</body>
+</html>

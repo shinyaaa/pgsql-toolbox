@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第1章 PGPROCとは | PGPROC の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PGPROC の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li class="current">
+    <a class="chap-title" href="ch01.html">第1章 PGPROCとは</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 PGPROCの役割</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 MyProc と ProcNumber</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 PGPROC を持つプロセスの種類</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PGPROC構造体のレイアウト</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バックエンドの識別情報</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 トランザクションとスナップショット</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 プロセス間シグナリングと待機</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ロックマネージャ関連フィールド</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 ProcGlobal と共有メモリ配置</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PROC_HDR と allProcs 配列</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 フリーリストとプロセス種別</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 密な並列配列とミラーリング</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 PGPROCのライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 共有メモリの確保</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PGPROC の割り当て</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 ProcArray への登録</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 PGPROC の解放</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 PGPROCを介した協調動作</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 ヘビーウェイトロックの待機キュー</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 グループ XID クリア</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 ロックグループと並列クエリ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 同期レプリケーションの待機</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 PGPROCを観察する</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 pg_stat_activity との対応</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pg_locks と待機関係</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 待機イベントの確認</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第1章　PGPROCとは</h1>
+        
+<p>
+  PostgreSQL はマルチプロセス構成のデータベースである。クライアント接続ごとに
+  バックエンドプロセスが 1 つ割り当てられ、さらにチェックポインタや WAL ライタ、
+  自動バキュームワーカーといった補助プロセスが並走する。これらのプロセスは
+  独立したアドレス空間を持つが、トランザクションの可視性判定やロックの調停を
+  行うには、互いの状態を覗き合う必要がある。その「覗き合うための窓口」が
+  本章で扱う <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L184"><code>PGPROC</code></a> 構造体である。
+</p>
+
+<h2 id="sec-1-1">1.1　PGPROCの役割</h2>
+<p>
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L184"><code>PGPROC</code></a> は <strong>プロセスごとの共有メモリ上のデータ構造（per-process shared
+  memory data structure）</strong>である。各プロセスは自分専用の PGPROC を 1 つ持ち、
+  そこに「現在実行中のトランザクション ID」「スナップショットの xmin」「待機中の
+  ロック」「ステータスフラグ」などを書き込む。これらは共有メモリ上にあるため、
+  他のプロセスからも読み取れる。つまり PGPROC は、各プロセスが自分の状態を
+  クラスタ全体へ<strong>広告（advertise）</strong>するための掲示板として働く。
+</p>
+<p>
+  proc.h 冒頭のコメントはこの構造体を端的にこう説明している。「各バックエンドは
+  共有メモリ中に PGPROC 構造体を持つ。また、新しいバックエンドに再割り当てされる
+  ために現在未使用の PGPROC 構造体のリストも存在する」。この二点 ―
+  <em>プロセスと一対一で対応すること</em>と<em>使い回されること</em> ―
+  が PGPROC の本質である。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph procs["プロセス (独立アドレス空間)"]
+        BE1["バックエンド A"]
+        BE2["バックエンド B"]
+        CKPT["チェックポインタ"]
+    end
+    subgraph shmem["共有メモリ"]
+        P1["PGPROC[0]"]
+        P2["PGPROC[1]"]
+        P3["PGPROC[k]"]
+    end
+    BE1 -->|MyProc| P1
+    BE2 -->|MyProc| P2
+    CKPT -->|MyProc| P3
+    BE2 -.読み取り.-> P1
+    CKPT -.読み取り.-> P1
+  </pre>
+  <figcaption>図 1.1: 各プロセスは自分の PGPROC へ状態を書き込み、他プロセスはそれを読み取る</figcaption>
+</figure>
+
+<p>
+  図 1.1 に示すように、各プロセスは <code>MyProc</code> ポインタを通じて自分の
+  PGPROC を更新する。一方で、スナップショットを取得するバックエンドや可視性を
+  判定する処理は、全プロセスの PGPROC（正確には後述する密な配列）を走査して
+  「いま走っているトランザクション」を把握する。
+</p>
+
+<h2 id="sec-1-2">1.2　MyProc と ProcNumber</h2>
+<p>
+  各プロセスは、自分の PGPROC を指すグローバル変数 <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L388"><code>MyProc</code></a> を持つ。バックエンドが
+  起動して PGPROC を確保すると、以後はこの <code>MyProc-&gt;xid</code> のように
+  自分の状態へアクセスする。自分自身のフィールドの多くはロックなしで読み書き
+  できる点が、後述する性能設計の要になっている。
+</p>
+<p>
+  PGPROC の配列上の位置は <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/procnumber.h#L24"><code>ProcNumber</code></a> 型（実体は <code>int</code>）で表現される。
+  これは「アクティブなバックエンドまたは補助プロセスを一意に識別する」番号で、
+  0 から始まる。プロセスと PGPROC を相互変換するマクロが proc.h に定義されている。
+</p>
+
+<div class="example">
+  <span class="example-label">proc.h — ProcNumber と PGPROC の相互変換</span>
+  <pre><code>#define GetPGProcByNumber(n)    (&amp;ProcGlobal-&gt;allProcs[(n)])
+#define GetNumberFromPGProc(proc) ((proc) - &amp;ProcGlobal-&gt;allProcs[0])</code></pre>
+</div>
+
+<p>
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L510"><code>GetPGProcByNumber()</code></a> が示すとおり、ProcNumber は単に <code>allProcs</code> 配列の添字に過ぎない。
+  自分の番号は <code>MyProcNumber</code> に保持され、PGPROC 確保時に
+  <code>GetNumberFromPGProc(MyProc)</code> で求められる。ProcNumber は
+  プロセス終了後に別プロセスへ再利用される点に注意が必要である。
+</p>
+<div class="note"><strong>メモ</strong>ProcNumber は inval.c がメッセージ中に 3 バイト符号付き整数として
+格納する都合上、2<sup>23</sup>-1 を超えられないという制約がある（<a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/procnumber.h"><code>procnumber.h</code></a>）。</div>
+
+<h2 id="sec-1-3">1.3　PGPROC を持つプロセスの種類</h2>
+<p>
+  PGPROC は通常のバックエンドだけが持つわけではない。<a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/lmgr/proc.c#L147"><code>ProcGlobalShmemRequest()</code></a> のコメントによれば、
+  確保すべき PGPROC には <strong>6 つの用途（consumer）</strong>がある。各 PGPROC は
+  いずれか一つの用途に専属し、グループ間を移動しない。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    TOTAL["TotalProcs 個の PGPROC"]
+    TOTAL --> A["(1) 通常バックエンド<br/>MaxConnections"]
+    TOTAL --> B["(2) autovacuum + 特殊ワーカー"]
+    TOTAL --> C["(3) バックグラウンドワーカー"]
+    TOTAL --> D["(4) WAL センダ"]
+    TOTAL --> E["(5) 補助プロセス<br/>NUM_AUXILIARY_PROCS"]
+    TOTAL --> F["(6) プリペアドトランザクション<br/>max_prepared_xacts"]
+  </pre>
+  <figcaption>図 1.2: PGPROC を消費する 6 つの用途</figcaption>
+</figure>
+
+<p>
+  図 1.2 のうち (1)〜(4) は「フルバックエンド」（トランザクションを実行でき、
+  ヘビーウェイトロックを取得できる）であり、専用のフリーリストから割り当てられる。
+  (5) の補助プロセス（バックグラウンドライタ、チェックポインタ、WAL ライタ、
+  WAL サマライザ、アーカイバ、起動プロセス、WAL レシーバ、I/O ワーカー）は
+  トランザクションを実行しないため数が固定で、フリーリストを使わず線形探索で
+  割り当てられる。(6) のプリペアドトランザクションは、twophase.c が用意する
+  <strong>ダミー PGPROC</strong> である。
+</p>
+<div class="info"><strong>関連</strong>ダミー PGPROC は <code>pid == 0</code> であることで実プロセスと区別できる。
+これは準備済みトランザクションを「まだ走っているもの」として ProcArray に
+見せかけ、ロック保持を正しく表示するための仕掛けである。詳細は
+<a href="ch04.html">第4章</a>で扱う。</div>
+
+      </article>
+      <nav class="pager">
+        <span class="pager-spacer" aria-hidden="true"></span>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch02.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第2章 PGPROC構造体のレイアウト</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風の内部構造解説 · PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41 · ソース: <a href="https://github.com/shinyaaa/postgres">shinyaaa/postgres</a></footer>
+</body>
+</html>

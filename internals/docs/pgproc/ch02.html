@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第2章 PGPROC構造体のレイアウト | PGPROC の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PGPROC の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 PGPROCとは</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 PGPROCの役割</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 MyProc と ProcNumber</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 PGPROC を持つプロセスの種類</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch02.html">第2章 PGPROC構造体のレイアウト</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バックエンドの識別情報</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 トランザクションとスナップショット</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 プロセス間シグナリングと待機</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ロックマネージャ関連フィールド</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 ProcGlobal と共有メモリ配置</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PROC_HDR と allProcs 配列</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 フリーリストとプロセス種別</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 密な並列配列とミラーリング</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 PGPROCのライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 共有メモリの確保</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PGPROC の割り当て</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 ProcArray への登録</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 PGPROC の解放</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 PGPROCを介した協調動作</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 ヘビーウェイトロックの待機キュー</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 グループ XID クリア</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 ロックグループと並列クエリ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 同期レプリケーションの待機</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 PGPROCを観察する</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 pg_stat_activity との対応</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pg_locks と待機関係</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 待機イベントの確認</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第2章　PGPROC構造体のレイアウト</h1>
+        
+<p>
+  本章では <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L184"><code>PGPROC</code></a> 構造体の主要フィールドを、ソース上のコメント区切りに沿って
+  カテゴリ別に読み解く。PGPROC は性能のためキャッシュライン境界に整列
+  （<code>alignas(PG_CACHE_LINE_SIZE)</code>）されており、フィールドは
+  「バックエンド識別」「トランザクションとスナップショット」「プロセス間
+  シグナリング」「LWLock 待機」「ロックマネージャ」「同期レプリケーション」
+  「グループ処理」「ステータス報告」のブロックに整理されている。
+</p>
+
+<figure>
+  <pre class="mermaid">
+classDiagram
+    class PGPROC {
+        +int pid
+        +BackendType backendType
+        +Oid databaseId
+        +Oid roleId
+        +int pgxactoff
+        +uint8 statusFlags
+        +VirtualTransactionId vxid
+        +TransactionId xid
+        +TransactionId xmin
+        +XidCacheStatus subxidStatus
+        +XidCache subxids
+        +Latch procLatch
+        +PGSemaphore sem
+        +LOCK waitLock
+        +PGPROC lockGroupLeader
+        +XLogRecPtr waitLSN
+    }
+  </pre>
+  <figcaption>図 2.1: PGPROC の代表的フィールド（抜粋）</figcaption>
+</figure>
+
+<h2 id="sec-2-1">2.1　バックエンドの識別情報</h2>
+<p>
+  図 2.1 の上半分は、起動後ほとんど変化しない識別情報である。
+  <code>pid</code> はプロセス ID（プリペアドトランザクションのダミーでは 0）、
+  <code>backendType</code> はプロセス種別を表す。<code>databaseId</code> と
+  <code>roleId</code> は接続中のデータベースとロールの OID で、起動初期は 0 である。
+</p>
+<p>
+  識別情報のうち特に重要なのが <code>pgxactoff</code> である。これは
+  「ProcGlobal の各配列へのオフセット」で、自分のデータがミラーされている
+  密な配列の添字を指す。<code>pgxactoff</code> は ProcArray への追加・削除で
+  変化しうるため、参照には ProcArrayLock または XidGenLock が必要である
+  （第3章で詳述）。<code>statusFlags</code> は自動バキューム中・VACUUM 中などを
+  表すビット群で、<a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L61"><code>PROC_IS_AUTOVACUUM ほか</code></a> に定義がある。
+</p>
+
+<h2 id="sec-2-2">2.2　トランザクションとスナップショット</h2>
+<p>
+  PGPROC の中核がこのブロックである。<code>vxid</code> は実行中トップレベル
+  トランザクションの仮想 XID（<code>procNumber</code> と <code>lxid</code> の組）で、
+  ひとまとまりとして原子的に代入できないため、あえて分割して扱う設計になっている。
+</p>
+<ul>
+  <li><code>xid</code> — 実行中トップレベルトランザクションの XID。割り当て済みの場合のみ有効。
+      <code>ProcGlobal-&gt;xids[pgxactoff]</code> にミラーされる。</li>
+  <li><code>xmin</code> — このトランザクション開始時点での最小実行中 XID。
+      VACUUM は <code>xid &gt;= xmin</code> で削除されたタプルを除去してはならない。</li>
+  <li><code>subxidStatus</code> / <code>subxids</code> — サブトランザクション XID の
+      キャッシュ。最大 <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L43"><code>PGPROC_MAX_CACHED_SUBXIDS</code></a>（=64）個まで保持し、あふれた場合は <code>overflowed</code>
+      フラグが立つ。</li>
+</ul>
+<p>
+  サブトランザクションキャッシュの型は <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L45"><code>XidCacheStatus</code></a> と <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L53"><code>XidCache</code></a> である。すべての PGPROC の
+  キャッシュがあふれていなければ、「PGPROC 配列のどこにも載っていない XID は
+  実行中ではない」と判断でき、<code>pg_subtrans</code> を引く必要がなくなる。
+  これが 64 という上限を設けてキャッシュする理由である。
+</p>
+
+<div class="example">
+  <span class="example-label">proc.h — サブトランザクションキャッシュ</span>
+  <pre><code>#define PGPROC_MAX_CACHED_SUBXIDS 64    /* XXX guessed-at value */
+
+typedef struct XidCacheStatus {
+    uint8 count;        /* キャッシュ済み subxid 数 */
+    bool  overflowed;   /* PGPROC->subxids があふれたか */
+} XidCacheStatus;
+
+struct XidCache {
+    TransactionId xids[PGPROC_MAX_CACHED_SUBXIDS];
+};</code></pre>
+</div>
+
+<h2 id="sec-2-3">2.3　プロセス間シグナリングと待機</h2>
+<p>
+  プロセス同士を起こし合うための道具立てがこのブロックにある。
+  <code>procLatch</code> は汎用ラッチ（イベント待機の通知機構）、
+  <code>sem</code> は「眠るための 1 つのセマフォ」である。バックエンドが
+  ロックやイベントを待つときはこれらの上でブロックし、他プロセスが
+  シグナルを送って起こす。
+</p>
+<p>
+  <code>delayChkptFlags</code> はチェックポイントの進行を一時的に遅延させる
+  ためのビット群で、<a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L145"><code>proc.h</code></a> に <code>DELAY_CHKPT_START</code> /
+  <code>DELAY_CHKPT_COMPLETE</code> / <code>DELAY_CHKPT_IN_COMMIT</code> が
+  定義されている。WAL ログ対象の変更がディスクへ確実に反映される前に
+  チェックポイントが完了してしまうのを防ぐための仕組みである。
+</p>
+<p>
+  続く LWLock 待機ブロックには <code>lwWaiting</code>、<code>lwWaitMode</code>、
+  <code>lwWaitLink</code> があり、軽量ロック（LWLock）やバッファコンテンツロックの
+  待ち行列に自分を繋ぐために使う。バックエンドは同時に両種のロックを待つことが
+  ないため、これらは共用されている。条件変数待機用の <code>cvWaitLink</code> も
+  ここに置かれる。
+</p>
+
+<h2 id="sec-2-4">2.4　ロックマネージャ関連フィールド</h2>
+<p>
+  ヘビーウェイトロック（テーブルロック等）に関わるフィールド群である。
+  待機中は <code>waitLock</code>（待っているロックオブジェクト）と
+  <code>waitProcLock</code>（保持者ごとの情報）が設定され、<code>waitLink</code> で
+  ロックの待ち行列に並ぶ。<code>waitLockMode</code> は要求中のロックモード、
+  <code>heldLocks</code> はすでに保持しているロックのビットマスクである。
+  待機状態は <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L149"><code>ProcWaitStatus</code></a> 型の <code>waitStatus</code> で表される。
+</p>
+<p>
+  <code>myProcLocks[NUM_LOCK_PARTITIONS]</code> は、このバックエンドが保持・待機する
+  すべての PROCLOCK を、ロックのパーティション番号別に繋いだリストである。
+  さらに「ファストパスロック」用の <code>fpLockBits</code> / <code>fpRelId</code> /
+  <code>fpVXIDLock</code> などがあり、弱いリレーションロック
+  （AccessShareLock など）をメインのロックテーブルではなく PGPROC 側に記録して
+  ロックマネージャの LWLock 競合を緩和する。最後に、並列クエリで使う
+  ロックグループ用フィールド（<code>lockGroupLeader</code> ほか）が並ぶ。
+  これらの協調動作は<a href="ch05.html">第5章</a>で扱う。
+</p>
+<div class="note"><strong>メモ</strong>ファストパスロックのグループ数はバックエンドあたり可変で、
+<code>max_locks_per_transaction</code> に基づいて
+<code>InitializeFastPathLocks()</code> が決定する。配列が可変長のため、
+これらは PGPROC 本体ではなく別の共有メモリ領域に確保される（第3章）。</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch01.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第1章 PGPROCとは</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch03.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第3章 ProcGlobal と共有メモリ配置</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風の内部構造解説 · PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41 · ソース: <a href="https://github.com/shinyaaa/postgres">shinyaaa/postgres</a></footer>
+</body>
+</html>

@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第3章 ProcGlobal と共有メモリ配置 | PGPROC の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PGPROC の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 PGPROCとは</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 PGPROCの役割</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 MyProc と ProcNumber</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 PGPROC を持つプロセスの種類</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PGPROC構造体のレイアウト</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バックエンドの識別情報</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 トランザクションとスナップショット</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 プロセス間シグナリングと待機</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ロックマネージャ関連フィールド</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch03.html">第3章 ProcGlobal と共有メモリ配置</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PROC_HDR と allProcs 配列</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 フリーリストとプロセス種別</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 密な並列配列とミラーリング</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 PGPROCのライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 共有メモリの確保</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PGPROC の割り当て</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 ProcArray への登録</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 PGPROC の解放</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 PGPROCを介した協調動作</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 ヘビーウェイトロックの待機キュー</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 グループ XID クリア</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 ロックグループと並列クエリ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 同期レプリケーションの待機</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 PGPROCを観察する</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 pg_stat_activity との対応</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pg_locks と待機関係</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 待機イベントの確認</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第3章　ProcGlobal と共有メモリ配置</h1>
+        
+<p>
+  個々の PGPROC は単独で存在するのではなく、クラスタ全体で 1 つの
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L444"><code>PROC_HDR</code></a> 構造体に束ねられている。本章では、全 PGPROC を統括する PROC_HDR、
+  プロセス種別ごとのフリーリスト、そして PGPROC の一部フィールドを別途
+  「密にパックした配列」へミラーする設計を解説する。
+</p>
+
+<h2 id="sec-3-1">3.1　PROC_HDR と allProcs 配列</h2>
+<p>
+  クラスタには <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/include/storage/proc.h#L503"><code>ProcGlobal</code></a> が指す <code>ProcGlobal</code> がただ一つ存在する。
+  その先頭フィールド <code>allProcs</code> が、全 PGPROC を並べた配列の本体である。
+  <code>allProcCount</code> はその長さ（ただしプリペアドトランザクション分は除く）を表す。
+  <a href="ch01.html#sec-1-2">1.2 節</a>で見た <code>GetPGProcByNumber()</code> は、
+  この <code>allProcs</code> を ProcNumber で添字参照するだけのマクロであった。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    subgraph PH["PROC_HDR (ProcGlobal)"]
+        AP["allProcs ->"]
+        XS["xids[] ->"]
+        SS["subxidStates[] ->"]
+        SF["statusFlags[] ->"]
+        FREE["freeProcs / autovacFreeProcs<br/>bgworkerFreeProcs / walsenderFreeProcs"]
+    end
+    subgraph ARR["共有メモリ上の配列"]
+        AllProcs["PGPROC[0] PGPROC[1] ... PGPROC[TotalProcs-1]"]
+        Dense["xids / subxidStates / statusFlags (密配列)"]
+    end
+    AP --> AllProcs
+    XS --> Dense
+    SS --> Dense
+    SF --> Dense
+  </pre>
+  <figcaption>図 3.1: PROC_HDR が allProcs 配列と密な並列配列を統括する</figcaption>
+</figure>
+
+<p>
+  図 3.1 のとおり、PROC_HDR は PGPROC 本体の配列に加えて、後述する 3 本の
+  「密配列」へのポインタ、プロセス種別ごとのフリーリスト、そしてグループ処理用の
+  アトミック変数や補助プロセスのスロット番号（<code>walwriterProc</code>、
+  <code>checkpointerProc</code>）を保持する。フリーリストを守る
+  <code>freeProcsLock</code> がスピンロックなのは、LWLock の獲得自体が PGPROC と
+  セマフォの存在に依存しており、PGPROC を配るこの段階では LWLock を使えないためである。
+</p>
+
+<h2 id="sec-3-2">3.2　フリーリストとプロセス種別</h2>
+<p>
+  <a href="ch01.html#sec-1-3">1.3 節</a>で見た用途のうち、フルバックエンド系は
+  4 本のフリーリストで管理される。共有メモリ初期化時、各 PGPROC は添字の範囲に
+  応じてどれか一つのリストへ繋がれ、自分の所属リストを <code>procgloballist</code> に
+  記録する。
+</p>
+
+<div class="example">
+  <span class="example-label">proc.c — ProcGlobalShmemInit() でのフリーリスト振り分け（要約）</span>
+  <pre><code>if (i &lt; MaxConnections)
+    /* 通常バックエンド → freeProcs */
+else if (i &lt; MaxConnections + autovacuum_worker_slots + NUM_SPECIAL_WORKER_PROCS)
+    /* autovacuum / 特殊ワーカー → autovacFreeProcs */
+else if (i &lt; ... + max_worker_processes)
+    /* バックグラウンドワーカー → bgworkerFreeProcs */
+else if (i &lt; MaxBackends)
+    /* WAL センダ → walsenderFreeProcs */</code></pre>
+</div>
+
+<p>
+  このように添字の区画とフリーリストが一対一で対応しているため、起動時に
+  どのリストから引いたかでプロセス種別が確定する。<a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/lmgr/proc.c#L392"><code>InitProcess()</code></a> は同じ条件分岐で
+  「自分がどのリストから取るべきか」を選び、整合性を <code>Assert</code> で
+  検証している。補助プロセス（<code>MaxBackends</code> 以降の領域）はフリーリストを
+  使わず、<a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/lmgr/proc.c#L618"><code>InitAuxiliaryProcess()</code></a> が線形探索で空きスロットを探す。
+</p>
+
+<h2 id="sec-3-3">3.3　密な並列配列とミラーリング</h2>
+<p>
+  PGPROC の一部フィールド ― <code>xid</code>、<code>subxidStatus</code>、
+  <code>statusFlags</code> ― は、PROC_HDR の <code>xids[]</code>、
+  <code>subxidStates[]</code>、<code>statusFlags[]</code> という<strong>密にパックした
+  配列</strong>へ二重に保持される。これらの配列は <code>pgxactoff</code> で添字され、
+  ProcArray に登録済みの PGPROC の分だけが詰めて並ぶ（未使用スロットが
+  混ざる allProcs と対照的）。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph backend["バックエンド自身"]
+        own["MyProc->xid<br/>(ロック不要で参照)"]
+    end
+    subgraph dense["密配列 (pgxactoff で添字)"]
+        d0["xids[0]"]
+        d1["xids[1]"]
+        d2["xids[2]"]
+    end
+    own -. ProcArrayLock 保持時に同期 .-> d1
+    scan["GetSnapshotData()<br/>全件走査"] --> d0
+    scan --> d1
+    scan --> d2
+  </pre>
+  <figcaption>図 3.2: PGPROC 本体と密配列の二重保持（ミラーリング）</figcaption>
+</figure>
+
+<p>
+  なぜ二重に持つのか。proc.h の長大なコメントが理由を 3 つ挙げる。第一に、
+  できるだけタイトなループでデータを走査できるようにするため。第二に、
+  頻繁に変わるデータ（<code>xmin</code> など）の更新が、あまり変わらないデータ
+  （<code>xid</code>、<code>statusFlags</code>）のキャッシュラインを無効化しないように
+  するため。第三に、頻繁にアクセスされるデータを可能な限り少ないキャッシュ
+  ラインへ凝縮するためである。
+</p>
+<p>
+  使い分けの原則はこうである。<strong>単一バックエンドのデータを見るときは
+  PGPROC 本体</strong>を（自分の値なら多くの場合ロックなしで安全に読める）、
+  <strong>多数のエントリを走査するときは密配列</strong>を見る。図 3.2 のように、
+  自バックエンドのコミット/アボート判定では PGPROC 本体を確認することで、
+  他コアが触る密配列のキャッシュラインを汚さずに済む。
+</p>
+<div class="warn"><strong>注意</strong><code>pgxactoff</code> で添字される密配列の値は、
+<strong>必ず ProcArrayLock か XidGenLock を保持して</strong>アクセスしなければならない。
+ProcArrayAdd / ProcArrayRemove によって他メンバーの <code>pgxactoff</code> が
+並行して変化しうるためである。両方の値はミラーされている間、整合的に
+維持しなければならない。</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch02.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第2章 PGPROC構造体のレイアウト</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch04.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第4章 PGPROCのライフサイクル</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風の内部構造解説 · PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41 · ソース: <a href="https://github.com/shinyaaa/postgres">shinyaaa/postgres</a></footer>
+</body>
+</html>

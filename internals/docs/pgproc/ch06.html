@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第6章 PGPROCを観察する | PGPROC の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PGPROC の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 PGPROCとは</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 PGPROCの役割</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 MyProc と ProcNumber</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 PGPROC を持つプロセスの種類</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PGPROC構造体のレイアウト</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バックエンドの識別情報</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 トランザクションとスナップショット</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 プロセス間シグナリングと待機</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ロックマネージャ関連フィールド</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 ProcGlobal と共有メモリ配置</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PROC_HDR と allProcs 配列</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 フリーリストとプロセス種別</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 密な並列配列とミラーリング</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 PGPROCのライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 共有メモリの確保</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PGPROC の割り当て</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 ProcArray への登録</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 PGPROC の解放</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 PGPROCを介した協調動作</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 ヘビーウェイトロックの待機キュー</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 グループ XID クリア</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 ロックグループと並列クエリ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 同期レプリケーションの待機</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch06.html">第6章 PGPROCを観察する</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 pg_stat_activity との対応</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pg_locks と待機関係</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 待機イベントの確認</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第6章　PGPROCを観察する</h1>
+        
+<p>
+  PGPROC は共有メモリ上の C 構造体だが、その内容の多くは SQL から観察できる。
+  本章では代表的なシステムビューと PGPROC フィールドの対応を示し、内部状態を
+  手元で確かめる方法を紹介する。
+</p>
+
+<h2 id="sec-6-1">6.1　pg_stat_activity との対応</h2>
+<p>
+  <code>pg_stat_activity</code> の各行は、概ね 1 つの PGPROC（とそれに紐づく
+  バックエンド状態）に対応する。<code>pid</code> は PGPROC の <code>pid</code>、
+  <code>datid</code> / <code>usesysid</code> は <code>databaseId</code> / <code>roleId</code>、
+  <code>backend_type</code> は <code>backendType</code> に由来する。
+  <code>backend_xid</code> と <code>backend_xmin</code> は、まさに PGPROC の
+  <code>xid</code> と <code>xmin</code> である。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL — 実行中トランザクションの xid / xmin を見る</span>
+  <pre><code>SELECT pid, backend_type, state, backend_xid, backend_xmin
+FROM pg_stat_activity
+WHERE backend_xid IS NOT NULL OR backend_xmin IS NOT NULL;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果（例）</span>
+  <pre><code>  pid  | backend_type   | state  | backend_xid | backend_xmin
+-------+----------------+--------+-------------+--------------
+ 41210 | client backend | active |         812 |          812
+ 41215 | client backend | idle   |             |          809</code></pre>
+</div>
+
+<p>
+  <code>backend_xmin</code> はバキュームの地平に直結する。古いスナップショットを
+  握ったまま放置されたセッションがあると、その PGPROC の <code>xmin</code> が
+  小さいままになり、デッドタプルを回収できなくなる ―
+  PGPROC を観察することは、こうした「VACUUM が効かない」問題の診断に役立つ。
+</p>
+
+<h2 id="sec-6-2">6.2　pg_locks と待機関係</h2>
+<p>
+  <code>pg_locks</code> は、各 PGPROC が保持・待機するロックを行として見せる。
+  <code>granted = false</code> の行は、その PGPROC が
+  <a href="ch05.html#sec-5-1">5.1 節</a>の待ち行列で眠っていることを意味する。
+  PostgreSQL 9.6 以降は <code>pg_blocking_pids()</code> で、ある PID をブロックして
+  いる PID 群を直接得られる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL — ロック待ちのセッションとブロック元を調べる</span>
+  <pre><code>SELECT a.pid, a.wait_event_type, a.wait_event,
+       pg_blocking_pids(a.pid) AS blocked_by
+FROM pg_stat_activity a
+WHERE cardinality(pg_blocking_pids(a.pid)) &gt; 0;</code></pre>
+</div>
+
+<p>
+  内部的には <code>pg_blocking_pids()</code> が PGPROC の待ち行列と保持ロックを
+  たどって、誰が誰を待たせているかを再構成している。並列クエリのロックグループ
+  （<a href="ch05.html#sec-5-3">5.3 節</a>）も考慮されるため、ワーカーをブロック
+  している相手はリーダーの PID として報告される。
+</p>
+
+<h2 id="sec-6-3">6.3　待機イベントの確認</h2>
+<p>
+  PGPROC の <code>wait_event_info</code> は、そのプロセスが「いま何を待っているか」を
+  表すコードである。<code>pg_stat_activity</code> の <code>wait_event_type</code> /
+  <code>wait_event</code> 列はこれを人間可読な名前に変換したものだ。
+  たとえば<a href="ch05.html#sec-5-2">5.2 節</a>のグループ XID クリアで眠る
+  プロセスは <code>ProcArrayGroupUpdate</code> という待機イベントを報告する。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL — 待機イベントの分布を集計する</span>
+  <pre><code>SELECT wait_event_type, wait_event, count(*)
+FROM pg_stat_activity
+WHERE wait_event IS NOT NULL
+GROUP BY 1, 2
+ORDER BY 3 DESC;</code></pre>
+</div>
+
+<p>
+  このように、PGPROC のフィールドはほぼそのまま運用上の観測点になっている。
+  構造体の意味を理解しておくと、<code>pg_stat_activity</code> や <code>pg_locks</code> の
+  各列が「共有メモリ上のどのフィールドを映したものか」が腑に落ち、性能問題や
+  ロック競合の診断が格段に進めやすくなる。
+</p>
+<div class="info"><strong>まとめ</strong>PGPROC は、プロセスごとの状態広告・プロセス間の
+待ち合わせ・スナップショットの基盤という 3 つの顔を持つ共有メモリ構造体である。
+その設計（ミラー配列・フリーリスト・グループ処理）は、多数のプロセスが
+高頻度でアクセスする中での競合とキャッシュ効率を徹底的に意識したものになっている。</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch05.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第5章 PGPROCを介した協調動作</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<span class="pager-spacer" aria-hidden="true"></span>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風の内部構造解説 · PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41 · ソース: <a href="https://github.com/shinyaaa/postgres">shinyaaa/postgres</a></footer>
+</body>
+</html>

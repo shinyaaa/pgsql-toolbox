@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章 PGPROCを介した協調動作 | PGPROC の内部構造 — PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PGPROC の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 PGPROCとは</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 PGPROCの役割</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 MyProc と ProcNumber</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 PGPROC を持つプロセスの種類</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PGPROC構造体のレイアウト</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バックエンドの識別情報</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 トランザクションとスナップショット</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 プロセス間シグナリングと待機</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ロックマネージャ関連フィールド</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 ProcGlobal と共有メモリ配置</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PROC_HDR と allProcs 配列</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 フリーリストとプロセス種別</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 密な並列配列とミラーリング</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 PGPROCのライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 共有メモリの確保</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PGPROC の割り当て</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 ProcArray への登録</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 PGPROC の解放</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch05.html">第5章 PGPROCを介した協調動作</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 ヘビーウェイトロックの待機キュー</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 グループ XID クリア</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 ロックグループと並列クエリ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 同期レプリケーションの待機</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 PGPROCを観察する</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 pg_stat_activity との対応</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pg_locks と待機関係</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 待機イベントの確認</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第5章　PGPROCを介した協調動作</h1>
+        
+<p>
+  PGPROC は単なる状態の掲示板にとどまらず、プロセス同士が待ち合わせ・起こし合う
+  ための<strong>連結リストのノード</strong>としても機能する。本章では PGPROC を
+  介した代表的な 4 つの協調動作を見る。
+</p>
+
+<h2 id="sec-5-1">5.1　ヘビーウェイトロックの待機キュー</h2>
+<p>
+  あるロックを取得できないバックエンドは、ロックオブジェクトの待ち行列
+  （<code>lock-&gt;waitProcs</code>）に自分の PGPROC を繋いで眠る。キューへの参加は
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/lmgr/proc.c#L1179"><code>JoinWaitQueue()</code></a> が、実際のスリープは <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/lmgr/proc.c#L1348"><code>ProcSleep()</code></a> が担う。待機中、PGPROC の <code>waitLock</code> /
+  <code>waitProcLock</code> / <code>waitLockMode</code> が設定され、<code>waitLink</code> が
+  キュー内の位置を表す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    LOCK["LOCK オブジェクト"]
+    LOCK --> WQ["waitProcs (待ち行列)"]
+    WQ --> P1["PGPROC A<br/>waitLink"]
+    P1 --> P2["PGPROC B<br/>waitLink"]
+    P2 --> P3["PGPROC C<br/>waitLink"]
+  </pre>
+  <figcaption>図 5.1: ロックの待ち行列に PGPROC が waitLink で連なる</figcaption>
+</figure>
+
+<p>
+  図 5.1 のように待機者は双方向リンクリストで繋がれる。ロックが解放されると
+  <code>ProcLockWakeup()</code> がキューを走査し、取得可能になった待機者の PGPROC を
+  <code>ProcWakeup()</code> で起こす。各 PGPROC の <code>sem</code> セマフォと
+  <code>waitStatus</code>（<code>PROC_WAIT_STATUS_OK</code> など）が、この
+  起こし合いの同期点になる。デッドロック検出やロックタイムアウトも、この
+  待機の仕組みの上に実装されている。
+</p>
+
+<h2 id="sec-5-2">5.2　グループ XID クリア</h2>
+<p>
+  多数のバックエンドが同時にコミットすると、コミット完了時に ProcArrayLock を
+  排他取得して <code>xid</code> をクリアする処理が激しく競合する。これを緩和するのが
+  <a href="https://github.com/shinyaaa/postgres/blob/0131e8fc508ff8e10a6797bfe8043a0b9d34b30b/src/backend/storage/ipc/procarray.c#L784"><code>ProcArrayGroupClearXid()</code></a> による<strong>グループ XID クリア</strong>である。
+</p>
+<p>
+  ProcArrayLock をすぐ取れないバックエンドは、自分を「XID クリア待ちリスト」へ
+  アトミックに連結する（PROC_HDR の <code>procArrayGroupFirst</code> を CAS で更新し、
+  PGPROC の <code>procArrayGroupNext</code> でリストを繋ぐ）。リストが空でなければ
+  自分はフォロワーとして眠り、リーダーに任せる。リストが空だった最初の 1 人が
+  <strong>リーダー</strong>となり、ロックを 1 回だけ取得して全メンバーの XID を
+  まとめてクリアし、各メンバーのセマフォを上げて起こす。
+</p>
+
+<figure>
+  <pre class="mermaid">
+sequenceDiagram
+    participant F as フォロワー
+    participant G as procArrayGroupFirst
+    participant L as リーダー
+    F->>G: CAS で自分を先頭に連結
+    Note over F: nextidx != INVALID なので<br/>セマフォで眠る
+    L->>G: exchange で全リストを取得
+    L->>L: ProcArrayLock を1回取得
+    L->>L: 各メンバーの XID をクリア
+    L-->>F: セマフォを上げて起こす
+  </pre>
+  <figcaption>図 5.2: グループ XID クリアの流れ</figcaption>
+</figure>
+
+<p>
+  図 5.2 のとおり、ロックの取得回数を「メンバー数 × 1」から「1」へ削減できる。
+  同種の仕組みは clog（トランザクション状態）の更新にもあり、PGPROC の
+  <code>clogGroupMember</code> / <code>clogGroupNext</code> 系フィールドと PROC_HDR の
+  <code>clogGroupFirst</code> がそれを担う。
+</p>
+
+<h2 id="sec-5-3">5.3　ロックグループと並列クエリ</h2>
+<p>
+  並列クエリでは、リーダーと並列ワーカーが互いのロックを「敵」と見なさない
+  よう、<strong>ロックグループ</strong>を組む。PGPROC の <code>lockGroupLeader</code>
+  （自分がメンバーならリーダーを指す）、<code>lockGroupMembers</code>（自分が
+  リーダーならメンバー一覧）、<code>lockGroupLink</code>（メンバーとしての連結）が
+  これを表現する。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    LEADER["PGPROC リーダー<br/>lockGroupMembers"]
+    LEADER --> M1["PGPROC ワーカー1<br/>lockGroupLeader -> リーダー"]
+    LEADER --> M2["PGPROC ワーカー2<br/>lockGroupLeader -> リーダー"]
+    M1 -.lockGroupLink.-> LEADER
+    M2 -.lockGroupLink.-> LEADER
+  </pre>
+  <figcaption>図 5.3: ロックグループのリーダーとメンバーの関係</figcaption>
+</figure>
+
+<p>
+  図 5.3 の関係は、リーダーの PGPROC をキーにした
+  <code>LockHashPartitionLockByProc</code> で保護される。<code>BecomeLockGroupLeader()</code>
+  と <code>BecomeLockGroupMember()</code> でグループを構成し、ロックマネージャは
+  同一グループのメンバーが保持するロックを競合と見なさない。
+  <a href="ch04.html#sec-4-4">4.4 節</a>で触れたとおり、グループの解体は
+  PGPROC 解放の順序に微妙な制約を課す。
+</p>
+
+<h2 id="sec-5-4">5.4　同期レプリケーションの待機</h2>
+<p>
+  同期レプリケーションでは、コミットしたバックエンドが「自分の LSN がスタンバイへ
+  反映される」まで待つ。PGPROC の <code>waitLSN</code>（待っている LSN）、
+  <code>syncRepState</code>（待機状態）、<code>syncRepLinks</code>（同期レプリ待ち
+  行列のリンク）がこれを表す。バックエンドは自分を待ち行列へ繋いで眠り、
+  WAL センダがスタンバイからの応答を受けて該当 LSN 以下の待機者を起こす。
+</p>
+<div class="note"><strong>メモ</strong><code>syncRepState</code> は所有プロセスと WAL センダ
+以外が触ってはならず、<code>syncRepLinks</code> は SyncRepLock 保持中のみ操作できる。
+このように PGPROC の各フィールドには、それぞれ固有のアクセス規約が定められている。</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch04.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第4章 PGPROCのライフサイクル</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch06.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第6章 PGPROCを観察する</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風の内部構造解説 · PostgreSQL 19beta1 · 0131e8fc508 · 2026-06-17 06:41 · ソース: <a href="https://github.com/shinyaaa/postgres">shinyaaa/postgres</a></footer>
+</body>
+</html>
