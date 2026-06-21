@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第4章 バッファタグとバッファテーブル | 共有バッファ（shared_buffers）の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">共有バッファ（shared_buffers）の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li>
+          <a class="chap-title" href="ch01.html">第1章 shared_buffers とは</a>
+          <ol class="sect">
+            <li><a href="ch01.html#sec-1-1">1.1 共有バッファの役割</a></li>
+            <li><a href="ch01.html#sec-1-2">1.2 GUC パラメータとしての定義</a></li>
+            <li><a href="ch01.html#sec-1-3">1.3 NBuffers と単位の換算</a></li>
+            <li><a href="ch01.html#sec-1-4">1.4 共有メモリ上の位置づけ</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch02.html">第2章 バッファプールのメモリ構造</a>
+          <ol class="sect">
+            <li><a href="ch02.html#sec-2-1">2.1 4つの配列</a></li>
+            <li><a href="ch02.html#sec-2-2">2.2 共有メモリの確保</a></li>
+            <li><a href="ch02.html#sec-2-3">2.3 Buffer 番号と buf_id</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch03.html">第3章 バッファ記述子 BufferDesc</a>
+          <ol class="sect">
+            <li><a href="ch03.html#sec-3-1">3.1 BufferDesc の構造</a></li>
+            <li><a href="ch03.html#sec-3-2">3.2 state に詰め込まれた状態</a></li>
+            <li><a href="ch03.html#sec-3-3">3.3 フラグ一覧</a></li>
+          </ol>
+        </li>
+        <li class="current">
+          <a class="chap-title" href="ch04.html">第4章 バッファタグとバッファテーブル</a>
+          <ol class="sect">
+            <li><a class="current" href="ch04.html#sec-4-1">4.1 BufferTag</a></li>
+            <li><a href="ch04.html#sec-4-2">4.2 バッファテーブル</a></li>
+            <li><a href="ch04.html#sec-4-3">4.3 パーティションとロック</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch05.html">第5章 ページ探索と置換アルゴリズム</a>
+          <ol class="sect">
+            <li><a href="ch05.html#sec-5-1">5.1 ReadBuffer の流れ</a></li>
+            <li><a href="ch05.html#sec-5-2">5.2 BufferAlloc</a></li>
+            <li><a href="ch05.html#sec-5-3">5.3 クロックスイープ</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch06.html">第6章 観察と運用</a>
+          <ol class="sect">
+            <li><a href="ch06.html#sec-6-1">6.1 pg_buffercache で覗く</a></li>
+            <li><a href="ch06.html#sec-6-2">6.2 共有メモリの割り当て</a></li>
+            <li><a href="ch06.html#sec-6-3">6.3 サイズ設定の指針</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第4章　バッファタグとバッファテーブル</h1>
+
+        <p>
+          バックエンドが「あるテーブルの N 番目のブロック」を求めたとき、それが共有バッファのどの
+          スロットにあるのか（あるいは無いのか）を即座に判定しなければならない。この対応づけを
+          担うのが、ページの識別子である <code>BufferTag</code> と、タグからバッファ番号を引くハッシュ表
+          <strong>バッファテーブル</strong>である。本章ではこの2つと、競合を抑えるパーティション機構を見る。
+        </p>
+
+        <h2 id="sec-4-1">4.1　BufferTag — ページの識別子</h2>
+        <p>
+          <code>BufferTag</code> は、共有バッファが保持するディスクページを一意に特定する構造体である。
+          定義は
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/storage/buf_internals.h#L161"><code>buf_internals.h</code></a>
+          にあり、図 4.1 の5つのフィールドからなる。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+classDiagram
+    class BufferTag {
+        Oid spcOid
+        Oid dbOid
+        RelFileNumber relNumber
+        ForkNumber forkNum
+        BlockNumber blockNum
+    }
+          </pre>
+          <figcaption>図 4.1: BufferTag のフィールド（ページを一意に特定する5つ組）</figcaption>
+        </figure>
+
+        <ul>
+          <li><strong>spcOid / dbOid / relNumber</strong>：どのリレーション（テーブル・インデックス）の物理ファイルかを表す3つ組（<code>RelFileLocator</code> 相当）。</li>
+          <li><strong>forkNum</strong>：フォーク種別。本体（main）・空き領域マップ（fsm）・可視性マップ（vm）などを区別する。</li>
+          <li><strong>blockNum</strong>：そのフォーク内のブロック番号（0始まり）。</li>
+        </ul>
+
+        <p>
+          ソースのコメントが強調しているように、<code>BufferTag</code> は <code>pg_class</code> や
+          <code>pg_tablespace</code> を引かずとも、そのページをディスクのどこへ書き戻すかを決定できるだけの
+          情報を含んでいる。これはバッファを書き出すバックエンドが、対象リレーションをまだ可視と
+          認識していない場合でも正しく動作させるためである。
+        </p>
+
+        <div class="note"><strong>メモ</strong><code>BufferTag</code> はハッシュ表のキーとして使われるため、構造体に
+        パディング（隙間）があってはならない。隙間に不定値が残るとキー比較が壊れるため、
+        <code>InitBufferTag()</code> や <code>ClearBufferTag()</code> で全フィールドを明示的に設定する。</div>
+
+        <h2 id="sec-4-2">4.2　バッファテーブル — タグからバッファを引く</h2>
+        <p>
+          バッファテーブルは、<code>BufferTag</code> をキー、バッファ番号（<code>buf_id</code>）を値とする
+          共有ハッシュ表である。実体は
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/buf_table.c#L34"><code>SharedBufHash</code></a>
+          という <code>HTAB</code> で、
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/buf_table.c"><code>buf_table.c</code></a>
+          が薄いラッパ関数を提供する。図 4.2 に役割を示す。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+flowchart LR
+    TAG["BufferTag\n(spc, db, rel, fork, block)"] -->|"BufTableHashCode()"| H["hashcode"]
+    H -->|"BufTableLookup()"| TBL{{"SharedBufHash\n(タグ → buf_id)"}}
+    TBL -->|"見つかった"| ID["buf_id ≥ 0"]
+    TBL -->|"無い"| MISS["-1 (ミス)"]
+    ID --> DESC["BufferDescriptors[buf_id]"]
+          </pre>
+          <figcaption>図 4.2: バッファテーブルによるタグ→バッファ番号の解決</figcaption>
+        </figure>
+
+        <p>主な操作は次の3つである。</p>
+        <ul>
+          <li><strong><a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/buf_table.c#L96"><code>BufTableLookup()</code></a></strong>：タグに対応する <code>buf_id</code> を返す。無ければ −1。</li>
+          <li><strong><a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/buf_table.c#L124"><code>BufTableInsert()</code></a></strong>：タグと <code>buf_id</code> の対応を登録する。すでに別バッファが登録済みなら、その <code>buf_id</code> を返す。</li>
+          <li><strong><a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/buf_table.c#L154"><code>BufTableDelete()</code></a></strong>：タグの対応を削除する（バッファを追い出すとき）。</li>
+        </ul>
+
+        <p>
+          ハッシュ表のエントリ数は、最悪ケースに備えて <code>NBuffers + NUM_BUFFER_PARTITIONS</code> 個で
+          確保される。バッファを置換する際、新タグの挿入と旧タグの削除を一時的に同時に保持し得るため、
+          バッファ数ぴったりでは足りない場面があるからである。
+        </p>
+
+        <h2 id="sec-4-3">4.3　パーティションとマッピングロック</h2>
+        <p>
+          バッファテーブルはインスタンス内の全バックエンドが共有するため、アクセスの集中は競合を生む。
+          これを緩和するため、ハッシュ表は <code>NUM_BUFFER_PARTITIONS = 128</code> 個のパーティションに
+          分割され（<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/storage/lwlock.h#L83"><code>lwlock.h</code></a>）、
+          パーティションごとに専用の <code>LWLock</code>（マッピングロック）を持つ。
+        </p>
+        <p>
+          どのパーティションに属するかは、タグのハッシュ値から決まる。図 4.3 のように、
+          <code>BufTableHashCode()</code> で得たハッシュ値を <code>NUM_BUFFER_PARTITIONS</code> で割った余りが
+          パーティション番号となり、対応するロックを <code>BufMappingPartitionLock()</code> が返す。
+          異なるパーティションに属するタグへのアクセスは、互いに待たされない。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+flowchart TB
+    TAG["BufferTag"] --> HC["hashcode = BufTableHashCode(tag)"]
+    HC --> MOD["partition = hashcode % 128"]
+    MOD --> L0["Lock #0"]
+    MOD --> L1["Lock #1"]
+    MOD --> LD["..."]
+    MOD --> L127["Lock #127"]
+          </pre>
+          <figcaption>図 4.3: ハッシュ値による 128 パーティションへの振り分けとマッピングロック</figcaption>
+        </figure>
+
+        <p>
+          このパーティション分割により、別々のページに同時アクセスする多数のバックエンドが、
+          それぞれ別のロックを取れるようになり、バッファテーブルがボトルネックになりにくい。
+          実際のページ探索でこれらのロックがどう使われるかは、次章の <code>BufferAlloc()</code> の流れで見る。
+        </p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch03.html">
+          <span class="dir">← 前の章</span>
+          <span class="ttl">第3章 バッファ記述子 BufferDesc</span>
+        </a>
+        <a class="up" href="index.html">
+          <span class="dir">↑ 目次</span>
+          <span class="ttl">トップページ</span>
+        </a>
+        <a class="next" href="ch05.html">
+          <span class="dir">次の章 →</span>
+          <span class="ttl">第5章 ページ探索と置換アルゴリズム</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風 内部構造ドキュメント — PostgreSQL 19beta1 · 031904048aa</footer>
+</body>
+</html>

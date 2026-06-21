@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第6章 観察と運用 | 共有バッファ（shared_buffers）の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">共有バッファ（shared_buffers）の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li>
+          <a class="chap-title" href="ch01.html">第1章 shared_buffers とは</a>
+          <ol class="sect">
+            <li><a href="ch01.html#sec-1-1">1.1 共有バッファの役割</a></li>
+            <li><a href="ch01.html#sec-1-2">1.2 GUC パラメータとしての定義</a></li>
+            <li><a href="ch01.html#sec-1-3">1.3 NBuffers と単位の換算</a></li>
+            <li><a href="ch01.html#sec-1-4">1.4 共有メモリ上の位置づけ</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch02.html">第2章 バッファプールのメモリ構造</a>
+          <ol class="sect">
+            <li><a href="ch02.html#sec-2-1">2.1 4つの配列</a></li>
+            <li><a href="ch02.html#sec-2-2">2.2 共有メモリの確保</a></li>
+            <li><a href="ch02.html#sec-2-3">2.3 Buffer 番号と buf_id</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch03.html">第3章 バッファ記述子 BufferDesc</a>
+          <ol class="sect">
+            <li><a href="ch03.html#sec-3-1">3.1 BufferDesc の構造</a></li>
+            <li><a href="ch03.html#sec-3-2">3.2 state に詰め込まれた状態</a></li>
+            <li><a href="ch03.html#sec-3-3">3.3 フラグ一覧</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch04.html">第4章 バッファタグとバッファテーブル</a>
+          <ol class="sect">
+            <li><a href="ch04.html#sec-4-1">4.1 BufferTag</a></li>
+            <li><a href="ch04.html#sec-4-2">4.2 バッファテーブル</a></li>
+            <li><a href="ch04.html#sec-4-3">4.3 パーティションとロック</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch05.html">第5章 ページ探索と置換アルゴリズム</a>
+          <ol class="sect">
+            <li><a href="ch05.html#sec-5-1">5.1 ReadBuffer の流れ</a></li>
+            <li><a href="ch05.html#sec-5-2">5.2 BufferAlloc</a></li>
+            <li><a href="ch05.html#sec-5-3">5.3 クロックスイープ</a></li>
+          </ol>
+        </li>
+        <li class="current">
+          <a class="chap-title" href="ch06.html">第6章 観察と運用</a>
+          <ol class="sect">
+            <li><a class="current" href="ch06.html#sec-6-1">6.1 pg_buffercache で覗く</a></li>
+            <li><a href="ch06.html#sec-6-2">6.2 共有メモリの割り当て</a></li>
+            <li><a href="ch06.html#sec-6-3">6.3 サイズ設定の指針</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第6章　観察と運用</h1>
+
+        <p>
+          最終章では、これまで見てきた共有バッファの内部状態を実際に観察する手段と、
+          <code>shared_buffers</code> のサイズを決めるうえでの考え方を扱う。観察には標準で同梱される
+          拡張 <code>pg_buffercache</code> と、システムビュー <code>pg_shmem_allocations</code> が役立つ。
+        </p>
+
+        <h2 id="sec-6-1">6.1　pg_buffercache でバッファプールを覗く</h2>
+        <p>
+          拡張 <code>pg_buffercache</code> を導入すると、共有バッファの各スロットの状態（タグ・ダーティ・
+          ピン数・使用回数）を SQL で一覧できる。これは第3章・第4章で見た <code>BufferDesc</code> の
+          フィールドをほぼそのまま表に展開したものである。
+        </p>
+
+        <div class="example">
+          <span class="example-label">SQL</span>
+          <pre><code>CREATE EXTENSION IF NOT EXISTS pg_buffercache;
+
+-- 何件のバッファが使われ、うちダーティはいくつか
+SELECT count(*) AS total,
+       count(*) FILTER (WHERE relfilenode IS NOT NULL) AS used,
+       count(*) FILTER (WHERE isdirty) AS dirty
+FROM pg_buffercache;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label">実行結果</span>
+          <pre><code> total | used | dirty
+-------+------+-------
+ 16384 |  142 |     7</code></pre>
+        </div>
+
+        <p>
+          <code>total</code> が <code>NBuffers</code>（既定 16384）と一致する点に注目してほしい。
+          バッファ単位で <code>usagecount</code>（使用回数、第3章）も見える。クロックスイープが
+          参照するこの値が、ホットなページで高くなることを確認できる。
+        </p>
+
+        <div class="example">
+          <span class="example-label">SQL</span>
+          <pre><code>SELECT c.relname, count(*) AS buffers,
+       round(avg(b.usagecount), 1) AS avg_usage
+FROM pg_buffercache b
+JOIN pg_class c ON b.relfilenode = pg_relation_filenode(c.oid)
+WHERE b.reldatabase = (SELECT oid FROM pg_database
+                       WHERE datname = current_database())
+GROUP BY c.relname
+ORDER BY buffers DESC
+LIMIT 5;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label">実行結果</span>
+          <pre><code>   relname    | buffers | avg_usage
+--------------+---------+-----------
+ accounts     |      88 |       4.2
+ accounts_pkey|      31 |       3.0
+ tellers      |       5 |       5.0</code></pre>
+        </div>
+
+        <h2 id="sec-6-2">6.2　共有メモリの割り当てを確認する</h2>
+        <p>
+          第2章で見た各配列が共有メモリ上で実際にどれだけの領域を占めているかは、
+          <code>pg_shmem_allocations</code> で確認できる。<code>BufferManagerShmemRequest()</code> が
+          申告した名前（"Buffer Blocks" など）がそのまま行として現れる。
+        </p>
+
+        <div class="example">
+          <span class="example-label">SQL</span>
+          <pre><code>SELECT name, pg_size_pretty(allocated_size) AS size
+FROM pg_shmem_allocations
+WHERE name LIKE 'Buffer%' OR name = 'Buffer Descriptors'
+ORDER BY allocated_size DESC;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label">実行結果（shared_buffers = 128MB の例）</span>
+          <pre><code>         name          |  size
+-----------------------+--------
+ Buffer Blocks         | 128 MB
+ Buffer Descriptors    | 1024 kB
+ Buffer IO Condition Variables | 256 kB
+ Checkpoint BufferIds  | 320 kB</code></pre>
+        </div>
+
+        <p>
+          "Buffer Blocks" が <code>shared_buffers</code> とほぼ等しく、これがページ本体の領域である。
+          残りは記述子や条件変数などの管理領域で、いずれも <code>NBuffers</code> に比例する。
+          <code>shared_buffers</code> を増やすと、本体だけでなくこれらの付随領域も増える点を
+          見積もりに入れておくとよい。
+        </p>
+
+        <h2 id="sec-6-3">6.3　サイズ設定の指針と注意</h2>
+        <p>
+          <code>shared_buffers</code> のサイズ選定は、本ドキュメントで見た仕組みから次のように整理できる。
+        </p>
+        <ul>
+          <li><strong>再起動が必要</strong>：<code>PGC_POSTMASTER</code> のため、変更はサーバ再起動でのみ反映される（第1章）。</li>
+          <li><strong>大きすぎる弊害</strong>：物理メモリを圧迫し、OS のページキャッシュと二重キャッシュになりうる。クロックスイープが一周するコストや、チェックポイント時の書き出し量も増える。</li>
+          <li><strong>小さすぎる弊害</strong>：ヒット率が下がり、置換のたびにダーティページの書き出し（第5章）やディスク読み込みが頻発する。</li>
+          <li><strong>付随コスト</strong>：記述子・バッファテーブルなどの管理領域も <code>NBuffers</code> に比例して増える（6.2）。</li>
+        </ul>
+
+        <div class="warn"><strong>注意</strong>一般によく言われる「物理メモリの 25% 程度から始める」という目安は
+        出発点にすぎない。実際には <code>pg_buffercache</code> によるヒット状況や使用回数の分布、
+        ワークロードの作業集合（working set）の大きさを観察し、計測に基づいて調整するのが望ましい。</div>
+
+        <p>
+          本ドキュメントでは、<code>shared_buffers</code>（=<code>NBuffers</code>）が共有メモリ上の
+          バッファプールを定めること、そのプールが記述子・ページ本体・バッファテーブルといった
+          構造から成ること、そしてページ探索とクロックスイープによる置換がどう動くかを、
+          PostgreSQL 19beta1 のソースに即して見てきた。共有バッファはバッファマネージャという
+          より大きな仕組みの中核であり、WAL・チェックポイント・バックグラウンドライタとの連携を
+          さらに追うことで、PostgreSQL の I/O 全体像の理解が深まるだろう。
+        </p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch05.html">
+          <span class="dir">← 前の章</span>
+          <span class="ttl">第5章 ページ探索と置換アルゴリズム</span>
+        </a>
+        <a class="up" href="index.html">
+          <span class="dir">↑ 目次</span>
+          <span class="ttl">トップページ</span>
+        </a>
+        <span class="pager-spacer" aria-hidden="true"></span>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風 内部構造ドキュメント — PostgreSQL 19beta1 · 031904048aa</footer>
+</body>
+</html>

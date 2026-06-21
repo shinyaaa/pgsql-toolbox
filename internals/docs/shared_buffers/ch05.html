@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章 ページ探索と置換アルゴリズム | 共有バッファ（shared_buffers）の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">共有バッファ（shared_buffers）の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li>
+          <a class="chap-title" href="ch01.html">第1章 shared_buffers とは</a>
+          <ol class="sect">
+            <li><a href="ch01.html#sec-1-1">1.1 共有バッファの役割</a></li>
+            <li><a href="ch01.html#sec-1-2">1.2 GUC パラメータとしての定義</a></li>
+            <li><a href="ch01.html#sec-1-3">1.3 NBuffers と単位の換算</a></li>
+            <li><a href="ch01.html#sec-1-4">1.4 共有メモリ上の位置づけ</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch02.html">第2章 バッファプールのメモリ構造</a>
+          <ol class="sect">
+            <li><a href="ch02.html#sec-2-1">2.1 4つの配列</a></li>
+            <li><a href="ch02.html#sec-2-2">2.2 共有メモリの確保</a></li>
+            <li><a href="ch02.html#sec-2-3">2.3 Buffer 番号と buf_id</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch03.html">第3章 バッファ記述子 BufferDesc</a>
+          <ol class="sect">
+            <li><a href="ch03.html#sec-3-1">3.1 BufferDesc の構造</a></li>
+            <li><a href="ch03.html#sec-3-2">3.2 state に詰め込まれた状態</a></li>
+            <li><a href="ch03.html#sec-3-3">3.3 フラグ一覧</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch04.html">第4章 バッファタグとバッファテーブル</a>
+          <ol class="sect">
+            <li><a href="ch04.html#sec-4-1">4.1 BufferTag</a></li>
+            <li><a href="ch04.html#sec-4-2">4.2 バッファテーブル</a></li>
+            <li><a href="ch04.html#sec-4-3">4.3 パーティションとロック</a></li>
+          </ol>
+        </li>
+        <li class="current">
+          <a class="chap-title" href="ch05.html">第5章 ページ探索と置換アルゴリズム</a>
+          <ol class="sect">
+            <li><a class="current" href="ch05.html#sec-5-1">5.1 ReadBuffer の流れ</a></li>
+            <li><a href="ch05.html#sec-5-2">5.2 BufferAlloc</a></li>
+            <li><a href="ch05.html#sec-5-3">5.3 クロックスイープ</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch06.html">第6章 観察と運用</a>
+          <ol class="sect">
+            <li><a href="ch06.html#sec-6-1">6.1 pg_buffercache で覗く</a></li>
+            <li><a href="ch06.html#sec-6-2">6.2 共有メモリの割り当て</a></li>
+            <li><a href="ch06.html#sec-6-3">6.3 サイズ設定の指針</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第5章　ページ探索と置換アルゴリズム</h1>
+
+        <p>
+          これまでに見たデータ構造（記述子・タグ・バッファテーブル）が、実際のページ読み込みで
+          どう協調するかを本章で追う。あるページがバッファにあればそれを返し（ヒット）、無ければ
+          空きスロットを確保してディスクから読み込む（ミス）。空きが無ければ既存のページを
+          追い出す必要があり、その犠牲を選ぶのが<strong>クロックスイープ</strong>である。
+        </p>
+
+        <h2 id="sec-5-1">5.1　ReadBuffer の流れ</h2>
+        <p>
+          バックエンドがページを要求する入口は <code>ReadBuffer()</code> / <code>ReadBufferExtended()</code> で、
+          実体は
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/bufmgr.c#L1276"><code>ReadBuffer_common()</code></a>
+          に集約される。要求は最終的に
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/bufmgr.c#L2197"><code>BufferAlloc()</code></a>
+          へ渡され、ヒット／ミスの判定と必要なスロット確保が行われる。図 5.1 に全体像を示す。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+sequenceDiagram
+    participant BE as バックエンド
+    participant RB as ReadBuffer_common()
+    participant BA as BufferAlloc()
+    participant SM as ストレージ
+    BE->>RB: ページ要求 (rel, fork, block)
+    RB->>BA: バッファ確保を依頼
+    alt バッファプールにある (ヒット)
+        BA-->>RB: 既存バッファをピンして返す
+    else 無い (ミス)
+        BA->>BA: 犠牲バッファを確保しタグ登録
+        BA-->>RB: 空のバッファを返す (要読み込み)
+        RB->>SM: ディスクからページ読込
+        SM-->>RB: 8KB ページ
+        RB->>RB: バッファへ格納し BM_VALID を立てる
+    end
+    RB-->>BE: Buffer 番号
+          </pre>
+          <figcaption>図 5.1: ReadBuffer におけるヒット／ミスの分岐</figcaption>
+        </figure>
+
+        <h2 id="sec-5-2">5.2　BufferAlloc — 探索と登録</h2>
+        <p>
+          <code>BufferAlloc()</code> はまず要求ページのタグを作り、ハッシュ値とパーティションロックを
+          求める（第4章）。そのうえで図 5.2 の手順を踏む。要点は、まず共有ロックで素早く存在確認し、
+          ミス時のみ犠牲バッファを確保して排他ロックで登録する点である。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+flowchart TB
+    START["BufferAlloc(tag)"] --> HASH["ハッシュ値・パーティションロック算出"]
+    HASH --> SLOCK["マッピングロックを共有取得"]
+    SLOCK --> LOOKUP{"BufTableLookup\nヒット?"}
+    LOOKUP -->|"はい"| PIN["PinBuffer でピン → 返す"]
+    LOOKUP -->|"いいえ"| UNLOCK["ロック解放"]
+    UNLOCK --> VICTIM["GetVictimBuffer で犠牲確保"]
+    VICTIM --> XLOCK["マッピングロックを排他取得"]
+    XLOCK --> INS{"BufTableInsert\n衝突?"}
+    INS -->|"他が登録済み"| UNPIN["犠牲を返却し既存を使う"]
+    INS -->|"成功"| SETTAG["犠牲バッファにタグ設定 → 返す"]
+          </pre>
+          <figcaption>図 5.2: BufferAlloc の探索・置換・登録フロー</figcaption>
+        </figure>
+
+        <p>
+          ヒット時は <code>PinBuffer()</code> でピンを立て、マッピングロックを解放して即座に返す。
+          ミス時は <code>GetVictimBuffer()</code>
+          （<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/bufmgr.c#L2548"><code>bufmgr.c</code></a>）
+          で置換先（犠牲バッファ）を1つ確保する。確保後、排他ロックのもとで <code>BufTableInsert()</code> を
+          試みるが、その間に別バックエンドが同じページを登録してしまうこともある。その場合は確保した
+          犠牲バッファを返却し、既存のものを使う（図 5.2 の「衝突」分岐）。ロックを保持したまま
+          ディスク I/O をしないこの設計が、競合下でも高い並行性を保つ鍵である。
+        </p>
+
+        <div class="note"><strong>メモ</strong>犠牲バッファが <code>BM_DIRTY</code> だった場合、再利用する前にその内容を
+        ディスクへ書き出す必要がある。<code>GetVictimBuffer()</code> はこの書き出しも面倒を見る。したがって
+        共有バッファが小さくダーティページが多いと、読み込みのたびに書き出しが誘発され遅くなりうる。</div>
+
+        <h2 id="sec-5-3">5.3　クロックスイープによる犠牲選択</h2>
+        <p>
+          置換先を選ぶアルゴリズムが<strong>クロックスイープ（clock sweep）</strong>である。実装は
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/freelist.c#L183"><code>StrategyGetBuffer()</code></a>
+          にある。全バッファを円環に見立て、針（<code>nextVictimBuffer</code>）を回しながら、各バッファの
+          <code>usagecount</code> を1ずつ減らしていく。ピンされておらず <code>usagecount</code> が 0 になった
+          バッファが犠牲として選ばれる。図 5.3 にこの動作を示す。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+flowchart TB
+    START["StrategyGetBuffer()"] --> TICK["ClockSweepTick()\n針を1つ進める"]
+    TICK --> PINNED{"ピンされている?\n(refcount > 0)"}
+    PINNED -->|"はい"| TICK
+    PINNED -->|"いいえ"| UC{"usagecount > 0 ?"}
+    UC -->|"はい"| DEC["usagecount を 1 減らす"]
+    DEC --> TICK
+    UC -->|"いいえ (=0)"| WIN["このバッファを犠牲に選ぶ"]
+          </pre>
+          <figcaption>図 5.3: クロックスイープによる犠牲バッファ選択</figcaption>
+        </figure>
+
+        <p>
+          針を進めるのは
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/freelist.c#L110"><code>ClockSweepTick()</code></a>
+          で、<code>nextVictimBuffer</code> をアトミックに加算し <code>NBuffers</code> で割った剰余を次の候補とする。
+          バッファはアクセスされるたびに <code>usagecount</code> が増える（上限 <code>BM_MAX_USAGE_COUNT = 5</code>）
+          ため、よく使われるページほど針が来ても生き残りやすい。これにより、おおまかに「最近よく
+          使われたページを残す」LRU 的な挙動を、軽量に近似する。
+        </p>
+
+        <div class="info"><strong>関連</strong>PostgreSQL 18 以降、かつて存在した<strong>フリーリスト</strong>
+        （未使用バッファの連結リスト）は廃止され、空きバッファの取得もクロックスイープに一本化された。
+        本バージョン（19beta1）の <code>BufferDesc</code> に <code>freeNext</code> フィールドが無く、
+        <code>StrategyControl</code> も針（<code>nextVictimBuffer</code>）と周回数（<code>completePasses</code>）を
+        中心とした構造になっているのはそのためである。</div>
+
+        <p>
+          もし全バッファがピンされていて一周しても犠牲が見つからない場合、<code>StrategyGetBuffer()</code> は
+          無限ループを避けるため <code>"no unpinned buffers available"</code> のエラーを発生させる。通常の
+          運用でこの状態に陥ることはまず無いが、極端に小さい <code>shared_buffers</code> と高い並行度の
+          組み合わせでは理論上あり得る。次章では、こうした内部状態を実際に観察する方法を扱う。
+        </p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch04.html">
+          <span class="dir">← 前の章</span>
+          <span class="ttl">第4章 バッファタグとバッファテーブル</span>
+        </a>
+        <a class="up" href="index.html">
+          <span class="dir">↑ 目次</span>
+          <span class="ttl">トップページ</span>
+        </a>
+        <a class="next" href="ch06.html">
+          <span class="dir">次の章 →</span>
+          <span class="ttl">第6章 観察と運用</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風 内部構造ドキュメント — PostgreSQL 19beta1 · 031904048aa</footer>
+</body>
+</html>
