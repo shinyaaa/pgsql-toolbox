@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第1章 shared_buffers とは | 共有バッファ（shared_buffers）の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">共有バッファ（shared_buffers）の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li class="current">
+          <a class="chap-title" href="ch01.html">第1章 shared_buffers とは</a>
+          <ol class="sect">
+            <li><a class="current" href="ch01.html#sec-1-1">1.1 共有バッファの役割</a></li>
+            <li><a href="ch01.html#sec-1-2">1.2 GUC パラメータとしての定義</a></li>
+            <li><a href="ch01.html#sec-1-3">1.3 NBuffers と単位の換算</a></li>
+            <li><a href="ch01.html#sec-1-4">1.4 共有メモリ上の位置づけ</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch02.html">第2章 バッファプールのメモリ構造</a>
+          <ol class="sect">
+            <li><a href="ch02.html#sec-2-1">2.1 4つの配列</a></li>
+            <li><a href="ch02.html#sec-2-2">2.2 共有メモリの確保</a></li>
+            <li><a href="ch02.html#sec-2-3">2.3 Buffer 番号と buf_id</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch03.html">第3章 バッファ記述子 BufferDesc</a>
+          <ol class="sect">
+            <li><a href="ch03.html#sec-3-1">3.1 BufferDesc の構造</a></li>
+            <li><a href="ch03.html#sec-3-2">3.2 state に詰め込まれた状態</a></li>
+            <li><a href="ch03.html#sec-3-3">3.3 フラグ一覧</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch04.html">第4章 バッファタグとバッファテーブル</a>
+          <ol class="sect">
+            <li><a href="ch04.html#sec-4-1">4.1 BufferTag</a></li>
+            <li><a href="ch04.html#sec-4-2">4.2 バッファテーブル</a></li>
+            <li><a href="ch04.html#sec-4-3">4.3 パーティションとロック</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch05.html">第5章 ページ探索と置換アルゴリズム</a>
+          <ol class="sect">
+            <li><a href="ch05.html#sec-5-1">5.1 ReadBuffer の流れ</a></li>
+            <li><a href="ch05.html#sec-5-2">5.2 BufferAlloc</a></li>
+            <li><a href="ch05.html#sec-5-3">5.3 クロックスイープ</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch06.html">第6章 観察と運用</a>
+          <ol class="sect">
+            <li><a href="ch06.html#sec-6-1">6.1 pg_buffercache で覗く</a></li>
+            <li><a href="ch06.html#sec-6-2">6.2 共有メモリの割り当て</a></li>
+            <li><a href="ch06.html#sec-6-3">6.3 サイズ設定の指針</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第1章　shared_buffers とは</h1>
+
+        <p>
+          <code>shared_buffers</code> は、PostgreSQL がディスク上のページ（既定 8KB）を
+          メモリ上にキャッシュするために確保する<strong>共有バッファプール</strong>の大きさを決める
+          設定パラメータである。すべてのバックエンドプロセスはこの共有メモリ領域を通じてテーブルや
+          インデックスのページを読み書きするため、<code>shared_buffers</code> はインスタンス全体の
+          I/O 効率を左右する最重要パラメータのひとつである。
+        </p>
+        <p>
+          本章では、まず共有バッファが果たす役割を概観し、続いて <code>shared_buffers</code> が
+          PostgreSQL 内部でどのように定義され（GUC 変数 <code>NBuffers</code>）、共有メモリのどこに
+          位置づけられるかを確認する。バッファプールの内部データ構造そのものは第2章以降で扱う。
+        </p>
+
+        <h2 id="sec-1-1">1.1　共有バッファの役割</h2>
+        <p>
+          PostgreSQL はテーブルやインデックスのデータを 8KB 単位のページ（ブロック）で管理する。
+          バックエンドがあるページを必要とするとき、毎回ディスクへアクセスしていては遅い。そこで、
+          一度読み込んだページを共有メモリ上に保持し、次回以降はメモリから直接返す仕組みを持つ。
+          この共有メモリ上のキャッシュ領域が共有バッファプールであり、その管理を担うサブシステムを
+          <strong>バッファマネージャ（buffer manager）</strong>と呼ぶ。
+        </p>
+        <p>
+          共有バッファは図 1.1 に示すように、バックエンドとストレージの間に位置する。読み込み時は
+          まず共有バッファを探索し（キャッシュヒット）、なければストレージから読み込んで空きスロットへ
+          格納する。書き込みも一旦共有バッファ上のページを変更（ダーティ化）するだけで完了し、
+          実際のディスクへの反映はチェックポイントやバックグラウンドライタが後で行う。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+flowchart LR
+    subgraph BE["バックエンド群"]
+        B1["backend 1"]
+        B2["backend 2"]
+        B3["backend N"]
+    end
+    subgraph SB["共有バッファプール (shared_buffers)"]
+        P1["page"]
+        P2["page"]
+        P3["page"]
+        P4["..."]
+    end
+    DISK[("ストレージ\n(データファイル)")]
+    B1 --> SB
+    B2 --> SB
+    B3 --> SB
+    SB <--> DISK
+          </pre>
+          <figcaption>図 1.1: 共有バッファプールはバックエンドとストレージの間でページをキャッシュする</figcaption>
+        </figure>
+
+        <p>
+          共有バッファのおかげで、ホットなページへの繰り返しアクセスはディスク I/O を伴わずに済む。
+          一方で、確保したメモリは PostgreSQL 起動中ずっと占有されるため、物理メモリとの兼ね合いで
+          適切な大きさを選ぶ必要がある。サイズ設定の指針は第6章で扱う。
+        </p>
+
+        <h2 id="sec-1-2">1.2　GUC パラメータとしての定義</h2>
+        <p>
+          <code>shared_buffers</code> は他の設定パラメータと同様、GUC（Grand Unified Configuration）
+          として定義されている。PostgreSQL 19 では GUC 定義はデータファイル
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/misc/guc_parameters.dat#L2704"><code>guc_parameters.dat</code></a>
+          に記述され、ビルド時にテーブルが生成される。<code>shared_buffers</code> の定義は次のとおりである。
+        </p>
+
+        <div class="example">
+          <span class="example-label">guc_parameters.dat（抜粋）</span>
+          <pre><code>{ name =&gt; 'shared_buffers', type =&gt; 'int', context =&gt; 'PGC_POSTMASTER', group =&gt; 'RESOURCES_MEM',
+  short_desc =&gt; 'Sets the number of shared memory buffers used by the server.',
+  flags =&gt; 'GUC_UNIT_BLOCKS',
+  variable =&gt; 'NBuffers',
+  boot_val =&gt; '16384',
+  min =&gt; '16',
+  max =&gt; 'INT_MAX / 2',
+},</code></pre>
+        </div>
+
+        <p>この定義から、<code>shared_buffers</code> の性質が読み取れる。</p>
+        <ul>
+          <li><strong>type = int / variable = NBuffers</strong>：整数型で、値はC変数 <code>NBuffers</code> に格納される。</li>
+          <li><strong>context = PGC_POSTMASTER</strong>：postmaster 起動時にのみ設定可能で、稼働中の変更には<strong>サーバ再起動が必要</strong>である。</li>
+          <li><strong>flags = GUC_UNIT_BLOCKS</strong>：値の単位はブロック（既定 8KB）であり、<code>128MB</code> のように単位付きで指定すると内部でブロック数へ換算される。</li>
+          <li><strong>boot_val = 16384</strong>：既定値は 16384 ブロック、すなわち <code>16384 × 8KB = 128MB</code>。</li>
+          <li><strong>min = 16</strong>：最小16ブロック。<strong>max = INT_MAX / 2</strong>：上限はおよそ 10 億ブロック。</li>
+          <li><strong>group = RESOURCES_MEM</strong>：「資源／メモリ」カテゴリに属する。</li>
+        </ul>
+
+        <div class="note"><strong>メモ</strong>context が <code>PGC_POSTMASTER</code> であることは重要である。共有バッファプールは
+        起動時に一括して共有メモリ上に確保され、その後サイズを変えられない。<code>postgresql.conf</code> で
+        値を変更しても、再起動するまで反映されない。</div>
+
+        <h2 id="sec-1-3">1.3　NBuffers と単位の換算</h2>
+        <p>
+          設定値の実体は <code>int NBuffers</code> という大域変数である。宣言は
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/miscadmin.h#L178"><code>miscadmin.h</code></a>
+          にあり、バッファマネージャ全体がこの値を「バッファの個数」として参照する。たとえば後述する
+          バッファ記述子配列やバッファブロック配列は、いずれも要素数 <code>NBuffers</code> で確保される。
+        </p>
+        <p>
+          <code>shared_buffers</code> が単位付き（バイト）で表示・指定されるのに対し、<code>NBuffers</code> は
+          純粋な個数である。両者は図 1.2 の関係で換算される。ブロックサイズ <code>BLCKSZ</code> は
+          ビルド時定数で、既定では 8192 バイトである。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+flowchart LR
+    A["shared_buffers\n例: 128MB"] -->|"÷ BLCKSZ (8KB)"| B["NBuffers\n= 16384"]
+    B -->|"× BLCKSZ (8KB)"| C["バッファプール本体\n= 128MB"]
+          </pre>
+          <figcaption>図 1.2: shared_buffers（バイト）と NBuffers（個数）の換算</figcaption>
+        </figure>
+
+        <p>
+          設定値は <code>pg_settings</code> や <code>SHOW</code> で確認できる。<code>shared_buffers</code> は
+          ブロック単位だが、表示は人間に読みやすい単位へ整形される。
+        </p>
+
+        <div class="example">
+          <span class="example-label">SQL</span>
+          <pre><code>SHOW shared_buffers;
+SELECT setting, unit FROM pg_settings WHERE name = 'shared_buffers';</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label">実行結果</span>
+          <pre><code> shared_buffers
+----------------
+ 128MB
+
+ setting | unit
+---------+------
+ 16384   | 8kB</code></pre>
+        </div>
+
+        <p>
+          <code>pg_settings</code> では <code>setting</code> が 16384、<code>unit</code> が <code>8kB</code> と表示され、
+          内部の <code>NBuffers</code> の値そのものが見えている。<code>16384 × 8kB = 128MB</code> が
+          <code>SHOW</code> の表示と一致することが確認できる。
+        </p>
+
+        <h2 id="sec-1-4">1.4　共有メモリ上の位置づけ</h2>
+        <p>
+          PostgreSQL は起動時に1つの大きな共有メモリセグメントを確保し、その中に各サブシステムが
+          必要とする領域を切り出していく。共有バッファプールはその中でも最大の領域を占めることが多い。
+          バッファマネージャは <code>BufferManagerShmemRequest()</code>（後述）で必要量を申告し、
+          確保された領域へ各配列のポインタを割り付ける。
+        </p>
+        <p>
+          図 1.3 に共有メモリの大まかな内訳を示す。<code>shared_buffers</code> を大きくすると、
+          バッファブロック本体だけでなく、それに付随するバッファ記述子やバッファテーブルなどの
+          管理領域も <code>NBuffers</code> に比例して増える。これらの内訳は第2章で詳説する。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+flowchart TB
+    subgraph SHMEM["共有メモリセグメント"]
+        BLOCKS["Buffer Blocks\n(NBuffers × 8KB) ← 本体"]
+        DESC["Buffer Descriptors\n(NBuffers 個)"]
+        TABLE["Buffer Mapping Table\n(SharedBufHash)"]
+        IOCV["Buffer IO CVs / Checkpoint BufferIds"]
+        OTHER["その他\n(WALバッファ・ロック・各種)"]
+    end
+          </pre>
+          <figcaption>図 1.3: 共有メモリ内における共有バッファ関連領域の位置づけ</figcaption>
+        </figure>
+
+        <p>
+          以上で <code>shared_buffers</code> の正体（GUC 変数 <code>NBuffers</code>）と、それが共有メモリ上の
+          バッファプールを決めることを確認した。次章では、そのバッファプールが具体的にどのような
+          配列の集まりで構成されているかを見ていく。
+        </p>
+      </article>
+      <nav class="pager">
+        <span class="pager-spacer" aria-hidden="true"></span>
+        <a class="up" href="index.html">
+          <span class="dir">↑ 目次</span>
+          <span class="ttl">トップページ</span>
+        </a>
+        <a class="next" href="ch02.html">
+          <span class="dir">次の章 →</span>
+          <span class="ttl">第2章 バッファプールのメモリ構造</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風 内部構造ドキュメント — PostgreSQL 19beta1 · 031904048aa</footer>
+</body>
+</html>

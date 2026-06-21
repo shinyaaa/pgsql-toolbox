@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第2章 バッファプールのメモリ構造 | 共有バッファ（shared_buffers）の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">共有バッファ（shared_buffers）の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li>
+          <a class="chap-title" href="ch01.html">第1章 shared_buffers とは</a>
+          <ol class="sect">
+            <li><a href="ch01.html#sec-1-1">1.1 共有バッファの役割</a></li>
+            <li><a href="ch01.html#sec-1-2">1.2 GUC パラメータとしての定義</a></li>
+            <li><a href="ch01.html#sec-1-3">1.3 NBuffers と単位の換算</a></li>
+            <li><a href="ch01.html#sec-1-4">1.4 共有メモリ上の位置づけ</a></li>
+          </ol>
+        </li>
+        <li class="current">
+          <a class="chap-title" href="ch02.html">第2章 バッファプールのメモリ構造</a>
+          <ol class="sect">
+            <li><a class="current" href="ch02.html#sec-2-1">2.1 4つの配列</a></li>
+            <li><a href="ch02.html#sec-2-2">2.2 共有メモリの確保</a></li>
+            <li><a href="ch02.html#sec-2-3">2.3 Buffer 番号と buf_id</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch03.html">第3章 バッファ記述子 BufferDesc</a>
+          <ol class="sect">
+            <li><a href="ch03.html#sec-3-1">3.1 BufferDesc の構造</a></li>
+            <li><a href="ch03.html#sec-3-2">3.2 state に詰め込まれた状態</a></li>
+            <li><a href="ch03.html#sec-3-3">3.3 フラグ一覧</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch04.html">第4章 バッファタグとバッファテーブル</a>
+          <ol class="sect">
+            <li><a href="ch04.html#sec-4-1">4.1 BufferTag</a></li>
+            <li><a href="ch04.html#sec-4-2">4.2 バッファテーブル</a></li>
+            <li><a href="ch04.html#sec-4-3">4.3 パーティションとロック</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch05.html">第5章 ページ探索と置換アルゴリズム</a>
+          <ol class="sect">
+            <li><a href="ch05.html#sec-5-1">5.1 ReadBuffer の流れ</a></li>
+            <li><a href="ch05.html#sec-5-2">5.2 BufferAlloc</a></li>
+            <li><a href="ch05.html#sec-5-3">5.3 クロックスイープ</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch06.html">第6章 観察と運用</a>
+          <ol class="sect">
+            <li><a href="ch06.html#sec-6-1">6.1 pg_buffercache で覗く</a></li>
+            <li><a href="ch06.html#sec-6-2">6.2 共有メモリの割り当て</a></li>
+            <li><a href="ch06.html#sec-6-3">6.3 サイズ設定の指針</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第2章　バッファプールのメモリ構造</h1>
+
+        <p>
+          「共有バッファプール」と一口に言うが、その実体はページ本体を格納する1つの配列だけではない。
+          各ページの状態を管理する記述子配列、I/O 待ちのための条件変数配列、チェックポイント用の
+          ソート領域など、複数の配列が <code>NBuffers</code> を要素数として並んでいる。本章では、これらの
+          配列がどのように確保され、互いにどう対応づけられるかを見る。
+        </p>
+        <p>
+          実装は主に
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/buf_init.c"><code>buf_init.c</code></a>
+          にある。
+        </p>
+
+        <h2 id="sec-2-1">2.1　バッファプールを構成する4つの配列</h2>
+        <p>
+          バッファマネージャは、共有メモリ上に図 2.1 の4つの配列を確保する。いずれも要素数は
+          <code>NBuffers</code> で、同じ添字 <code>i</code> が同じ1つのバッファスロットに対応する。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+flowchart TB
+    subgraph POOL["共有バッファプール (要素数はすべて NBuffers)"]
+        direction LR
+        D["BufferDescriptors[i]\nバッファ記述子\n(タグ・状態)"]
+        B["BufferBlocks[i]\nページ本体 (8KB)"]
+        C["BufferIOCVArray[i]\nI/O 条件変数"]
+        K["CkptBufferIds[i]\nチェックポイント用ソート領域"]
+    end
+    D -. "同じ添字 i" .- B
+    B -. "同じ添字 i" .- C
+          </pre>
+          <figcaption>図 2.1: 共有バッファプールを構成する4つの配列（同じ添字が同一スロットを指す）</figcaption>
+        </figure>
+
+        <ul>
+          <li>
+            <strong><a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/buf_init.c#L24"><code>BufferDescriptors</code></a></strong>：
+            各バッファの<strong>記述子</strong>（メタデータ）の配列。どのページを保持しているか（タグ）や、
+            ピン数・使用回数・各種フラグといった状態を持つ。型は <code>BufferDescPadded</code>。第3章で詳説する。
+          </li>
+          <li>
+            <strong><a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/buf_init.c#L25"><code>BufferBlocks</code></a></strong>：
+            ページ<strong>本体</strong>を格納する領域。<code>NBuffers × BLCKSZ</code> バイトの連続領域で、
+            これが <code>shared_buffers</code> のバイト数の主たる中身である。
+          </li>
+          <li>
+            <strong><a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/buf_init.c#L26"><code>BufferIOCVArray</code></a></strong>：
+            バッファごとの<strong>I/O 完了待ち条件変数</strong>（<code>ConditionVariable</code>）の配列。
+            あるバッファへページを読み込んでいる最中、他プロセスが完了を待つために使う。
+          </li>
+          <li>
+            <strong><a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/buf_init.c#L28"><code>CkptBufferIds</code></a></strong>：
+            チェックポイント時に、書き出すバッファ ID を並べ替えるための<strong>作業領域</strong>。
+            チェックポイント中の動的メモリ確保を避けるため、あらかじめ共有メモリに置く。
+          </li>
+        </ul>
+
+        <div class="note"><strong>メモ</strong>記述子（メタデータ）とページ本体を別配列に分けるのは、状態だけを操作する
+        処理（ピン取得や状態フラグの確認）が、巨大なページ本体をキャッシュに載せずに済むようにするためである。
+        記述子は小さくキャッシュラインに整列され、頻繁な状態更新を効率化する。</div>
+
+        <h2 id="sec-2-2">2.2　共有メモリの確保</h2>
+        <p>
+          これらの配列は、起動時に2段階で準備される。まず
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/buf_init.c#L76"><code>BufferManagerShmemRequest()</code></a>
+          が必要なバイト数を申告し、続いて
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/storage/buffer/buf_init.c#L119"><code>BufferManagerShmemInit()</code></a>
+          が確保された領域に対して各記述子を初期化する。図 2.2 にその流れを示す。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+sequenceDiagram
+    participant PM as postmaster (起動)
+    participant REQ as BufferManagerShmemRequest()
+    participant SHM as 共有メモリ
+    participant INIT as BufferManagerShmemInit()
+    PM->>REQ: 必要量を問い合わせ
+    REQ->>SHM: Buffer Descriptors (NBuffers × 記述子)
+    REQ->>SHM: Buffer Blocks (NBuffers × 8KB)
+    REQ->>SHM: Buffer IO CVs (NBuffers 個)
+    REQ->>SHM: Checkpoint BufferIds (NBuffers 個)
+    PM->>INIT: 領域確保後に初期化
+    loop i = 0 .. NBuffers-1
+        INIT->>SHM: タグをクリア・state=0・buf_id=i を設定
+    end
+          </pre>
+          <figcaption>図 2.2: 共有バッファ関連領域の確保と初期化の流れ</figcaption>
+        </figure>
+
+        <p>
+          各領域の確保には整列（alignment）の指定が伴う。記述子と条件変数は <code>PG_CACHE_LINE_SIZE</code>
+          境界に、ページ本体は <code>PG_IO_ALIGN_SIZE</code>（I/O ページサイズ）境界に揃えられる。
+          ソース上の申告は次のようになっている。
+        </p>
+
+        <div class="example">
+          <span class="example-label">buf_init.c（抜粋）</span>
+          <pre><code>ShmemRequestStruct(.name = "Buffer Descriptors",
+                   .size = NBuffers * sizeof(BufferDescPadded),
+                   .alignment = PG_CACHE_LINE_SIZE,   /* キャッシュライン整列 */
+                   .ptr = (void **) &amp;BufferDescriptors);
+
+ShmemRequestStruct(.name = "Buffer Blocks",
+                   .size = NBuffers * (Size) BLCKSZ,
+                   .alignment = PG_IO_ALIGN_SIZE,     /* I/Oページ整列 */
+                   .ptr = (void **) &amp;BufferBlocks);</code></pre>
+        </div>
+
+        <p>
+          初期化ループ（図 2.2 下部）では、すべての記述子についてタグをクリアし、状態 <code>state</code> を 0、
+          そして <code>buf_id</code> に添字 <code>i</code> を設定する。<code>buf_id</code> はこのとき決まり、以後変化しない。
+        </p>
+
+        <h2 id="sec-2-3">2.3　Buffer 番号と buf_id の対応</h2>
+        <p>
+          バッファを指すのに、内部では2つの番号体系が使われる。混同しやすいので整理しておく。
+        </p>
+        <ul>
+          <li><strong>buf_id</strong>：配列の添字。<code>0 〜 NBuffers-1</code> の0始まり。記述子・ブロック・条件変数の各配列をこの値で引く。</li>
+          <li><strong>Buffer</strong>：バッファマネージャの外部 API が用いる番号。共有バッファは <code>1 〜 NBuffers</code> の<strong>1始まり</strong>で、<code>0</code> は <code>InvalidBuffer</code> を表す。</li>
+        </ul>
+        <p>
+          両者の関係は <code>Buffer = buf_id + 1</code> である。図 2.3 にこの対応と、各番号から本体・記述子へ
+          たどる流れを示す。<code>GetBufferDescriptor(buf_id)</code> は <code>BufferDescriptors[buf_id]</code> を、
+          <code>BufferGetBlock(Buffer)</code> は <code>BufferBlocks</code> 上の対応ページを返す。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+flowchart LR
+    BUF["Buffer\n(1始まり, 0=InvalidBuffer)"] -->|"- 1"| ID["buf_id\n(0始まり)"]
+    ID -->|"GetBufferDescriptor(buf_id)"| DESC["BufferDescriptors[buf_id]"]
+    ID -->|"× BLCKSZ"| BLK["BufferBlocks 上の 8KB ページ"]
+          </pre>
+          <figcaption>図 2.3: Buffer 番号（1始まり）と buf_id（0始まり）の対応</figcaption>
+        </figure>
+
+        <p>
+          負の <code>Buffer</code> 番号はローカルバッファ（一時テーブル用の、プロセスローカルなバッファ）を
+          表すが、本ドキュメントでは共有バッファに焦点を当てる。次章では、配列の中でも中心的な
+          <code>BufferDescriptors</code> の各要素、すなわちバッファ記述子の内部を見ていく。
+        </p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch01.html">
+          <span class="dir">← 前の章</span>
+          <span class="ttl">第1章 shared_buffers とは</span>
+        </a>
+        <a class="up" href="index.html">
+          <span class="dir">↑ 目次</span>
+          <span class="ttl">トップページ</span>
+        </a>
+        <a class="next" href="ch03.html">
+          <span class="dir">次の章 →</span>
+          <span class="ttl">第3章 バッファ記述子 BufferDesc</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風 内部構造ドキュメント — PostgreSQL 19beta1 · 031904048aa</footer>
+</body>
+</html>

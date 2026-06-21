@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第3章 バッファ記述子 BufferDesc | 共有バッファ（shared_buffers）の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">共有バッファ（shared_buffers）の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li>
+          <a class="chap-title" href="ch01.html">第1章 shared_buffers とは</a>
+          <ol class="sect">
+            <li><a href="ch01.html#sec-1-1">1.1 共有バッファの役割</a></li>
+            <li><a href="ch01.html#sec-1-2">1.2 GUC パラメータとしての定義</a></li>
+            <li><a href="ch01.html#sec-1-3">1.3 NBuffers と単位の換算</a></li>
+            <li><a href="ch01.html#sec-1-4">1.4 共有メモリ上の位置づけ</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch02.html">第2章 バッファプールのメモリ構造</a>
+          <ol class="sect">
+            <li><a href="ch02.html#sec-2-1">2.1 4つの配列</a></li>
+            <li><a href="ch02.html#sec-2-2">2.2 共有メモリの確保</a></li>
+            <li><a href="ch02.html#sec-2-3">2.3 Buffer 番号と buf_id</a></li>
+          </ol>
+        </li>
+        <li class="current">
+          <a class="chap-title" href="ch03.html">第3章 バッファ記述子 BufferDesc</a>
+          <ol class="sect">
+            <li><a class="current" href="ch03.html#sec-3-1">3.1 BufferDesc の構造</a></li>
+            <li><a href="ch03.html#sec-3-2">3.2 state に詰め込まれた状態</a></li>
+            <li><a href="ch03.html#sec-3-3">3.3 フラグ一覧</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch04.html">第4章 バッファタグとバッファテーブル</a>
+          <ol class="sect">
+            <li><a href="ch04.html#sec-4-1">4.1 BufferTag</a></li>
+            <li><a href="ch04.html#sec-4-2">4.2 バッファテーブル</a></li>
+            <li><a href="ch04.html#sec-4-3">4.3 パーティションとロック</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch05.html">第5章 ページ探索と置換アルゴリズム</a>
+          <ol class="sect">
+            <li><a href="ch05.html#sec-5-1">5.1 ReadBuffer の流れ</a></li>
+            <li><a href="ch05.html#sec-5-2">5.2 BufferAlloc</a></li>
+            <li><a href="ch05.html#sec-5-3">5.3 クロックスイープ</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch06.html">第6章 観察と運用</a>
+          <ol class="sect">
+            <li><a href="ch06.html#sec-6-1">6.1 pg_buffercache で覗く</a></li>
+            <li><a href="ch06.html#sec-6-2">6.2 共有メモリの割り当て</a></li>
+            <li><a href="ch06.html#sec-6-3">6.3 サイズ設定の指針</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第3章　バッファ記述子 BufferDesc</h1>
+
+        <p>
+          バッファ記述子（buffer descriptor）は、1つのバッファスロットのメタデータを保持する構造体
+          <code>BufferDesc</code> である。どのページを保持しているか、いま誰かが使用中か、内容は変更されたか
+          といった情報をすべてここに集約する。本章では <code>BufferDesc</code> の各フィールドと、その大半を
+          占める <code>state</code> 変数のビット割り当てを見る。定義は
+          <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/storage/buf_internals.h#L326"><code>buf_internals.h</code></a>
+          にある。
+        </p>
+
+        <h2 id="sec-3-1">3.1　BufferDesc の構造</h2>
+        <p>
+          <code>BufferDesc</code> は図 3.1 のフィールドを持つ。構造体全体は、性能のため一般的な CPU の
+          キャッシュライン（64 バイト）に収まるよう注意深く設計されている。実際、配列要素は
+          <code>BufferDescPadded</code> としてキャッシュライン境界に整列される。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+classDiagram
+    class BufferDesc {
+        BufferTag tag
+        int buf_id
+        pg_atomic_uint64 state
+        int wait_backend_pgprocno
+        PgAioWaitRef io_wref
+        proclist_head lock_waiters
+    }
+          </pre>
+          <figcaption>図 3.1: BufferDesc のフィールド構成</figcaption>
+        </figure>
+
+        <ul>
+          <li><strong>tag</strong>：このバッファが保持しているディスクページの識別子（<code>BufferTag</code>）。第4章で詳述する。タグの変更にはバッファヘッダロックが必要。</li>
+          <li><strong>buf_id</strong>：バッファの添字（0始まり）。初期化後は不変なのでロック不要で参照できる。</li>
+          <li><strong>state</strong>：フラグ・ピン数（refcount）・使用回数（usagecount）・コンテンツロックを<strong>1つの 64bit 値に詰め込んだ</strong>状態変数。アトミック操作で更新する。次節で詳説。</li>
+          <li><strong>wait_backend_pgprocno</strong>：排他的なピン解放を待っているバックエンドの番号（<code>BM_PIN_COUNT_WAITER</code> と併用）。</li>
+          <li><strong>io_wref</strong>：非同期 I/O（AIO）が進行中のときに設定される待機参照。</li>
+          <li><strong>lock_waiters</strong>：コンテンツロックを待っている <code>PGPROC</code> のリスト。バッファヘッダスピンロックで保護される。</li>
+        </ul>
+
+        <div class="note"><strong>メモ</strong>PostgreSQL 19 では、以前は別の <code>LWLock</code> で実装していた
+        <strong>コンテンツロック</strong>（ページ内容の読み書きを保護するロック）が <code>state</code> に統合された。
+        これにより「ピンを外しつつアンロックする」といった操作を1回のアトミック操作で行えるなど、
+        いくつかの最適化が可能になっている。</div>
+
+        <h2 id="sec-3-2">3.2　state に詰め込まれた状態</h2>
+        <p>
+          <code>state</code> は <code>pg_atomic_uint64</code>（64bit）で、図 3.2 のように複数の情報を
+          ビットフィールドとして格納する。1つの値にまとめることで、たとえばピン数の増減を
+          バッファヘッダをロックせずに CAS（compare-and-swap）ループだけで行える。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+flowchart LR
+    subgraph STATE["pg_atomic_uint64 state (64 bit)"]
+        direction LR
+        R["refcount\n18 bit\n(ピン数)"]
+        U["usagecount\n4 bit\n(使用回数)"]
+        F["flags\n12 bit\n(BM_* 各種)"]
+        L["lock\n20 bit\n(コンテンツロック)"]
+    end
+          </pre>
+          <figcaption>図 3.2: state 64bit のビット割り当て</figcaption>
+        </figure>
+
+        <ul>
+          <li><strong>refcount（18bit）</strong>：このバッファをピン（pin）しているプロセス数。ピンが1以上のバッファは置換対象にできない。取り出しには <code>BUF_STATE_GET_REFCOUNT()</code> を使う。</li>
+          <li><strong>usagecount（4bit）</strong>：直近でどれだけ使われたかを表すカウンタ。クロックスイープ（第5章）で参照され、最大値は <code>BM_MAX_USAGE_COUNT = 5</code>。</li>
+          <li><strong>flags（12bit）</strong>：ダーティか、有効か、タグが割り当て済みかなどを表す各種フラグ（次節）。</li>
+          <li><strong>lock（20bit）</strong>：コンテンツロックの状態。共有ロック数（最大 <code>MAX_BACKENDS</code>）と、共有排他・排他のビットからなる。</li>
+        </ul>
+
+        <p>
+          <code>usagecount</code> の上限が小さい点には理由がある。ソースのコメント
+          （<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/storage/buf_internals.h#L136"><code>buf_internals.h</code> 付近</a>）
+          によれば、<code>usagecount</code> を <code>NBuffers</code> 並みに大きくすれば LRU に近い挙動になるが、
+          空きバッファを見つけるのにクロックの針が最大で <code>BM_MAX_USAGE_COUNT+1</code> 周する必要があり、
+          大きすぎると探索コストが増す。精度と速度のトレードオフとして 5 が選ばれている。
+        </p>
+
+        <h2 id="sec-3-3">3.3　フラグ一覧</h2>
+        <p>
+          <code>flags</code> 部分には、図 3.2 の12ビットに対応する <code>BM_*</code> フラグが格納される。主なものを表に示す。
+          これらは <code>BufferAlloc()</code> やチェックポイント、I/O 処理の各所で確認・設定される。
+        </p>
+
+        <div class="example">
+          <span class="example-label">buf_internals.h（主なフラグ）</span>
+          <pre><code>BM_LOCKED            バッファヘッダがロック中
+BM_DIRTY             ページが変更済み（書き出しが必要）
+BM_VALID             ページ内容が有効（読み込み済み）
+BM_TAG_VALID         タグが割り当て済み（=バッファテーブルに登録あり）
+BM_IO_IN_PROGRESS    読み書き I/O が進行中
+BM_IO_ERROR          直前の I/O が失敗
+BM_PIN_COUNT_WAITER  単独ピンの解放待ちプロセスあり
+BM_CHECKPOINT_NEEDED チェックポイントで書き出す必要あり
+BM_PERMANENT         永続バッファ（UNLOGGED でない）</code></pre>
+        </div>
+
+        <p>
+          とくに重要なのが <code>BM_DIRTY</code> と <code>BM_VALID</code> である。<code>BM_DIRTY</code> が立った
+          バッファは、ディスクの内容より新しい変更を保持しており、置換やチェックポイントの前に
+          書き出さなければならない。<code>BM_TAG_VALID</code> は、そのバッファがバッファテーブル
+          （第4章）にエントリを持つことを意味する。図 3.3 に、バッファ1スロットがたどる代表的な
+          状態遷移を示す。
+        </p>
+
+        <figure>
+          <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Empty: 初期化 (tag クリア, state=0)
+    Empty --> Reading: 置換先に選ばれタグ設定 (BM_TAG_VALID)
+    Reading --> Valid: 読み込み完了 (BM_VALID)
+    Valid --> Dirty: ページ変更 (BM_DIRTY)
+    Dirty --> Valid: 書き出し完了 (BM_DIRTY クリア)
+    Valid --> Empty: 置換され追い出される
+    Dirty --> Empty: 書き出し後に置換される
+          </pre>
+          <figcaption>図 3.3: 1つのバッファスロットの代表的な状態遷移</figcaption>
+        </figure>
+
+        <p>
+          記述子の構造を把握したところで、次章では <code>tag</code> フィールド、すなわちバッファが
+          「どのページを保持しているか」を表す <code>BufferTag</code> と、タグからバッファを引くための
+          バッファテーブルを見る。
+        </p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch02.html">
+          <span class="dir">← 前の章</span>
+          <span class="ttl">第2章 バッファプールのメモリ構造</span>
+        </a>
+        <a class="up" href="index.html">
+          <span class="dir">↑ 目次</span>
+          <span class="ttl">トップページ</span>
+        </a>
+        <a class="next" href="ch04.html">
+          <span class="dir">次の章 →</span>
+          <span class="ttl">第4章 バッファタグとバッファテーブル</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風 内部構造ドキュメント — PostgreSQL 19beta1 · 031904048aa</footer>
+</body>
+</html>

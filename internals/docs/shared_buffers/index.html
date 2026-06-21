@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>共有バッファ（shared_buffers）の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">共有バッファ（shared_buffers）の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li>
+          <a class="chap-title" href="ch01.html">第1章 shared_buffers とは</a>
+          <ol class="sect">
+            <li><a href="ch01.html#sec-1-1">1.1 共有バッファの役割</a></li>
+            <li><a href="ch01.html#sec-1-2">1.2 GUC パラメータとしての定義</a></li>
+            <li><a href="ch01.html#sec-1-3">1.3 NBuffers と単位の換算</a></li>
+            <li><a href="ch01.html#sec-1-4">1.4 共有メモリ上の位置づけ</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch02.html">第2章 バッファプールのメモリ構造</a>
+          <ol class="sect">
+            <li><a href="ch02.html#sec-2-1">2.1 4つの配列</a></li>
+            <li><a href="ch02.html#sec-2-2">2.2 共有メモリの確保</a></li>
+            <li><a href="ch02.html#sec-2-3">2.3 Buffer 番号と buf_id</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch03.html">第3章 バッファ記述子 BufferDesc</a>
+          <ol class="sect">
+            <li><a href="ch03.html#sec-3-1">3.1 BufferDesc の構造</a></li>
+            <li><a href="ch03.html#sec-3-2">3.2 state に詰め込まれた状態</a></li>
+            <li><a href="ch03.html#sec-3-3">3.3 フラグ一覧</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch04.html">第4章 バッファタグとバッファテーブル</a>
+          <ol class="sect">
+            <li><a href="ch04.html#sec-4-1">4.1 BufferTag</a></li>
+            <li><a href="ch04.html#sec-4-2">4.2 バッファテーブル</a></li>
+            <li><a href="ch04.html#sec-4-3">4.3 パーティションとロック</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch05.html">第5章 ページ探索と置換アルゴリズム</a>
+          <ol class="sect">
+            <li><a href="ch05.html#sec-5-1">5.1 ReadBuffer の流れ</a></li>
+            <li><a href="ch05.html#sec-5-2">5.2 BufferAlloc</a></li>
+            <li><a href="ch05.html#sec-5-3">5.3 クロックスイープ</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="ch06.html">第6章 観察と運用</a>
+          <ol class="sect">
+            <li><a href="ch06.html#sec-6-1">6.1 pg_buffercache で覗く</a></li>
+            <li><a href="ch06.html#sec-6-2">6.2 共有メモリの割り当て</a></li>
+            <li><a href="ch06.html#sec-6-3">6.3 サイズ設定の指針</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>共有バッファ（shared_buffers）の内部構造</h1>
+        <p class="version-hero">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 11:36</p>
+        <p class="lead">
+          <code>shared_buffers</code> は、PostgreSQL がディスクページをメモリ上にキャッシュするための
+          共有バッファプールの大きさを決める設定である。本ドキュメントは、この一見ただの数値が
+          PostgreSQL 内部でどのようなデータ構造として実体化し、ページの探索・置換がどう行われるかを、
+          PostgreSQL 19beta1 のソースコードに即して解説する。GUC 変数 <code>NBuffers</code> から始め、
+          バッファプールを構成する配列群、バッファ記述子 <code>BufferDesc</code>、バッファタグとハッシュ表、
+          そしてクロックスイープによる置換アルゴリズムまでを順に積み上げる。
+          PostgreSQL の内部に興味のあるエンジニアや、性能チューニングの背景を理解したい運用者を対象とする。
+        </p>
+      </div>
+      <div class="toc-grid">
+        <a class="toc-card" href="ch01.html">
+          <span class="num">第1章</span>
+          <span class="title">shared_buffers とは</span>
+          <span class="desc">GUC 変数 NBuffers としての定義、単位の換算、共有メモリ上の位置づけを確認する。</span>
+        </a>
+        <a class="toc-card" href="ch02.html">
+          <span class="num">第2章</span>
+          <span class="title">バッファプールのメモリ構造</span>
+          <span class="desc">記述子・ページ本体・条件変数・チェックポイント領域の4配列と、その確保・対応づけ。</span>
+        </a>
+        <a class="toc-card" href="ch03.html">
+          <span class="num">第3章</span>
+          <span class="title">バッファ記述子 BufferDesc</span>
+          <span class="desc">各バッファのメタデータ。64bit の state に詰め込まれた refcount・usagecount・フラグ。</span>
+        </a>
+        <a class="toc-card" href="ch04.html">
+          <span class="num">第4章</span>
+          <span class="title">バッファタグとバッファテーブル</span>
+          <span class="desc">ページを特定する BufferTag と、タグからバッファを引くハッシュ表・パーティションロック。</span>
+        </a>
+        <a class="toc-card" href="ch05.html">
+          <span class="num">第5章</span>
+          <span class="title">ページ探索と置換アルゴリズム</span>
+          <span class="desc">ReadBuffer → BufferAlloc の流れと、フリーリスト廃止後のクロックスイープによる犠牲選択。</span>
+        </a>
+        <a class="toc-card" href="ch06.html">
+          <span class="num">第6章</span>
+          <span class="title">観察と運用</span>
+          <span class="desc">pg_buffercache・pg_shmem_allocations での観察と、shared_buffers サイズ設定の指針。</span>
+        </a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風 内部構造ドキュメント — PostgreSQL 19beta1 · 031904048aa</footer>
+</body>
+</html>
