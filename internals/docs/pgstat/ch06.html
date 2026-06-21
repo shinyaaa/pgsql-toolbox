@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第6章 読み取りとスナップショット | pgstat.c の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">pgstat.c の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 累積統計システムの全体像</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 累積統計システムとは</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 固定数統計と可変数統計</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 ファイル構成と pgstat.c の役割</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 更新・読み取り・永続化の全体像</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 統計種別とカインド抽象</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 PgStat_Kind と種別ID</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 PgStat_KindInfo による抽象化</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 ビルトイン統計の一覧</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 カスタム統計種別</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 共有メモリ上のデータ構造</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PgStat_ShmemControl と DSA</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 dshash と PgStat_HashKey</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 HashEntry と Common ヘッダ</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 固定数統計の格納</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 ローカル参照とペンディング更新</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 二段構えのハッシュ</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PgStat_EntryRef とローカルキャッシュ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 refcount と generation</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 ペンディング更新リスト</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 統計更新のフラッシュ</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 pgstat_report_stat() の役割</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 フラッシュ間隔の制御</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 可変数統計のフラッシュ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 固定数統計のフラッシュ</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch06.html">第6章 読み取りとスナップショット</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 stats_fetch_consistency の3モード</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pgstat_fetch_entry() の流れ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 スナップショットの構築</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 スナップショットの破棄</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 永続化とライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 統計ファイルの形式</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 シャットダウン時の書き出し</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 起動時のリストアと破棄</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 リセットとライフサイクル</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第6章　読み取りとスナップショット</h1>
+        <p>
+統計の<strong>読み取り</strong>には、更新とは別の一貫性の問題がある。同じクエリの中で
+複数の統計を読むとき、それらが整合した時点のものであってほしいことがあるからだ。
+pgstat.c はこれを <code>stats_fetch_consistency</code> という GUC で制御する。
+この章では読み取り経路とスナップショットの仕組みを解説する。
+</p>
+
+<h2 id="sec-6-1">6.1　stats_fetch_consistency の3モード</h2>
+<p>
+<code>stats_fetch_consistency</code> は読み取りの一貫性レベルを3段階で選べる（図 6.1）。
+デフォルトは <code>cache</code> である。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    NONE["none：毎回共有メモリから直接読む（キャッシュしない）"]
+    CACHE["cache（既定）：一度読んだエントリをトランザクション内でキャッシュ"]
+    SNAPSHOT["snapshot：初回アクセス時に全統計のスナップショットを構築"]
+    NONE --> CACHE --> SNAPSHOT
+  </pre>
+  <figcaption>図 6.1: stats_fetch_consistency の3モード（下ほど一貫性が強い）</figcaption>
+</figure>
+
+<p>
+<code>none</code> はキャッシュせず毎回共有メモリから読むため最も軽量だが、
+同一トランザクション内でも値が変わり得る。<code>cache</code> は一度読んだ統計を
+トランザクション内で固定する。<code>snapshot</code> は初回アクセス時に
+全統計の一貫したスナップショットを作る。キャッシュ・スナップショットはともに
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/utils/pgstat_internal.h#L596"><code>PgStat_Snapshot</code></a>
+（<code>pgStatLocal.snapshot</code>）へ格納される。
+</p>
+
+<h2 id="sec-6-2">6.2　pgstat_fetch_entry() の流れ</h2>
+<p>
+可変数統計の読み取り入口は
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat.c#L963"><code>pgstat_fetch_entry()</code></a>
+である。図 6.2 に処理の流れを示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    START["pgstat_fetch_entry(kind, db, obj)"] --> SNAPMODE{"mode == snapshot?"}
+    SNAPMODE -- "はい" --> BUILD["全スナップショット構築"]
+    SNAPMODE -- "いいえ" --> LOOKUP
+    BUILD --> LOOKUP{"キャッシュにキーあり?"}
+    LOOKUP -- "あり" --> RETC["キャッシュ値を返す"]
+    LOOKUP -- "なし" --> GETREF["共有エントリ参照を取得"]
+    GETREF --> COPY["ロック下で統計をコピー"]
+    COPY --> STORE["キャッシュへ格納（none 以外）"]
+    STORE --> RET["コピーを返す"]
+  </pre>
+  <figcaption>図 6.2: pgstat_fetch_entry() の処理フロー</figcaption>
+</figure>
+
+<p>
+<code>snapshot</code> モードなら先に全体スナップショットを構築し、以降はそこから引く。
+<code>cache</code> モードではキャッシュを引き、ヒットすればそれを返す。ミス時は
+共有エントリをロック下でローカルへコピーし、<code>none</code> 以外ではキャッシュへ
+保存する。<code>none</code> モードは呼び出し元のメモリコンテキストへ確保し、
+<code>may_free</code> を真にして「呼び出し元が <code>pfree()</code> してよい」ことを伝える。
+</p>
+
+<h2 id="sec-6-3">6.3　スナップショットの構築</h2>
+<p>
+<code>snapshot</code> モードの一貫したスナップショットは
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat.c#L1165"><code>pgstat_build_snapshot()</code></a>
+が構築する。dshash 全体を走査し、対象となる可変数統計をローカルへコピーする。
+このとき、種別が <code>accessed_across_databases</code> でない限り、
+<strong>現在のデータベースまたはデータベース非依存のオブジェクトだけ</strong>を含める。
+</p>
+<p>
+固定数統計は
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat.c#L1255"><code>pgstat_build_snapshot_fixed()</code></a>
+が種別ごとの <code>snapshot_cb</code> を呼んで構築する。
+<code>fixed_valid[]</code> / <code>custom_valid[]</code> フラグで構築済みかを管理し、
+<code>cache</code> モードでは一度構築すれば再構築しない。
+スナップショット採取時刻は <code>snapshot_timestamp</code> に記録され、
+<code>pgstat_get_stat_snapshot_timestamp()</code> で参照できる。
+</p>
+
+<h2 id="sec-6-4">6.4　スナップショットの破棄</h2>
+<p>
+キャッシュ／スナップショットはトランザクション境界などで破棄される。
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat.c#L931"><code>pgstat_clear_snapshot()</code></a>
+がスナップショット用メモリコンテキストを解放し、<code>mode</code> や各 <code>valid</code> フラグを
+リセットする。これにより次回アクセス時には最新の統計が読み直される。
+</p>
+<p>
+<code>stats_fetch_consistency</code> が変更された場合は、次回利用前に既存スナップショットを
+強制クリアするフラグ（<code>force_stats_snapshot_clear</code>）が立つ。
+こうしてモード変更が確実に反映される。
+</p>
+
+<div class="info"><strong>関連</strong>共有メモリ上の統計表現は<a href="ch03.html">第3章</a>、永続化は<a href="ch07.html">第7章</a>を参照。</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch05.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第5章 統計更新のフラッシュ</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch07.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第7章 永続化とライフサイクル</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風に生成した内部構造ドキュメント。出典: PostgreSQL ソースコード (PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53)。</footer>
+</body>
+</html>

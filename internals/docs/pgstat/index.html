@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pgstat.c の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">pgstat.c の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 累積統計システムの全体像</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 累積統計システムとは</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 固定数統計と可変数統計</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 ファイル構成と pgstat.c の役割</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 更新・読み取り・永続化の全体像</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 統計種別とカインド抽象</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 PgStat_Kind と種別ID</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 PgStat_KindInfo による抽象化</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 ビルトイン統計の一覧</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 カスタム統計種別</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 共有メモリ上のデータ構造</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PgStat_ShmemControl と DSA</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 dshash と PgStat_HashKey</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 HashEntry と Common ヘッダ</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 固定数統計の格納</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 ローカル参照とペンディング更新</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 二段構えのハッシュ</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PgStat_EntryRef とローカルキャッシュ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 refcount と generation</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 ペンディング更新リスト</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 統計更新のフラッシュ</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 pgstat_report_stat() の役割</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 フラッシュ間隔の制御</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 可変数統計のフラッシュ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 固定数統計のフラッシュ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 読み取りとスナップショット</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 stats_fetch_consistency の3モード</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pgstat_fetch_entry() の流れ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 スナップショットの構築</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 スナップショットの破棄</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 永続化とライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 統計ファイルの形式</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 シャットダウン時の書き出し</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 起動時のリストアと破棄</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 リセットとライフサイクル</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>pgstat.c の内部構造</h1>
+        <p class="version-hero">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</p>
+        <p class="lead">PostgreSQL の<strong>累積統計システム（cumulative statistics system）</strong>は、テーブルアクセス数・チェックポイント回数・I/O 量といった稼働統計を収集し、<code>pg_stat_*</code> ビュー群を通じて提供する仕組みである。その基盤となるのが <code>src/backend/utils/activity/pgstat.c</code> であり、統計の共有メモリ表現・バックエンドローカルなキャッシュ・フラッシュ・スナップショット・ディスク永続化を束ねている。本ドキュメントは PostgreSQL 19beta1 のソースコードを基に、pgstat.c が実装する統計基盤のデータ構造と処理フローを図と実例で解説する。対象読者は PostgreSQL の内部実装に踏み込みたい開発者・運用エンジニアである。</p>
+      </div>
+      <div class="toc-grid">
+        <a class="toc-card" href="ch01.html">
+  <span class="num">第1章</span>
+  <span class="title">累積統計システムの全体像</span>
+  <span class="desc">累積統計システムの役割、固定数／可変数の区分、ファイル分割、全体フローを俯瞰する。</span>
+</a>
+<a class="toc-card" href="ch02.html">
+  <span class="num">第2章</span>
+  <span class="title">統計種別とカインド抽象</span>
+  <span class="desc">統計種別 PgStat_Kind と、種別ごとの振る舞いを抽象化する PgStat_KindInfo を解説する。</span>
+</a>
+<a class="toc-card" href="ch03.html">
+  <span class="num">第3章</span>
+  <span class="title">共有メモリ上のデータ構造</span>
+  <span class="desc">PgStat_ShmemControl・dshash・HashKey など共有メモリ上のデータ構造を解説する。</span>
+</a>
+<a class="toc-card" href="ch04.html">
+  <span class="num">第4章</span>
+  <span class="title">ローカル参照とペンディング更新</span>
+  <span class="desc">ローカルハッシュ・PgStat_EntryRef・refcount／generation・ペンディングリストを解説する。</span>
+</a>
+<a class="toc-card" href="ch05.html">
+  <span class="num">第5章</span>
+  <span class="title">統計更新のフラッシュ</span>
+  <span class="desc">pgstat_report_stat() を中心としたフラッシュ処理と頻度制御を解説する。</span>
+</a>
+<a class="toc-card" href="ch06.html">
+  <span class="num">第6章</span>
+  <span class="title">読み取りとスナップショット</span>
+  <span class="desc">stats_fetch_consistency とスナップショットによる統計読み取りを解説する。</span>
+</a>
+<a class="toc-card" href="ch07.html">
+  <span class="num">第7章</span>
+  <span class="title">永続化とライフサイクル</span>
+  <span class="desc">統計ファイルの形式、書き出し・読み込み、リセットとライフサイクルを解説する。</span>
+</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風に生成した内部構造ドキュメント。出典: PostgreSQL ソースコード (PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53)。</footer>
+</body>
+</html>

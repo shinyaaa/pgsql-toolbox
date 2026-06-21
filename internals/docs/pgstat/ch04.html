@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第4章 ローカル参照とペンディング更新 | pgstat.c の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">pgstat.c の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 累積統計システムの全体像</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 累積統計システムとは</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 固定数統計と可変数統計</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 ファイル構成と pgstat.c の役割</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 更新・読み取り・永続化の全体像</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 統計種別とカインド抽象</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 PgStat_Kind と種別ID</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 PgStat_KindInfo による抽象化</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 ビルトイン統計の一覧</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 カスタム統計種別</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 共有メモリ上のデータ構造</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PgStat_ShmemControl と DSA</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 dshash と PgStat_HashKey</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 HashEntry と Common ヘッダ</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 固定数統計の格納</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch04.html">第4章 ローカル参照とペンディング更新</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 二段構えのハッシュ</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PgStat_EntryRef とローカルキャッシュ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 refcount と generation</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 ペンディング更新リスト</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 統計更新のフラッシュ</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 pgstat_report_stat() の役割</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 フラッシュ間隔の制御</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 可変数統計のフラッシュ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 固定数統計のフラッシュ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 読み取りとスナップショット</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 stats_fetch_consistency の3モード</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pgstat_fetch_entry() の流れ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 スナップショットの構築</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 スナップショットの破棄</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 永続化とライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 統計ファイルの形式</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 シャットダウン時の書き出し</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 起動時のリストアと破棄</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 リセットとライフサイクル</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第4章　ローカル参照とペンディング更新</h1>
+        <p>
+共有ハッシュテーブルへ毎回アクセスすると、ロック競合がシステム全体の性能を律速しかねない。
+累積統計システムはこれを避けるため、<strong>バックエンドローカルのキャッシュ層</strong>を
+共有ハッシュの手前に置く。この章では、そのキャッシュとペンディング更新の仕組み、
+そしてエントリのライフタイム管理を解説する。
+</p>
+
+<h2 id="sec-4-1">4.1　二段構えのハッシュ</h2>
+<p>
+各バックエンドは、共有ハッシュへの参照を保持するローカルハッシュ
+<code>pgStatEntryRefHash</code> を持つ。図 4.1 に示すように、
+統計エントリを引くときはまずローカルハッシュを探し、見つかればそのまま使う。
+見つからないときだけ共有ハッシュへアクセスする。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    BE["バックエンド"] --> LH["pgStatEntryRefHash（ローカル）"]
+    LH -- "ヒット" --> REF["PgStat_EntryRef"]
+    LH -- "ミス" --> SH["dshash（共有）"]
+    SH --> REF
+    REF --> BODY["共有統計本体"]
+  </pre>
+  <figcaption>図 4.1: ローカルハッシュと共有ハッシュの二段構え</figcaption>
+</figure>
+
+<p>
+このキャッシュ参照の取得は
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat_shmem.c#L474"><code>pgstat_get_entry_ref()</code></a>
+が担う。まず <code>pgstat_get_entry_ref_cached()</code> でローカルハッシュを引き、
+ヒットすればロックを一切取らずに参照を返す。ミスのときだけ <code>dshash_find()</code> で
+共有ハッシュを引き、必要なら新規エントリを作成する。
+大半の統計操作が共有ハッシュに触れずに済むため、競合が大幅に減る。
+</p>
+
+<h2 id="sec-4-2">4.2　PgStat_EntryRef とローカルキャッシュ</h2>
+<p>
+ローカルハッシュのエントリが指す
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/utils/pgstat_internal.h#L164"><code>PgStat_EntryRef</code></a>
+は、共有エントリへの参照とペンディングデータを束ねる構造体である（図 4.2）。
+</p>
+
+<figure>
+  <pre class="mermaid">
+classDiagram
+    class PgStat_EntryRef {
+        PgStatShared_HashEntry* shared_entry
+        PgStatShared_Common* shared_stats
+        uint32 generation
+        void* pending
+        dlist_node pending_node
+    }
+  </pre>
+  <figcaption>図 4.2: PgStat_EntryRef の構成</figcaption>
+</figure>
+
+<p>
+<code>shared_entry</code> は共有ハッシュのエントリを指し、<code>shared_stats</code> は
+統計本体（<code>body</code> をローカルアドレスに解決したもの）を指す。
+<code>dsa_get_address()</code> の繰り返し呼び出しを避けるためにローカルアドレスを
+キャッシュしている点がポイントである。<code>pending</code> は未反映の統計更新を溜める領域、
+<code>pending_node</code> は後述のペンディングリストへの連結に使われる。
+</p>
+
+<h2 id="sec-4-3">4.3　refcount と generation</h2>
+<p>
+統計エントリのライフタイムは、ハッシュ表のエントリ寿命とは別に管理される。
+バックエンドがロックを持たずに統計本体を指せるようにするためである。
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/utils/pgstat_internal.h#L94"><code>PgStatShared_HashEntry</code></a>
+の <code>refcount</code> と <code>generation</code> がこれを担う。
+</p>
+<p>
+<code>refcount</code> はエントリへの参照数を数える原子変数である。エントリが
+ドロップされていない限り「ドロップ不可」を表す 1 が加算され、さらに参照を持つ
+各バックエンドが 1 ずつ加算する。<code>DROP TABLE</code> 等で統計が落とされても、
+参照がすべて解放されるまでエントリのメモリは解放されない。
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat_shmem.c#L313"><code>pgstat_init_entry()</code></a>
+は <code>refcount</code> を 1、<code>generation</code> を 0 で初期化する。
+</p>
+<p>
+<code>generation</code> はエントリが再利用された回数である。ドロップ済みエントリが
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat_shmem.c#L357"><code>pgstat_reinit_entry()</code></a>
+で再初期化されるたびに 1 増える。これにより、古い世代を指したままの
+ローカル参照は <code>PgStat_EntryRef-&gt;generation</code> との不一致で「陳腐化」を検知できる。
+参照が残って解放できなかったドロップは、<code>gc_request_count</code> を契機に
+各バックエンドが <code>pgstat_gc_entry_refs()</code> を実行して回収する。
+</p>
+
+<h2 id="sec-4-4">4.4　ペンディング更新リスト</h2>
+<p>
+統計更新の大半は、まず各プロセス内に<strong>ペンディングエントリ</strong>として蓄積され、
+後でまとめて共有メモリへフラッシュされる。これにより個々の統計エントリへの競合が
+実質的に排除される。ペンディングデータを持つエントリはすべて、グローバルな
+<code>pgStatPending</code> リストに連結される（図 4.3）。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    PEND["pgStatPending（dlist）"] --> R1["EntryRef #1（pending）"]
+    R1 --> R2["EntryRef #2（pending）"]
+    R2 --> R3["EntryRef #3（pending）"]
+  </pre>
+  <figcaption>図 4.3: ペンディング更新を持つ EntryRef のリスト</figcaption>
+</figure>
+
+<p>
+ペンディングエントリの準備は
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat.c#L1310"><code>pgstat_prep_pending_entry()</code></a>
+が行い、<code>PgStat_EntryRef-&gt;pending</code> を確保してリストへ追加する。
+新規のペンディングは必ずリスト末尾に足す決まりで、これは後述のフラッシュ処理が
+反復中に追加された分も漏れなく処理できるようにするためである。
+ペンディングの蓄積から共有メモリへのフラッシュまでの流れは、次章で扱う。
+</p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch03.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第3章 共有メモリ上のデータ構造</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch05.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第5章 統計更新のフラッシュ</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風に生成した内部構造ドキュメント。出典: PostgreSQL ソースコード (PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53)。</footer>
+</body>
+</html>

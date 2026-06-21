@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第2章 統計種別とカインド抽象 | pgstat.c の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">pgstat.c の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 累積統計システムの全体像</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 累積統計システムとは</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 固定数統計と可変数統計</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 ファイル構成と pgstat.c の役割</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 更新・読み取り・永続化の全体像</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch02.html">第2章 統計種別とカインド抽象</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 PgStat_Kind と種別ID</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 PgStat_KindInfo による抽象化</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 ビルトイン統計の一覧</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 カスタム統計種別</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 共有メモリ上のデータ構造</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PgStat_ShmemControl と DSA</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 dshash と PgStat_HashKey</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 HashEntry と Common ヘッダ</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 固定数統計の格納</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 ローカル参照とペンディング更新</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 二段構えのハッシュ</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PgStat_EntryRef とローカルキャッシュ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 refcount と generation</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 ペンディング更新リスト</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 統計更新のフラッシュ</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 pgstat_report_stat() の役割</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 フラッシュ間隔の制御</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 可変数統計のフラッシュ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 固定数統計のフラッシュ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 読み取りとスナップショット</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 stats_fetch_consistency の3モード</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pgstat_fetch_entry() の流れ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 スナップショットの構築</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 スナップショットの破棄</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 永続化とライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 統計ファイルの形式</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 シャットダウン時の書き出し</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 起動時のリストアと破棄</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 リセットとライフサイクル</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第2章　統計種別とカインド抽象</h1>
+        <p>
+pgstat.c は多様な統計を同じ枠組みで扱うため、統計の「種別（kind）」という概念を中心に据える。
+種別ごとの振る舞いの違いは、<strong>1つのメタデータ構造体に集約</strong>される。
+この章では、種別を識別する <code>PgStat_Kind</code> と、種別ごとの性質を記述する
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/utils/pgstat_internal.h#L231"><code>PgStat_KindInfo</code></a>
+を解説する。
+</p>
+
+<h2 id="sec-2-1">2.1　PgStat_Kind と種別ID</h2>
+<p>
+各統計種別には 1〜32 の整数IDが割り当てられる。IDは
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/utils/pgstat_kind.h#L20"><code>pgstat_kind.h</code></a>
+で定義される。<code>PGSTAT_KIND_MIN</code> が 1、<code>PGSTAT_KIND_MAX</code> が 32 で、
+ビルトイン種別は 1〜13、24以降がカスタム種別用に予約されている。
+</p>
+
+<div class="example">
+  <span class="example-label">pgstat_kind.h（抜粋）</span>
+  <pre><code>#define PGSTAT_KIND_DATABASE      1   /* database-wide statistics */
+#define PGSTAT_KIND_RELATION      2   /* per-table statistics */
+#define PGSTAT_KIND_FUNCTION      3   /* per-function statistics */
+#define PGSTAT_KIND_REPLSLOT      4   /* per-slot statistics */
+#define PGSTAT_KIND_SUBSCRIPTION  5   /* per-subscription statistics */
+#define PGSTAT_KIND_BACKEND       6   /* per-backend statistics */
+#define PGSTAT_KIND_ARCHIVER      7
+#define PGSTAT_KIND_BGWRITER      8
+#define PGSTAT_KIND_CHECKPOINTER  9
+#define PGSTAT_KIND_IO           10
+#define PGSTAT_KIND_LOCK         11
+#define PGSTAT_KIND_SLRU         12
+#define PGSTAT_KIND_WAL          13</code></pre>
+</div>
+
+<p>
+種別ID 1〜6 は可変数統計、7〜13 は固定数統計である。
+<code>PGSTAT_KIND_BUILTIN_MIN/MAX</code> がビルトインの範囲、
+<code>PGSTAT_KIND_CUSTOM_MIN</code>（24）以降が外部モジュール用である。
+種別IDは <code>PgStat_HashKey</code> の一部として、また配列の添字として随所で使われる。
+</p>
+
+<h2 id="sec-2-2">2.2　PgStat_KindInfo による抽象化</h2>
+<p>
+種別ごとの性質は <code>PgStat_KindInfo</code> 構造体にまとめられる。
+これは pgstat.c が個々の種別の詳細を知らずに処理を回すための<strong>抽象化の要</strong>である。
+主なフィールドを図 2.1 に示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+classDiagram
+    class PgStat_KindInfo {
+        bool fixed_amount
+        bool accessed_across_databases
+        bool write_to_file
+        bool track_entry_count
+        uint32 shared_size
+        uint32 shared_data_off
+        uint32 shared_data_len
+        uint32 pending_size
+        flush_pending_cb()
+        flush_static_cb()
+        snapshot_cb()
+        reset_all_cb()
+        to_serialized_data()
+        from_serialized_data()
+        name
+    }
+  </pre>
+  <figcaption>図 2.1: PgStat_KindInfo の主要フィールド</figcaption>
+</figure>
+
+<p>
+フラグ群が種別の基本性質を決める。<code>fixed_amount</code> は固定数か可変数かを表し、
+<code>accessed_across_databases</code> は他データベースから参照可能か（スナップショットに含めるか）を、
+<code>write_to_file</code> は統計ファイルへ書き出すかを示す。
+各種コールバックは種別固有の処理（フラッシュ、スナップショット構築、シリアライズ等）を
+プラグイン的に差し込む口であり、pgstat.c はこれらを通じてのみ種別固有処理を呼び出す。
+種別とメタデータの対応付けは
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat.c#L1480"><code>pgstat_get_kind_info()</code></a>
+が行う。
+</p>
+
+<h2 id="sec-2-3">2.3　ビルトイン統計の一覧</h2>
+<p>
+ビルトイン種別のメタデータは、pgstat.c 内の配列
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat.c#L283"><code>pgstat_kind_builtin_infos</code></a>
+に<strong>指定イニシャライザ</strong>で定義される。
+たとえば <code>database</code> 種別は次のように記述される。
+</p>
+
+<div class="example">
+  <span class="example-label">pgstat.c（抜粋）</span>
+  <pre><code>[PGSTAT_KIND_DATABASE] = {
+    .name = "database",
+    .fixed_amount = false,
+    .write_to_file = true,
+    .accessed_across_databases = true,
+    .shared_size = sizeof(PgStatShared_Database),
+    .shared_data_off = offsetof(PgStatShared_Database, stats),
+    .shared_data_len = sizeof(((PgStatShared_Database *) 0)->stats),
+    .pending_size = sizeof(PgStat_StatDBEntry),
+    .flush_pending_cb = pgstat_database_flush_cb,
+    .reset_timestamp_cb = pgstat_database_reset_timestamp_cb,
+},</code></pre>
+</div>
+
+<p>
+ビルトイン種別を整理すると次のとおりである。
+</p>
+
+<table>
+  <thead><tr><th>種別</th><th>ID</th><th>区分</th><th>対象</th></tr></thead>
+  <tbody>
+    <tr><td>database</td><td>1</td><td>可変数</td><td>データベースごとの統計</td></tr>
+    <tr><td>relation</td><td>2</td><td>可変数</td><td>テーブル／インデックスごと</td></tr>
+    <tr><td>function</td><td>3</td><td>可変数</td><td>関数ごと</td></tr>
+    <tr><td>replslot</td><td>4</td><td>可変数</td><td>レプリケーションスロットごと</td></tr>
+    <tr><td>subscription</td><td>5</td><td>可変数</td><td>サブスクリプションごと</td></tr>
+    <tr><td>backend</td><td>6</td><td>可変数</td><td>バックエンドごと</td></tr>
+    <tr><td>archiver</td><td>7</td><td>固定数</td><td>WAL アーカイバ</td></tr>
+    <tr><td>bgwriter</td><td>8</td><td>固定数</td><td>バックグラウンドライタ</td></tr>
+    <tr><td>checkpointer</td><td>9</td><td>固定数</td><td>チェックポインタ</td></tr>
+    <tr><td>io</td><td>10</td><td>固定数</td><td>I/O 統計（種別ごと）</td></tr>
+    <tr><td>lock</td><td>11</td><td>固定数</td><td>ロック関連統計</td></tr>
+    <tr><td>slru</td><td>12</td><td>固定数</td><td>SLRU キャッシュ</td></tr>
+    <tr><td>wal</td><td>13</td><td>固定数</td><td>WAL 統計</td></tr>
+  </tbody>
+</table>
+
+<h2 id="sec-2-4">2.4　カスタム統計種別</h2>
+<p>
+外部モジュールも独自の統計種別を定義できる。ビルトインと同じ性質をすべて利用でき、
+他の拡張と衝突しないよう一意のIDを割り当てる必要がある。IDの予約は PostgreSQL Wiki の
+CustomCumulativeStats ページで管理される。
+</p>
+<p>
+カスタム種別は起動時に
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat.c#L1508"><code>pgstat_register_kind()</code></a>
+で登録され、メタデータは <code>pgstat_kind_custom_infos</code> 配列（インデックスは
+<code>kind - PGSTAT_KIND_CUSTOM_MIN</code>）に格納される。
+<code>pgstat_get_kind_info()</code> はビルトインかカスタムかを判定し、対応する配列から
+<code>PgStat_KindInfo</code> を返す。これにより、pgstat.c の処理ループは
+ビルトインとカスタムを区別せず一様に扱える。
+</p>
+
+<div class="info"><strong>関連</strong>種別ごとの共有メモリ表現とハッシュ格納は<a href="ch03.html">第3章</a>で扱う。</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch01.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第1章 累積統計システムの全体像</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch03.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第3章 共有メモリ上のデータ構造</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風に生成した内部構造ドキュメント。出典: PostgreSQL ソースコード (PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53)。</footer>
+</body>
+</html>
