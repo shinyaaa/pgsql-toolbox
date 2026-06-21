@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章 統計更新のフラッシュ | pgstat.c の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">pgstat.c の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 累積統計システムの全体像</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 累積統計システムとは</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 固定数統計と可変数統計</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 ファイル構成と pgstat.c の役割</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 更新・読み取り・永続化の全体像</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 統計種別とカインド抽象</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 PgStat_Kind と種別ID</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 PgStat_KindInfo による抽象化</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 ビルトイン統計の一覧</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 カスタム統計種別</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 共有メモリ上のデータ構造</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PgStat_ShmemControl と DSA</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 dshash と PgStat_HashKey</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 HashEntry と Common ヘッダ</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 固定数統計の格納</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 ローカル参照とペンディング更新</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 二段構えのハッシュ</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PgStat_EntryRef とローカルキャッシュ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 refcount と generation</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 ペンディング更新リスト</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch05.html">第5章 統計更新のフラッシュ</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 pgstat_report_stat() の役割</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 フラッシュ間隔の制御</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 可変数統計のフラッシュ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 固定数統計のフラッシュ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 読み取りとスナップショット</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 stats_fetch_consistency の3モード</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pgstat_fetch_entry() の流れ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 スナップショットの構築</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 スナップショットの破棄</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 永続化とライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 統計ファイルの形式</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 シャットダウン時の書き出し</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 起動時のリストアと破棄</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 リセットとライフサイクル</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第5章　統計更新のフラッシュ</h1>
+        <p>
+ペンディングに溜まった統計更新を共有メモリへ反映するのが<strong>フラッシュ</strong>である。
+その中心となるのが
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat.c#L723"><code>pgstat_report_stat()</code></a>
+である。この章では、フラッシュの呼び出しタイミング、頻度制御、
+そして可変数・固定数それぞれのフラッシュ経路を解説する。
+</p>
+
+<h2 id="sec-5-1">5.1　pgstat_report_stat() の役割</h2>
+<p>
+<code>pgstat_report_stat()</code> は、DML を実行するプロセス（通常のバックエンド、
+ロジカルレシーバ、SPI ワーカ等）が、ローカルのペンディング統計を共有メモリへ
+フラッシュするために呼び出す。<strong>トランザクション外でのみ</strong>呼ばれるため、
+現在時刻の近似としてトランザクション停止時刻を使ってよい、という前提が置かれている。
+</p>
+<p>
+冒頭ではまず、ペンディングリストが空で固定数統計の報告も不要なら即座に戻る、
+という高速パスがある。これにより、やることがないときのクロック確認すら省かれる。
+</p>
+
+<h2 id="sec-5-2">5.2　フラッシュ間隔の制御</h2>
+<p>
+フラッシュは無制限には行わない。pgstat.c は3つの時間定数で頻度を制御する。
+</p>
+
+<table>
+  <thead><tr><th>定数</th><th>値</th><th>意味</th></tr></thead>
+  <tbody>
+    <tr><td>PGSTAT_MIN_INTERVAL</td><td>1000ms</td><td>非強制フラッシュの最小間隔</td></tr>
+    <tr><td>PGSTAT_MAX_INTERVAL</td><td>60000ms</td><td>ペンディングを保持し続ける上限</td></tr>
+    <tr><td>PGSTAT_IDLE_INTERVAL</td><td>10000ms</td><td>アイドル時に再フラッシュを促す目安</td></tr>
+  </tbody>
+</table>
+
+<p>
+図 5.1 にフラッシュ判定の流れを示す。<code>force</code> でなければ、前回フラッシュから
+<code>PGSTAT_MIN_INTERVAL</code> 未満なら頻繁すぎるとして見送る。
+ただしペンディングが <code>PGSTAT_MAX_INTERVAL</code> を超えて滞留している場合は
+強制フラッシュへ切り替える。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    START["pgstat_report_stat(force)"] --> EMPTY{"ペンディング空 かつ 固定数報告なし?"}
+    EMPTY -- "はい" --> RET0["0 を返す（何もしない）"]
+    EMPTY -- "いいえ" --> FORCE{"force?"}
+    FORCE -- "はい" --> DOFLUSH["フラッシュ実行"]
+    FORCE -- "いいえ" --> MAXCHK{"MAX_INTERVAL 超過?"}
+    MAXCHK -- "はい" --> DOFLUSH
+    MAXCHK -- "いいえ" --> MINCHK{"前回から MIN_INTERVAL 未満?"}
+    MINCHK -- "はい" --> RETIDLE["IDLE_INTERVAL を返す"]
+    MINCHK -- "いいえ" --> DOFLUSH
+  </pre>
+  <figcaption>図 5.1: pgstat_report_stat() のフラッシュ判定</figcaption>
+</figure>
+
+<p>
+非強制時はロック取得を待たない（<code>nowait = true</code>）。
+ロック競合で一部しかフラッシュできなかった場合は <code>partial_flush</code> が立ち、
+呼び出し元へ <code>PGSTAT_IDLE_INTERVAL</code> を返して再試行のタイミングを示唆する。
+</p>
+
+<h2 id="sec-5-3">5.3　可変数統計のフラッシュ</h2>
+<p>
+可変数統計のフラッシュは
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat.c#L1384"><code>pgstat_flush_pending_entries()</code></a>
+が担う。<code>pgStatPending</code> リストを先頭から辿り、各エントリについて
+種別の <code>flush_pending_cb</code> を呼んでペンディングを共有統計へマージする。
+</p>
+<p>
+この反復には工夫がある。フラッシュ処理がさらに別のペンディングエントリを
+リスト末尾へ追加し得るため、単純な反復では取りこぼす。そこで各反復で「次」のノードを
+先に控えてから現在のエントリを処理し、フラッシュ成功時はリストから削除する。
+<code>nowait</code> で競合により流せなかったエントリはリストに残り、
+戻り値 <code>have_pending</code> が真になる。
+</p>
+
+<h2 id="sec-5-4">5.4　固定数統計のフラッシュ</h2>
+<p>
+固定数統計は <code>PgStat_EntryRef-&gt;pending</code> の枠組みを使えないため、
+別経路でフラッシュされる。グローバルフラグ <code>pgstat_report_fixed</code> が立っているとき、
+<code>pgstat_report_stat()</code> は全種別を走査し、各種別の <code>flush_static_cb</code> を呼ぶ。
+</p>
+<p>
+このコールバックは、種別が独自に保持する静的なペンディング状態を共有メモリへ反映する。
+たとえば WAL や I/O の統計はバックエンドローカルなカウンタを持ち、
+<code>flush_static_cb</code> でまとめて共有統計へ加算する。
+可変数・固定数いずれも、ロック競合で完全にフラッシュできなかった場合は
+<code>partial_flush</code> に反映され、後の再試行に委ねられる。
+</p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch04.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第4章 ローカル参照とペンディング更新</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch06.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第6章 読み取りとスナップショット</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風に生成した内部構造ドキュメント。出典: PostgreSQL ソースコード (PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53)。</footer>
+</body>
+</html>

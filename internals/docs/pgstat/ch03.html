@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第3章 共有メモリ上のデータ構造 | pgstat.c の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">pgstat.c の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 累積統計システムの全体像</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 累積統計システムとは</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 固定数統計と可変数統計</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 ファイル構成と pgstat.c の役割</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 更新・読み取り・永続化の全体像</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 統計種別とカインド抽象</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 PgStat_Kind と種別ID</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 PgStat_KindInfo による抽象化</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 ビルトイン統計の一覧</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 カスタム統計種別</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch03.html">第3章 共有メモリ上のデータ構造</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 PgStat_ShmemControl と DSA</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 dshash と PgStat_HashKey</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 HashEntry と Common ヘッダ</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 固定数統計の格納</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 ローカル参照とペンディング更新</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 二段構えのハッシュ</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 PgStat_EntryRef とローカルキャッシュ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 refcount と generation</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 ペンディング更新リスト</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 統計更新のフラッシュ</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 pgstat_report_stat() の役割</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 フラッシュ間隔の制御</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 可変数統計のフラッシュ</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 固定数統計のフラッシュ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 読み取りとスナップショット</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 stats_fetch_consistency の3モード</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 pgstat_fetch_entry() の流れ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 スナップショットの構築</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 スナップショットの破棄</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 永続化とライフサイクル</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 統計ファイルの形式</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 シャットダウン時の書き出し</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 起動時のリストアと破棄</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 リセットとライフサイクル</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第3章　共有メモリ上のデータ構造</h1>
+        <p>
+統計データはプロセス間で共有されなければならない。この章では、累積統計システムの
+共有メモリ表現の中心である
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/utils/pgstat_internal.h#L541"><code>PgStat_ShmemControl</code></a>
+と、可変数統計を収める動的共有メモリ（DSM）上のハッシュテーブルの構造を解説する。
+</p>
+
+<h2 id="sec-3-1">3.1　PgStat_ShmemControl と DSA</h2>
+<p>
+累積統計システムの共有メモリへの入口は <code>PgStat_ShmemControl</code> である。
+図 3.1 に示すように、ここから動的共有メモリ領域（DSA）、可変数統計のハッシュテーブル、
+固定数統計の実体すべてに到達できる。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    DSA --> HASH["dshash テーブル（可変数統計）"]
+    HH --> HASH
+    subgraph SC["PgStat_ShmemControl（通常の共有メモリ）"]
+        DSA["raw_dsa_area（DSA 領域）"]
+        HH["hash_handle（dshash ハンドル）"]
+        EC["entry_counts[]（種別ごとの件数）"]
+        FX["archiver / bgwriter / checkpointer / io / lock / slru / wal"]
+    end
+  </pre>
+  <figcaption>図 3.1: PgStat_ShmemControl を起点とする共有メモリ構造</figcaption>
+</figure>
+
+<p>
+固定数統計（archiver〜wal）は <code>PgStat_ShmemControl</code> に<strong>直接埋め込まれて</strong>いる。
+一方、可変数統計は DSA 上に確保され、<code>hash_handle</code> から到達する dshash テーブルで管理される。
+各バックエンドは
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/utils/activity/pgstat_shmem.c#L256"><code>pgstat_attach_shmem()</code></a>
+で <code>dsa_attach_in_place()</code> により DSA へアタッチし、<code>dshash_attach()</code> で
+ハッシュテーブルへ接続する。アタッチ後の状態はバックエンドローカルの
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/utils/pgstat_internal.h#L636"><code>PgStat_LocalState</code></a>
+（グローバル変数 <code>pgStatLocal</code>）に保持される。
+</p>
+
+<h2 id="sec-3-2">3.2　dshash と PgStat_HashKey</h2>
+<p>
+可変数統計は <code>dshash</code>（動的共有メモリ向けハッシュテーブル）に格納される。
+各エントリは
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/utils/pgstat_internal.h#L58"><code>PgStat_HashKey</code></a>
+で識別される。キーは3つのフィールドからなる。
+</p>
+
+<figure>
+  <pre class="mermaid">
+classDiagram
+    class PgStat_HashKey {
+        PgStat_Kind kind
+        Oid dboid
+        uint64 objid
+    }
+  </pre>
+  <figcaption>図 3.2: PgStat_HashKey の構成（kind＝種別 / dboid＝DB ID / objid＝オブジェクトID）</figcaption>
+</figure>
+
+<p>
+図 3.2 のとおり、<code>kind</code>・<code>dboid</code>・<code>objid</code> の組で1つの統計オブジェクトを
+一意に指す。<code>dboid</code> は共有オブジェクトでは <code>InvalidOid</code> となる。
+たとえば「データベース A のテーブル B のリレーション統計」は
+<code>(RELATION, A の OID, B の OID)</code> で表される。
+このキーは<strong>パディングを持たない</strong>ことが前提で、
+ソース上でも <code>StaticAssertDecl</code> によりサイズが各フィールドの和と一致することを
+コンパイル時に検査している。実行時はこのキーで統計をアドレッシングするが、
+ディスクへシリアライズする際には（レプリケーションスロット統計のように）より広い識別子を
+使う場合がある。
+</p>
+
+<h2 id="sec-3-3">3.3　HashEntry と Common ヘッダ</h2>
+<p>
+dshash のエントリ自体は統計データを直接含まない。図 3.3 に示すように、
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/utils/pgstat_internal.h#L94"><code>PgStatShared_HashEntry</code></a>
+は統計本体への <code>dsa_pointer</code>（<code>body</code>）を持つだけで、
+本体は別途 DSA から確保される。この分離により、種別ごとに大きさの異なる統計を
+同じハッシュテーブルへ格納しても <code>PgStatShared_HashEntry</code> の領域を無駄にしない。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    HE["PgStatShared_HashEntry<br/>key / dropped / refcount / generation / body"]
+    BODY["統計本体<br/>PgStatShared_Common header + 種別固有データ"]
+    HE -- "body（dsa_pointer）" --> BODY
+  </pre>
+  <figcaption>図 3.3: ハッシュエントリと統計本体の分離</figcaption>
+</figure>
+
+<p>
+統計本体は必ず
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/utils/pgstat_internal.h#L150"><code>PgStatShared_Common</code></a>
+で始まる。これは妥当性検査用の <code>magic</code>（<code>0xdeadbeef</code>）と、
+データ部分を保護する <code>LWLock</code> を持つ共通ヘッダである。
+その後ろに種別固有の統計（例: <code>PgStatShared_Relation</code> は
+<code>PgStat_StatTabEntry</code>）が続く。
+<code>dropped</code>・<code>refcount</code>・<code>generation</code> はエントリのライフタイム管理に使われ、
+これは第4章で詳述する。
+</p>
+
+<div class="note"><strong>メモ</strong>共有メモリに置かれる構造体は <code>PgStatShared</code> 接頭辞を持ち、
+バックエンドローカルやディスク向けの構造体（<code>PgStat</code> 接頭辞）と区別される。</div>
+
+<h2 id="sec-3-4">3.4　固定数統計の格納</h2>
+<p>
+固定数統計は dshash を介さず、<code>PgStat_ShmemControl</code> に直接埋め込まれた
+専用構造体に格納される。たとえば <code>PgStatShared_Checkpointer</code> や
+<code>PgStatShared_Wal</code> などである。これらの多くは
+<strong>単一ライタの changecount 機構</strong>を用い、ロックなしで低オーバヘッドの
+書き込みを実現している（読み取り側は changecount の前後比較で一貫性を確認する）。
+</p>
+<p>
+ただしリセットは別バックエンドが書き込む必要があるため、リセット時に共有統計を直接
+書き換えるのではなく、現在のカウンタ値を <code>reset_offset</code> として控え、
+読み取り時に差し引く方式を採る。
+<code>stat_reset_timestamp</code> だけは別バックエンドが書くため <code>-&gt;lock</code> で保護される。
+I/O 統計（<code>PgStatShared_IO</code>）はバックエンド種別ごとにロック配列を持つなど、
+種別に応じた最適化が施されている。
+</p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch02.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第2章 統計種別とカインド抽象</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch04.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第4章 ローカル参照とペンディング更新</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風に生成した内部構造ドキュメント。出典: PostgreSQL ソースコード (PostgreSQL 19beta1 · 031904048aa · 2026-06-21 08:53)。</footer>
+</body>
+</html>
