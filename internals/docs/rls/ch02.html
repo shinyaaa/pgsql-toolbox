@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第2章 pg_policy カタログとデータ構造 | PostgreSQL Internals: Row Level Security — PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: Row Level Security</a>
+    <span class="version-badge">PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 行レベルセキュリティの概観</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 RLS とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 列・テーブルレベル権限との関係</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 ポリシーの基本構成要素と最小例</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch02.html">第2章 pg_policy カタログとデータ構造</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 pg_policy の物理レイアウト</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 RowSecurityPolicy 構造体</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 RowSecurityDesc と relcache への紐付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 CREATE/ALTER/DROP POLICY の実装</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 CREATE POLICY の処理フロー</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 USING 句と WITH CHECK 句の解析</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 依存関係の登録と relcache 無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 ポリシーの削除とロールからの除去</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 クエリ書き換え時の RLS 適用</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 check_enable_rls による有効性判定</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 fireRIRrules から get_row_security_policies へ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 securityQuals と withCheckOptions の注入</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ポリシー結合の意味論とコマンド別の挙動</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 permissive と restrictive の結合</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 コマンド別のポリシー収集</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 default-deny の生成</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 ON CONFLICT と MERGE の特殊処理</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 バイパス・FORCE・キャッシュ無効化の運用面</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 BYPASSRLS とテーブル所有者</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 FORCE ROW LEVEL SECURITY</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 row_security GUC と plan invalidation</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 LEAKPROOF と最適化との相互作用</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第2章　pg_policy カタログとデータ構造</h1>
+        <p>
+  ポリシーはディスク上ではシステムカタログ <code>pg_policy</code> に保存され、
+  メモリ上ではリレーションキャッシュ（relcache）に <code>RowSecurityDesc</code> として
+  付随する形で保持される。本章では、この 2 つの表現を行き来する経路を中心に、
+  RLS が依存するデータ構造をひととおり確認する。
+</p>
+
+<h2 id="sec-2-1">2.1　pg_policy の物理レイアウト</h2>
+
+<p>
+  <code>pg_policy</code> は 1 ポリシーにつき 1 行のシステムカタログで、定義は
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/include/catalog/pg_policy.h#L31"><code>src/include/catalog/pg_policy.h</code></a>
+  に置かれている。<code>BKI_LOOKUP</code> マクロの存在から分かる通り、リレーション OID とロール OID への
+  参照を持つ、関係カタログである。
+</p>
+
+<figure>
+  <pre class="mermaid">
+classDiagram
+    class pg_policy {
+        Oid oid
+        NameData polname
+        Oid polrelid
+        char polcmd
+        bool polpermissive
+        Oid_array polroles
+        pg_node_tree polqual
+        pg_node_tree polwithcheck
+    }
+  </pre>
+  <figcaption>図 2.1: pg_policy のタプル構造（CATALOG マクロから抜粋）。</figcaption>
+</figure>
+
+<p>
+  ポイントは次のとおりである。
+</p>
+
+<ul>
+  <li>
+    <strong><code>polrelid</code></strong>: ポリシーが属するリレーションの OID。
+    <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/include/catalog/pg_policy.h#L60"><code>pg_policy_polrelid_polname_index</code></a>
+    が <code>(polrelid, polname)</code> 上のユニークインデックスとして定義されており、
+    relcache 構築時のシーケンシャルスキャンを避け、また同一テーブル内のポリシー名重複を防ぐ。
+  </li>
+  <li>
+    <strong><code>polcmd</code></strong>: <code>'*'</code>（ALL）、<code>'r'</code>（SELECT）、
+    <code>'a'</code>（INSERT）、<code>'w'</code>（UPDATE）、<code>'d'</code>（DELETE）の 5 通り。
+  </li>
+  <li>
+    <strong><code>polpermissive</code></strong>: <code>true</code> なら permissive、<code>false</code> なら restrictive。
+    複数ポリシーの結合規則を分ける（<a href="ch05.html#sec-5-1">5.1 節</a>）。
+  </li>
+  <li>
+    <strong><code>polroles</code></strong>: 適用対象ロールの OID 配列。空配列は許されず、
+    PUBLIC（<code>ACL_ID_PUBLIC == 0</code>）が単独で入っているのが「全ロール対象」の意味になる。
+  </li>
+  <li>
+    <strong><code>polqual</code> / <code>polwithcheck</code></strong>: USING 句／WITH CHECK 句を
+    パース・トランスフォーム済みのノードツリーへ変換し、<code>nodeToString()</code> で
+    テキスト化したもの。読み出し時には <code>stringToNode()</code> で復元する
+    （<a href="ch03.html#sec-3-2">3.2 節</a>）。
+  </li>
+</ul>
+
+<h2 id="sec-2-2">2.2　RowSecurityPolicy 構造体</h2>
+
+<p>
+  カタログ上のタプルをそのまま使うのは不便なので、relcache 上では
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/include/rewrite/rowsecurity.h#L20"><code>RowSecurityPolicy</code></a>
+  というメモリ構造体に変換される。
+</p>
+
+<div class="example">
+  <span class="example-label">構造体定義（rowsecurity.h）</span>
+  <pre><code>typedef struct RowSecurityPolicy
+{
+    char       *policy_name;     /* Name of the policy */
+    char        polcmd;          /* Type of command policy is for */
+    ArrayType  *roles;           /* Array of roles policy is for */
+    bool        permissive;      /* restrictive or permissive policy */
+    Expr       *qual;            /* Expression to filter rows */
+    Expr       *with_check_qual; /* Expression to limit rows allowed */
+    bool        hassublinks;     /* If either expression has sublinks */
+} RowSecurityPolicy;</code></pre>
+</div>
+
+<p>
+  カタログにおける <code>pg_node_tree</code>（テキスト）が <code>Expr *</code>（パースツリー）に
+  既にデシリアライズされている点が重要である。クエリ書き換え時の
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rowsecurity.c#L98"><code>get_row_security_policies()</code></a>
+  からは、この <code>Expr</code> を <code>copyObject()</code> でコピーしてクエリツリーへ織り込むだけで済む
+  （<a href="ch04.html">第4章</a>）。
+</p>
+
+<p>
+  もう 1 つの注目点は <code>hassublinks</code> フラグである。これは USING / WITH CHECK 句に
+  サブクエリ（<code>SubLink</code>）が含まれているかを事前に判定したキャッシュであり、
+  rewriter が「ポリシー内のサブクエリに対しても RIR ルールを発火させ、無限再帰を検知する」必要が
+  あるかを高速に判定するために使われる（<a href="ch04.html#sec-4-2">4.2 節</a>）。
+</p>
+
+<h2 id="sec-2-3">2.3　RowSecurityDesc と relcache への紐付け</h2>
+
+<p>
+  リレーションに紐づくポリシー群は
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/include/rewrite/rowsecurity.h#L31"><code>RowSecurityDesc</code></a>
+  でまとめられ、<code>Relation->rd_rsdesc</code> から辿れる。
+</p>
+
+<div class="example">
+  <span class="example-label">構造体定義</span>
+  <pre><code>typedef struct RowSecurityDesc
+{
+    MemoryContext rscxt;     /* row security memory context */
+    List         *policies;  /* list of row security policies */
+} RowSecurityDesc;</code></pre>
+</div>
+
+<p>
+  <code>rscxt</code> は専用のメモリコンテキストで、relcache のフラッシュ時にここを丸ごと解放できるよう
+  分離されている。<code>policies</code> は <code>RowSecurityPolicy *</code> のリストで、
+  pg_policy のスキャン順、すなわち <code>(polrelid, polname)</code> インデックス順で並ぶ。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph cat["pg_policy (heap)"]
+        T1["row: accounts_owner"]
+        T2["row: accounts_audit"]
+    end
+    subgraph rcache["relcache: Relation 'accounts'"]
+        RD["rd_rsdesc"]
+        DESC["RowSecurityDesc"]
+        P1["RowSecurityPolicy 'accounts_owner'"]
+        P2["RowSecurityPolicy 'accounts_audit'"]
+        RD --> DESC
+        DESC --> P1
+        DESC --> P2
+    end
+    T1 -. RelationBuildRowSecurity .-> P1
+    T2 -. RelationBuildRowSecurity .-> P2
+  </pre>
+  <figcaption>図 2.2: pg_policy の各タプルが relcache の RowSecurityDesc にロードされる流れ。</figcaption>
+</figure>
+
+<p>
+  このロードを担当するのが
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/commands/policy.c#L193"><code>RelationBuildRowSecurity()</code></a> である。
+  概略は次のとおり。
+</p>
+
+<ol>
+  <li>"row security descriptor" という名前で <code>AllocSetContextCreate</code> によりサブコンテキストを作る。</li>
+  <li>pg_policy を <code>polrelid</code> でインデックススキャンする。</li>
+  <li>各タプルから <code>polqual</code> / <code>polwithcheck</code> を取り出し、<code>stringToNode()</code> で <code>Expr</code> へ復元する。</li>
+  <li><code>checkExprHasSubLink()</code> でサブリンクの有無を求め、<code>hassublinks</code> に格納する。</li>
+  <li>処理成功後にコンテキストを <code>CacheMemoryContext</code> の子に付け替え、<code>Relation->rd_rsdesc</code> にセットする。</li>
+</ol>
+
+<p>
+  途中でエラーが発生してもメモリリークが起きないよう、コンテキストの親付け替えは
+  「ロードが最後まで完走したあと」に行われている点が特徴である。
+</p>
+
+<div class="info"><strong>関連</strong>
+  RLS の有効性判定（<code>pg_class.relrowsecurity</code> の確認）と
+  <code>RelationBuildRowSecurity()</code> の呼び出しは独立しており、
+  <code>relrowsecurity = false</code> のテーブルではこのロード自体が行われない
+  （<a href="ch04.html#sec-4-1">4.1 節</a>）。
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch01.html">
+      <span class="dir">← 前の章</span>
+      <span class="ttl">第1章 行レベルセキュリティの概観</span>
+    </a>
+    <a class="up" href="index.html">
+      <span class="dir">↑ 目次</span>
+      <span class="ttl">トップページ</span>
+    </a>
+    <a class="next" href="ch03.html">
+      <span class="dir">次の章 →</span>
+      <span class="ttl">第3章 CREATE/ALTER/DROP POLICY の実装</span>
+    </a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">&copy; 2026 PostgreSQL Internals Notes &middot; PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46 &middot; 本資料は PostgreSQL のソースコードに基づく解説です。</footer>
+</body>
+</html>

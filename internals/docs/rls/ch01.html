@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第1章 行レベルセキュリティの概観 | PostgreSQL Internals: Row Level Security — PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: Row Level Security</a>
+    <span class="version-badge">PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li class="current">
+    <a class="chap-title" href="ch01.html">第1章 行レベルセキュリティの概観</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 RLS とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 列・テーブルレベル権限との関係</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 ポリシーの基本構成要素と最小例</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 pg_policy カタログとデータ構造</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 pg_policy の物理レイアウト</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 RowSecurityPolicy 構造体</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 RowSecurityDesc と relcache への紐付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 CREATE/ALTER/DROP POLICY の実装</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 CREATE POLICY の処理フロー</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 USING 句と WITH CHECK 句の解析</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 依存関係の登録と relcache 無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 ポリシーの削除とロールからの除去</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 クエリ書き換え時の RLS 適用</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 check_enable_rls による有効性判定</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 fireRIRrules から get_row_security_policies へ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 securityQuals と withCheckOptions の注入</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ポリシー結合の意味論とコマンド別の挙動</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 permissive と restrictive の結合</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 コマンド別のポリシー収集</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 default-deny の生成</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 ON CONFLICT と MERGE の特殊処理</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 バイパス・FORCE・キャッシュ無効化の運用面</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 BYPASSRLS とテーブル所有者</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 FORCE ROW LEVEL SECURITY</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 row_security GUC と plan invalidation</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 LEAKPROOF と最適化との相互作用</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第1章　行レベルセキュリティの概観</h1>
+        <p>
+  本章では PostgreSQL の行レベルセキュリティ（Row Level Security, RLS）の動機と
+  全体像を概観する。RLS は「テーブル単位ではなく行単位で、誰がどの行を見られる／更新できるか」を
+  サーバ側で強制する仕組みであり、GRANT 系の特権モデルとは別の層で動作する。
+  具体的な実装はカタログ <code>pg_policy</code>・relcache・クエリ書き換え（rewrite）に分散しており、
+  後続の章でその内部を順に追っていく。
+</p>
+
+<h2 id="sec-1-1">1.1　RLS とは何か</h2>
+
+<p>
+  RLS は、テーブルに対して <em>ポリシー（policy）</em> と呼ばれる述語を定義し、
+  クエリ実行時にその述語をクエリツリーへ自動的に注入することで、行の可視性と
+  書き込み可否を制御する機能である。<code>ALTER TABLE … ENABLE ROW LEVEL SECURITY</code>
+  によりテーブルでフラグを立て、<code>CREATE POLICY</code> でポリシーを定義する。
+  RLS が有効なテーブルへ通常ユーザーがアクセスすると、SELECT / UPDATE / DELETE では
+  ポリシーの <code>USING</code> 句が、INSERT / UPDATE では <code>WITH CHECK</code> 句が
+  自動的に適用される。
+</p>
+
+<p>
+  実装ファイルの先頭コメントでは、RLS の役割は次のように要約されている
+  （<a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rowsecurity.c#L1"><code>src/backend/rewrite/rowsecurity.c</code></a>）。
+</p>
+
+<div class="example">
+  <span class="example-label">ソースコメント（要約）</span>
+  <pre><code>Policies in PostgreSQL provide a mechanism to limit what records are
+returned to a user and what records a user is permitted to add to a table.
+
+Policies can be defined for specific roles, specific commands, or provided
+by an extension.  Row security can also be enabled for a table without any
+policies being explicitly defined, in which case a default-deny policy is
+applied.</code></pre>
+</div>
+
+<p>
+  注目すべきは「ポリシーを 1 つも作らずに RLS を有効化した場合、暗黙の default-deny が
+  適用される」点である。実装上、これは
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rowsecurity.c#L715"><code>add_security_quals()</code></a>
+  と
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rowsecurity.c#L811"><code>add_with_check_options()</code></a>
+  の中で「permissive ポリシーが 1 つも見つからなければ常に <code>FALSE</code> な qual / WCO を 1 件だけ追加する」
+  という形で表現されている。RLS を有効化した直後は誰にも何も見えなくなるのが正しい挙動である。
+</p>
+
+<h2 id="sec-1-2">1.2　列・テーブルレベル権限との関係</h2>
+
+<p>
+  PostgreSQL の権限は大きく次の 3 層に分かれる。RLS はこのうち最も内側の「行レベル」を担当する。
+  図 1.1 に示すように、テーブルアクセスは外側から順に評価され、すべて通過した行だけが
+  クエリ結果に含まれる。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    User["ユーザー / ロール"]
+    Tlevel["テーブル特権 (GRANT SELECT/INSERT/...)"]
+    Clevel["列特権 (GRANT ON COLUMN)"]
+    Rlevel["RLS ポリシー (USING / WITH CHECK)"]
+    Heap["ヒープタプル"]
+    User --> Tlevel --> Clevel --> Rlevel --> Heap
+  </pre>
+  <figcaption>図 1.1: アクセス制御の三層構造。RLS は最も内側で行単位に作用する。</figcaption>
+</figure>
+
+<p>
+  GRANT 系の権限はカタログ <code>pg_class.relacl</code> や <code>pg_attribute.attacl</code> に
+  ACL として保持され、パーサ／プランナで参照される。一方 RLS の述語は <code>pg_policy</code>
+  に格納され、クエリ書き換え段階で対象テーブルの参照に対して合成される
+  （詳細は<a href="ch04.html">第4章</a>）。
+</p>
+
+<div class="note"><strong>メモ</strong>
+  RLS はテーブルの所有者と <code>BYPASSRLS</code> 属性を持つロールに対して既定でバイパスされる。
+  所有者であっても RLS を効かせたい場合は <code>ALTER TABLE … FORCE ROW LEVEL SECURITY</code> を使う。
+  詳細は<a href="ch06.html">第6章</a>を参照。
+</div>
+
+<h2 id="sec-1-3">1.3　ポリシーの基本構成要素と最小例</h2>
+
+<p>
+  各ポリシーは「名前」「対象テーブル」「対象コマンド」「対象ロール」「USING 句」「WITH CHECK 句」
+  「permissive / restrictive 区分」から成る。SQL 文では次のように記述する。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>CREATE TABLE accounts (
+    id    int PRIMARY KEY,
+    owner text NOT NULL,
+    balance numeric NOT NULL
+);
+
+ALTER TABLE accounts ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY accounts_owner ON accounts
+    FOR ALL                       -- 対象コマンド
+    TO PUBLIC                     -- 対象ロール
+    USING (owner = current_user)  -- 既存行に対するフィルタ
+    WITH CHECK (owner = current_user); -- 新規/更新行への制約</code></pre>
+</div>
+
+<p>
+  ポリシー定義は <code>pg_policy</code> 1 行に対応する。生成された行は次のように観察できる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>SELECT polname, polcmd, polpermissive,
+       pg_get_expr(polqual, polrelid)      AS using_expr,
+       pg_get_expr(polwithcheck, polrelid) AS check_expr
+FROM pg_policy
+WHERE polrelid = 'accounts'::regclass;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果</span>
+  <pre><code>    polname     | polcmd | polpermissive |       using_expr        |       check_expr
+----------------+--------+---------------+-------------------------+-------------------------
+ accounts_owner | *      | t             | (owner = CURRENT_USER)  | (owner = CURRENT_USER)</code></pre>
+</div>
+
+<p>
+  <code>polcmd</code> は対象コマンドを 1 文字で表現する。<code>'*'</code> は ALL、
+  <code>'r'</code> は SELECT、<code>'a'</code> は INSERT、<code>'w'</code> は UPDATE、
+  <code>'d'</code> は DELETE で、これは
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/commands/policy.c#L107"><code>parse_policy_command()</code></a>
+  の対応表と一致する。
+</p>
+
+<p>
+  以降の章では、この 1 行のポリシーがどのようにカタログから読み出され
+  （<a href="ch02.html">第2章</a>）、DDL で書き込まれ
+  （<a href="ch03.html">第3章</a>）、クエリへ織り込まれ
+  （<a href="ch04.html">第4章</a>）、複数ポリシーが組み合わされる
+  （<a href="ch05.html">第5章</a>）かを順に見ていく。
+</p>
+
+      </article>
+      <nav class="pager">
+        <span class="pager-spacer" aria-hidden="true"></span>
+    <a class="up" href="index.html">
+      <span class="dir">↑ 目次</span>
+      <span class="ttl">トップページ</span>
+    </a>
+    <a class="next" href="ch02.html">
+      <span class="dir">次の章 →</span>
+      <span class="ttl">第2章 pg_policy カタログとデータ構造</span>
+    </a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">&copy; 2026 PostgreSQL Internals Notes &middot; PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46 &middot; 本資料は PostgreSQL のソースコードに基づく解説です。</footer>
+</body>
+</html>

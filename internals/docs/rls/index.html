@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PostgreSQL Internals: Row Level Security — PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: Row Level Security</a>
+    <span class="version-badge">PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 行レベルセキュリティの概観</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 RLS とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 列・テーブルレベル権限との関係</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 ポリシーの基本構成要素と最小例</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 pg_policy カタログとデータ構造</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 pg_policy の物理レイアウト</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 RowSecurityPolicy 構造体</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 RowSecurityDesc と relcache への紐付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 CREATE/ALTER/DROP POLICY の実装</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 CREATE POLICY の処理フロー</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 USING 句と WITH CHECK 句の解析</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 依存関係の登録と relcache 無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 ポリシーの削除とロールからの除去</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 クエリ書き換え時の RLS 適用</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 check_enable_rls による有効性判定</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 fireRIRrules から get_row_security_policies へ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 securityQuals と withCheckOptions の注入</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ポリシー結合の意味論とコマンド別の挙動</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 permissive と restrictive の結合</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 コマンド別のポリシー収集</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 default-deny の生成</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 ON CONFLICT と MERGE の特殊処理</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 バイパス・FORCE・キャッシュ無効化の運用面</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 BYPASSRLS とテーブル所有者</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 FORCE ROW LEVEL SECURITY</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 row_security GUC と plan invalidation</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 LEAKPROOF と最適化との相互作用</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>PostgreSQL Internals: Row Level Security</h1>
+        <p class="version-hero">PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</p>
+        <p class="lead"><p>
+  本ドキュメントは PostgreSQL の <strong>行レベルセキュリティ（Row Level Security, RLS）</strong>
+  の内部実装を、ソースコードを引用しながら解説する技術ノートである。
+  カタログ <code>pg_policy</code> からクエリ書き換え経路、相補的なロール属性
+  （<code>BYPASSRLS</code>、FORCE ROW LEVEL SECURITY）、そして <code>row_security</code> GUC と
+  plan invalidation の連動まで、RLS を構成する全要素を 6 章で概観する。
+</p>
+
+<p>
+  対象読者は PostgreSQL のバックエンド実装に関心のあるエンジニア・運用者で、
+  SQL レベルでの RLS 利用経験を前提とする。本書中の関数名・構造体名には
+  GitHub 上のソースへのリンクを付している（fork: <code>shinyaaa/postgres</code>）。
+  扱う対象バージョンはページ上部のバッジに示すとおり、PostgreSQL 19beta1 系列の開発スナップショットである。
+</p></p>
+      </div>
+      <div class="toc-grid">
+        <a class="toc-card" href="ch01.html">
+        <span class="num">第1章</span>
+        <span class="title">行レベルセキュリティの概観</span>
+        <span class="desc">RLS の目的と GRANT / 列レベル権限との違い、ポリシーの最小構成を整理する。</span>
+      </a>
+      <a class="toc-card" href="ch02.html">
+        <span class="num">第2章</span>
+        <span class="title">pg_policy カタログとデータ構造</span>
+        <span class="desc">ポリシーがディスクと relcache 上でどのように表現されているかを示す。</span>
+      </a>
+      <a class="toc-card" href="ch03.html">
+        <span class="num">第3章</span>
+        <span class="title">CREATE/ALTER/DROP POLICY の実装</span>
+        <span class="desc">DDL コマンドの実行経路と、依存関係・キャッシュ無効化の仕掛けを追う。</span>
+      </a>
+      <a class="toc-card" href="ch04.html">
+        <span class="num">第4章</span>
+        <span class="title">クエリ書き換え時の RLS 適用</span>
+        <span class="desc">クエリ書き換え段階で RLS がどのように合成され、Query ノードに注入されるかを示す。</span>
+      </a>
+      <a class="toc-card" href="ch05.html">
+        <span class="num">第5章</span>
+        <span class="title">ポリシー結合の意味論とコマンド別の挙動</span>
+        <span class="desc">permissive / restrictive ポリシーの結合規則と、SQL コマンド種別ごとの適用を整理する。</span>
+      </a>
+      <a class="toc-card" href="ch06.html">
+        <span class="num">第6章</span>
+        <span class="title">バイパス・FORCE・キャッシュ無効化の運用面</span>
+        <span class="desc">BYPASSRLS、FORCE ROW LEVEL SECURITY、row_security GUC、leakproof の絡みを実装に即して説明する。</span>
+      </a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer">&copy; 2026 PostgreSQL Internals Notes &middot; PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46 &middot; 本資料は PostgreSQL のソースコードに基づく解説です。</footer>
+</body>
+</html>

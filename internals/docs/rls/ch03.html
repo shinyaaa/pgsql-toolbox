@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第3章 CREATE/ALTER/DROP POLICY の実装 | PostgreSQL Internals: Row Level Security — PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: Row Level Security</a>
+    <span class="version-badge">PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 行レベルセキュリティの概観</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 RLS とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 列・テーブルレベル権限との関係</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 ポリシーの基本構成要素と最小例</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 pg_policy カタログとデータ構造</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 pg_policy の物理レイアウト</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 RowSecurityPolicy 構造体</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 RowSecurityDesc と relcache への紐付け</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch03.html">第3章 CREATE/ALTER/DROP POLICY の実装</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 CREATE POLICY の処理フロー</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 USING 句と WITH CHECK 句の解析</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 依存関係の登録と relcache 無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 ポリシーの削除とロールからの除去</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 クエリ書き換え時の RLS 適用</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 check_enable_rls による有効性判定</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 fireRIRrules から get_row_security_policies へ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 securityQuals と withCheckOptions の注入</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ポリシー結合の意味論とコマンド別の挙動</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 permissive と restrictive の結合</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 コマンド別のポリシー収集</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 default-deny の生成</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 ON CONFLICT と MERGE の特殊処理</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 バイパス・FORCE・キャッシュ無効化の運用面</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 BYPASSRLS とテーブル所有者</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 FORCE ROW LEVEL SECURITY</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 row_security GUC と plan invalidation</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 LEAKPROOF と最適化との相互作用</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第3章　CREATE/ALTER/DROP POLICY の実装</h1>
+        <p>
+  本章では <code>CREATE POLICY</code> / <code>ALTER POLICY</code> / <code>DROP POLICY</code> の
+  実装を <code>src/backend/commands/policy.c</code> を中心に追う。これらの DDL は
+  カタログへの書き込み、述語のパース、依存関係の登録、relcache の無効化までを
+  一気通貫で行う。
+</p>
+
+<h2 id="sec-3-1">3.1　CREATE POLICY の処理フロー</h2>
+
+<p>
+  <code>CREATE POLICY</code> はパーサから <code>CreatePolicyStmt</code> として
+  実行器（utility）に渡され、<a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/commands/policy.c#L569"><code>CreatePolicy()</code></a>
+  が処理する。図 3.1 は <code>CreatePolicy()</code> 内部の主要ステップである。
+</p>
+
+<figure>
+  <pre class="mermaid">
+sequenceDiagram
+    participant U as ユーザー
+    participant P as CreatePolicy()
+    participant T as target_table (Relation)
+    participant C as pg_policy (catalog)
+    participant D as dependency / cache
+    U->>P: CreatePolicyStmt
+    P->>P: parse_policy_command(cmd_name)
+    P->>P: policy_role_list_to_array(roles)
+    P->>T: RangeVarGetRelidExtended + AccessExclusiveLock
+    P->>P: transformWhereClause(qual)
+    P->>P: transformWhereClause(with_check)
+    P->>C: open + 重複名検索
+    C-->>P: 既存なら ERROR
+    P->>C: heap_form_tuple + CatalogTupleInsert
+    P->>D: recordDependencyOn / recordSharedDependencyOn
+    P->>D: CacheInvalidateRelcache(target_table)
+  </pre>
+  <figcaption>図 3.1: CreatePolicy() の主要ステップ。</figcaption>
+</figure>
+
+<p>
+  対象テーブルは <code>AccessExclusiveLock</code> で開かれる。これは
+  「クエリのプランがポリシー集合に依存しうるため、ポリシー変更中の問い合わせを
+  すべて締め出す」ためで、<a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/commands/policy.c#L361"><code>RemovePolicyById()</code></a>
+  のコメントにも同様の説明がある。
+</p>
+
+<p>
+  対象コマンドや WITH CHECK の組み合わせに対する妥当性検査もこの関数で行われる。
+  たとえば SELECT / DELETE に WITH CHECK は意味がないため、明示すると
+  「<code>WITH CHECK cannot be applied to SELECT or DELETE</code>」というエラーになる
+  （<a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/commands/policy.c#L599">policy.c L599</a>）。
+  INSERT で USING を指定するのも禁止される。
+</p>
+
+<h2 id="sec-3-2">3.2　USING 句と WITH CHECK 句の解析</h2>
+
+<p>
+  USING / WITH CHECK 句は <em>テーブル 1 つを範囲表（range table）に持つ独立クエリ</em> として
+  解釈される。<code>CreatePolicy()</code> は次のように 2 つの <code>ParseState</code> を用意し、
+  それぞれに対象テーブルを RTE として登録してから <code>transformWhereClause()</code> を呼ぶ。
+</p>
+
+<div class="example">
+  <span class="example-label">policy.c 抜粋</span>
+  <pre><code>qual_pstate = make_parsestate(NULL);
+with_check_pstate = make_parsestate(NULL);
+...
+nsitem = addRangeTableEntryForRelation(qual_pstate, target_table,
+                                       AccessShareLock,
+                                       NULL, false, false);
+addNSItemToQuery(qual_pstate, nsitem, false, true, true);
+...
+qual = transformWhereClause(qual_pstate, stmt->qual,
+                            EXPR_KIND_POLICY, "POLICY");
+with_check_qual = transformWhereClause(with_check_pstate, stmt->with_check,
+                                       EXPR_KIND_POLICY, "POLICY");
+assign_expr_collations(qual_pstate, qual);
+assign_expr_collations(with_check_pstate, with_check_qual);</code></pre>
+</div>
+
+<p>
+  <code>EXPR_KIND_POLICY</code> という式種別を渡すことで、集約関数やウィンドウ関数など
+  ポリシーで使えない構文をエラーとして弾けるようにしている。最終的に
+  <code>nodeToString()</code> で <code>polqual</code> / <code>polwithcheck</code> 列に格納される
+  テキスト表現が得られる。
+</p>
+
+<p>
+  ロール集合は
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/commands/policy.c#L137"><code>policy_role_list_to_array()</code></a>
+  が <code>RoleSpec</code> リストを Oid 配列に変換する。<code>PUBLIC</code> が単独で
+  指定されていれば <code>ACL_ID_PUBLIC</code> の 1 要素配列に正規化され、
+  他のロールと併記すると WARNING を出して PUBLIC に縮退させる。
+</p>
+
+<h2 id="sec-3-3">3.3　依存関係の登録と relcache 無効化</h2>
+
+<p>
+  ポリシーは「テーブル」「式中に現れるオブジェクト」「ロール」と複数の依存先を持つ。
+  <code>CreatePolicy()</code> はこれを次のように記録する。
+</p>
+
+<div class="example">
+  <span class="example-label">policy.c 抜粋</span>
+  <pre><code>recordDependencyOn(&myself, &target, DEPENDENCY_AUTO);
+recordDependencyOnExpr(&myself, qual, qual_pstate->p_rtable,
+                       DEPENDENCY_NORMAL);
+recordDependencyOnExpr(&myself, with_check_qual,
+                       with_check_pstate->p_rtable, DEPENDENCY_NORMAL);
+/* Register role dependencies */
+target.classId = AuthIdRelationId;
+for (i = 0; i < nitems; i++)
+{
+    target.objectId = DatumGetObjectId(role_oids[i]);
+    if (target.objectId != ACL_ID_PUBLIC)
+        recordSharedDependencyOn(&myself, &target,
+                                 SHARED_DEPENDENCY_POLICY);
+}</code></pre>
+</div>
+
+<p>
+  依存関係の整理として次の点が重要である。
+</p>
+
+<ul>
+  <li>テーブルとは <code>DEPENDENCY_AUTO</code>。テーブルが <code>DROP</code> されればポリシーも自動で消える。</li>
+  <li>式中のオブジェクト（例: USING 句で参照される関数や型）は <code>DEPENDENCY_NORMAL</code>。
+    これらを <code>DROP</code> しようとすると、依存先のポリシーが残っている限りエラーになる。</li>
+  <li>ロール依存は <code>SHARED_DEPENDENCY_POLICY</code> として <em>shared dependency</em> に記録される。
+    ロールを <code>DROP</code> すると
+    <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/commands/policy.c#L416"><code>RemoveRoleFromObjectPolicy()</code></a>
+    が呼ばれ、ポリシーの <code>polroles</code> 配列から該当ロールを除外する。
+    結果としてロールが 0 になる場合はポリシー自体を削除する。</li>
+</ul>
+
+<p>
+  最後に <code>CacheInvalidateRelcache(target_table)</code> を発行し、対象リレーションの
+  relcache エントリを無効化する。これによって既存セッションが次にこのテーブルを参照したとき、
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/commands/policy.c#L193"><code>RelationBuildRowSecurity()</code></a>
+  が再実行され、新しいポリシーが反映される。
+</p>
+
+<div class="warn"><strong>注意</strong>
+  <code>RelationBuildRowSecurity()</code> 単体には plancache の無効化処理はない。
+  プラン側の無効化は「クエリ <code>Query</code> に <code>hasRowSecurity = true</code> が立っているとき、
+  リレーションキャッシュ無効化イベントを契機に再計画される」仕組みで実現される
+  （<a href="ch06.html#sec-6-3">6.3 節</a>）。
+</div>
+
+<h2 id="sec-3-4">3.4　ポリシーの削除とロールからの除去</h2>
+
+<p>
+  <code>DROP POLICY</code> は最終的に
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/commands/policy.c#L332"><code>RemovePolicyById()</code></a>
+  に到達する。対象テーブルを <code>AccessExclusiveLock</code> で開き、<code>CatalogTupleDelete()</code>
+  でタプルを削除したあと、<code>CacheInvalidateRelcache()</code> で無効化を発行する。
+  コメントが「<code>relrowsecurity</code> は単にポリシーの有無を示すフラグではなく、ユーザーが
+  明示的にセットしたものである」と述べているとおり、ポリシーが 0 件になっても
+  RLS フラグ自体は自動では落とされない。すなわち、ポリシー全削除後の RLS 有効テーブルは
+  default-deny の状態になる。
+</p>
+
+<p>
+  ロールが <code>DROP</code> された場合の動作も実装上重要である。
+  <code>RemoveRoleFromObjectPolicy()</code> は <code>polroles</code> 配列から該当ロール OID を
+  除いた新しい配列を作成し、<code>heap_modify_tuple()</code> + <code>CatalogTupleUpdate()</code>
+  で書き戻す。再構築後の配列要素数が 0 ならば「ポリシー自体を破棄する」ことを示す
+  <code>false</code> を返し、呼び出し側で <code>RemovePolicyById()</code> 相当の処理を行う。
+</p>
+
+<figure>
+  <pre class="mermaid">
+stateDiagram-v2
+    [*] --> Exists: CREATE POLICY
+    Exists --> Exists: ALTER POLICY
+    Exists --> Exists: ALTER ROLE (一部ロール削除)
+    Exists --> Removed: DROP POLICY / DROP TABLE
+    Exists --> Removed: 最後のロール削除
+    Removed --> [*]
+  </pre>
+  <figcaption>図 3.2: ポリシーのライフサイクル。</figcaption>
+</figure>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch02.html">
+      <span class="dir">← 前の章</span>
+      <span class="ttl">第2章 pg_policy カタログとデータ構造</span>
+    </a>
+    <a class="up" href="index.html">
+      <span class="dir">↑ 目次</span>
+      <span class="ttl">トップページ</span>
+    </a>
+    <a class="next" href="ch04.html">
+      <span class="dir">次の章 →</span>
+      <span class="ttl">第4章 クエリ書き換え時の RLS 適用</span>
+    </a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">&copy; 2026 PostgreSQL Internals Notes &middot; PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46 &middot; 本資料は PostgreSQL のソースコードに基づく解説です。</footer>
+</body>
+</html>

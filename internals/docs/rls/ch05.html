@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章 ポリシー結合の意味論とコマンド別の挙動 | PostgreSQL Internals: Row Level Security — PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: Row Level Security</a>
+    <span class="version-badge">PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 行レベルセキュリティの概観</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 RLS とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 列・テーブルレベル権限との関係</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 ポリシーの基本構成要素と最小例</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 pg_policy カタログとデータ構造</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 pg_policy の物理レイアウト</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 RowSecurityPolicy 構造体</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 RowSecurityDesc と relcache への紐付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 CREATE/ALTER/DROP POLICY の実装</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 CREATE POLICY の処理フロー</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 USING 句と WITH CHECK 句の解析</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 依存関係の登録と relcache 無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 ポリシーの削除とロールからの除去</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 クエリ書き換え時の RLS 適用</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 check_enable_rls による有効性判定</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 fireRIRrules から get_row_security_policies へ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 securityQuals と withCheckOptions の注入</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch05.html">第5章 ポリシー結合の意味論とコマンド別の挙動</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 permissive と restrictive の結合</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 コマンド別のポリシー収集</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 default-deny の生成</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 ON CONFLICT と MERGE の特殊処理</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 バイパス・FORCE・キャッシュ無効化の運用面</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 BYPASSRLS とテーブル所有者</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 FORCE ROW LEVEL SECURITY</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 row_security GUC と plan invalidation</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 LEAKPROOF と最適化との相互作用</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第5章　ポリシー結合の意味論とコマンド別の挙動</h1>
+        <p>
+  本章では、テーブルに複数のポリシーが定義されているときの結合規則と、
+  SQL コマンド種別ごとの適用順を、<code>rowsecurity.c</code> の実装に即して整理する。
+  RLS の動作直感は「OR で広げ、AND で絞る」「足りなければ default-deny」の 2 点に集約される。
+</p>
+
+<h2 id="sec-5-1">5.1　permissive と restrictive の結合</h2>
+
+<p>
+  ポリシーには <code>permissive</code>（既定）と <code>restrictive</code>（<code>AS RESTRICTIVE</code> 指定）の
+  2 種があり、結合規則が異なる。<a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rowsecurity.c#L715"><code>add_security_quals()</code></a>
+  と <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rowsecurity.c#L811"><code>add_with_check_options()</code></a>
+  における実装は次のとおり。
+</p>
+
+<ul>
+  <li><strong>permissive 同士は OR で結合</strong>: 列挙したいずれかの permissive ポリシーが
+      <code>true</code> を返せば行は許可される。</li>
+  <li><strong>restrictive はそれぞれ独立に AND で適用</strong>: すべての restrictive ポリシーが
+      <code>true</code> を返さなければ行は許可されない。</li>
+  <li><strong>permissive が 0 件なら結果は常に拒否</strong>: 「最低 1 つは行を許可する側のポリシーが
+      必要」というのが基本原則である。</li>
+</ul>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    P1["permissive P1: owner = current_user"]
+    P2["permissive P2: is_admin(current_user)"]
+    R1["restrictive R1: tenant_id = current_tenant()"]
+    R2["restrictive R2: NOT is_pii(data)"]
+    OR["(P1 OR P2)"]
+    P1 --> OR
+    P2 --> OR
+    OR --> AND["AND R1"]
+    R1 --> AND
+    AND --> AND2["AND R2"]
+    R2 --> AND2
+    AND2 --> Row["行を返す/許可する"]
+  </pre>
+  <figcaption>図 5.1: permissive と restrictive の結合イメージ。</figcaption>
+</figure>
+
+<p>
+  なお restrictive ポリシーは「ポリシー名でソートしてから 1 つずつ <code>WithCheckOption</code> として
+  追加する」実装になっており（<a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rowsecurity.c#L679"><code>sort_policies_by_name()</code></a>）、
+  違反時のエラーメッセージにどのポリシーが原因かを安定して特定できるよう配慮されている。
+</p>
+
+<h2 id="sec-5-2">5.2　コマンド別のポリシー収集</h2>
+
+<p>
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rowsecurity.c#L556"><code>get_policies_for_relation()</code></a>
+  は対象テーブルの全ポリシーを走査し、<code>polcmd</code> と要求されたコマンドが一致するもののみを
+  permissive / restrictive のリストに振り分ける。<code>polcmd == '*'</code>（ALL）は無条件で対象に含まれる。
+</p>
+
+<p>
+  ロール一致判定は
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rowsecurity.c#L931"><code>check_role_for_policy()</code></a>
+  が行う。<code>polroles[0]</code> が <code>ACL_ID_PUBLIC</code> のときは即時 true を返し、
+  そうでなければ各 OID について <code>has_privs_of_role()</code> をチェックする。
+  ロール継承を含むので、ある親ロールに付与されたポリシーは継承元のメンバーにも適用される。
+</p>
+
+<p>
+  さらに、拡張モジュールが
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/include/rewrite/rowsecurity.h#L37"><code>row_security_policy_hook_permissive</code></a> /
+  <code>row_security_policy_hook_restrictive</code> を介して追加のポリシーを差し込める。
+  ビルトインポリシーに後追いで連結され、restrictive 側は同様にポリシー名でソートされる。
+</p>
+
+<h2 id="sec-5-3">5.3　default-deny の生成</h2>
+
+<p>
+  permissive ポリシーが 1 件も収集されなかった場合、<code>add_security_quals()</code> は
+  常に <code>FALSE</code> を返す定数ノードを 1 つだけ securityQuals に追加する。
+</p>
+
+<div class="example">
+  <span class="example-label">rowsecurity.c より</span>
+  <pre><code>/*
+ * A permissive policy must exist for rows to be visible at all.
+ * Therefore, if there were no permissive policies found, return a
+ * single always-false clause.
+ */
+*securityQuals = lappend(*securityQuals,
+                         makeConst(BOOLOID, -1, InvalidOid,
+                                   sizeof(bool), BoolGetDatum(false),
+                                   false, true));</code></pre>
+</div>
+
+<p>
+  これが「ポリシー未定義 + RLS 有効 = すべて見えない」という挙動の正体である。
+  <code>add_with_check_options()</code> も同様に、permissive ポリシーが無いときは
+  <code>FALSE</code> な <code>WithCheckOption</code> を 1 つ追加し、INSERT/UPDATE が必ず失敗するようにする。
+</p>
+
+<h2 id="sec-5-4">5.4　ON CONFLICT と MERGE の特殊処理</h2>
+
+<p>
+  <code>get_row_security_policies()</code> の本体（<a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rowsecurity.c#L98">L98 以降</a>）は、
+  SELECT / UPDATE / DELETE / INSERT に加え、INSERT ... ON CONFLICT と MERGE の組み合わせを
+  漏れなく扱うために長くなっている。要点は次のとおり。
+</p>
+
+<ul>
+  <li><strong>SELECT FOR UPDATE/SHARE</strong>: <code>perminfo-&gt;requiredPerms</code> に
+      <code>ACL_UPDATE</code> が含まれるとき、まず UPDATE 用 USING ポリシーをかけてから
+      SELECT 用ポリシーを重ねる。これにより、ロック取得対象が UPDATE 経由でも
+      可視である行に限定される。</li>
+  <li><strong>UPDATE/DELETE と RETURNING</strong>: 行更新／削除の許可判定（UPDATE/DELETE の USING）に加え、
+      RETURNING や WHERE で列を参照する場合は SELECT 用 USING も適用される。</li>
+  <li><strong>INSERT/UPDATE</strong>: INSERT の WITH CHECK と、UPDATE の WITH CHECK が
+      <code>add_with_check_options()</code> 経由で挿入される。WITH CHECK が未指定なら
+      <code>QUAL_FOR_WCO</code> マクロで USING が代用される（<a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rowsecurity.c#L823">L823</a>）。</li>
+  <li><strong>INSERT ... ON CONFLICT DO SELECT/UPDATE</strong>: 競合行に対する
+      <code>WCO_RLS_CONFLICT_CHECK</code> が追加され、行が見えない／更新できない場合は
+      静かに無視されるのではなくエラーになる。UPDATE 経路に進む場合はさらに WITH CHECK と
+      SELECT の WCO が重ねられる。</li>
+  <li><strong>MERGE</strong>: MERGE は単独のポリシーを持たず、UPDATE / DELETE / INSERT それぞれの
+      ポリシーを「WCO」として束ねて検査する。USING 句も <code>WCO_RLS_MERGE_UPDATE_CHECK</code> /
+      <code>WCO_RLS_MERGE_DELETE_CHECK</code> として WCO 化される点が他コマンドと異なる
+      （<a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rowsecurity.c#L419">L419 以降</a>）。
+      ソース内コメントは「ON CONFLICT のように、対象行が RLS で許可されない場合は
+      暗黙にスキップするのではなくエラーにする」設計意図を明記している。</li>
+</ul>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    A["CmdType"]
+    A --> S["SELECT"]
+    A --> U["UPDATE"]
+    A --> D["DELETE"]
+    A --> I["INSERT"]
+    A --> M["MERGE"]
+    S --> SS["SELECT USING"]
+    U --> UU["UPDATE USING + WITH CHECK"]
+    U --> US["+ SELECT USING (if RETURNING)"]
+    D --> DD["DELETE USING + SELECT USING (if RETURNING)"]
+    I --> II["INSERT WITH CHECK"]
+    I --> IS["+ SELECT WCO (if RETURNING)"]
+    I --> IC["+ CONFLICT_CHECK (ON CONFLICT)"]
+    M --> MU["UPDATE USING/CHECK as WCO"]
+    M --> MD["DELETE USING as WCO"]
+    M --> MI["INSERT WITH CHECK"]
+  </pre>
+  <figcaption>図 5.2: コマンド別に合成されるポリシー一覧。</figcaption>
+</figure>
+
+<div class="note"><strong>メモ</strong>
+  最適化ヒントとして、<code>securityQuals</code> はセキュリティバリアとして扱われ、
+  LEAKPROOF 関数だけが押し下げられる。詳細は<a href="ch06.html#sec-6-4">6.4 節</a>を参照。
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch04.html">
+      <span class="dir">← 前の章</span>
+      <span class="ttl">第4章 クエリ書き換え時の RLS 適用</span>
+    </a>
+    <a class="up" href="index.html">
+      <span class="dir">↑ 目次</span>
+      <span class="ttl">トップページ</span>
+    </a>
+    <a class="next" href="ch06.html">
+      <span class="dir">次の章 →</span>
+      <span class="ttl">第6章 バイパス・FORCE・キャッシュ無効化の運用面</span>
+    </a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">&copy; 2026 PostgreSQL Internals Notes &middot; PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46 &middot; 本資料は PostgreSQL のソースコードに基づく解説です。</footer>
+</body>
+</html>
