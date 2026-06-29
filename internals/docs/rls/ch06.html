@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第6章 バイパス・FORCE・キャッシュ無効化の運用面 | PostgreSQL Internals: Row Level Security — PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: Row Level Security</a>
+    <span class="version-badge">PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 行レベルセキュリティの概観</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 RLS とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 列・テーブルレベル権限との関係</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 ポリシーの基本構成要素と最小例</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 pg_policy カタログとデータ構造</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 pg_policy の物理レイアウト</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 RowSecurityPolicy 構造体</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 RowSecurityDesc と relcache への紐付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 CREATE/ALTER/DROP POLICY の実装</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 CREATE POLICY の処理フロー</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 USING 句と WITH CHECK 句の解析</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 依存関係の登録と relcache 無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 ポリシーの削除とロールからの除去</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 クエリ書き換え時の RLS 適用</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 check_enable_rls による有効性判定</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 fireRIRrules から get_row_security_policies へ</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 securityQuals と withCheckOptions の注入</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ポリシー結合の意味論とコマンド別の挙動</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 permissive と restrictive の結合</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 コマンド別のポリシー収集</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 default-deny の生成</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 ON CONFLICT と MERGE の特殊処理</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch06.html">第6章 バイパス・FORCE・キャッシュ無効化の運用面</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 BYPASSRLS とテーブル所有者</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 FORCE ROW LEVEL SECURITY</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 row_security GUC と plan invalidation</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 LEAKPROOF と最適化との相互作用</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第6章　バイパス・FORCE・キャッシュ無効化の運用面</h1>
+        <p>
+  本章では RLS の運用面で誤解されやすいポイント、すなわちバイパス系の経路と、
+  GUC・キャッシュ・最適化との相互作用を整理する。いずれも
+  <a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/utils/misc/rls.c#L52"><code>check_enable_rls()</code></a>
+  と書き換え経路に実装の根拠がある。
+</p>
+
+<h2 id="sec-6-1">6.1　BYPASSRLS とテーブル所有者</h2>
+
+<p>
+  <code>BYPASSRLS</code> はロール属性で、付与されたロールはすべての RLS を無効化する。
+  スーパーユーザーは <code>has_bypassrls_privilege()</code> が常に <code>true</code> を返すため
+  自動的にバイパス対象である。<code>check_enable_rls()</code> はこの判定を行うと
+  <code>RLS_NONE_ENV</code> を返す。これは「現在の環境では適用しない」というシグナルであり、
+  ロール切り替えで状況が変わりうるためプランキャッシュは無効化対象として残る。
+</p>
+
+<p>
+  テーブル所有者の挙動はこれと似て非なる。所有者は既定で自テーブルの RLS をバイパスするが、
+  これは「自分のテーブルだから無条件で全行アクセス」というよりは「DDL 主体への保護」に近い。
+  実装上は <code>object_ownercheck()</code> の結果と <code>relforcerowsecurity</code> フラグを組み合わせ、
+  <code>FORCE</code> 未指定のときに限ってバイパスとなる（次節）。
+</p>
+
+<div class="example">
+  <span class="example-label">rls.c 抜粋</span>
+  <pre><code>if (has_bypassrls_privilege(user_id))
+    return RLS_NONE_ENV;
+
+amowner = object_ownercheck(RelationRelationId, relid, user_id);
+if (amowner)
+{
+    if (!relforcerowsecurity || InNoForceRLSOperation())
+        return RLS_NONE_ENV;
+}</code></pre>
+</div>
+
+<h2 id="sec-6-2">6.2　FORCE ROW LEVEL SECURITY</h2>
+
+<p>
+  <code>ALTER TABLE … FORCE ROW LEVEL SECURITY</code> は所有者にも RLS を強制するスイッチで、
+  <code>pg_class.relforcerowsecurity</code> に格納される。RLS が有効かつ FORCE がセットされていれば、
+  所有者であっても <code>RLS_ENABLED</code> 経路に進む。
+</p>
+
+<p>
+  ただし「FORCE 状態でも RLS を適用しない」例外として、参照整合性制約のチェックなどで
+  使われる <code>InNoForceRLSOperation()</code> がある。これが真のあいだは、所有者経由の
+  RI 検査が RLS で阻害されない。ソースコメントは次のように説明している。
+</p>
+
+<div class="example">
+  <span class="example-label">rls.c コメント抜粋</span>
+  <pre><code>InNoForceRLSOperation indicates that we should not apply RLS even
+if the table has FORCE RLS set - IF the current user is the owner.
+This is specifically to ensure that referential integrity checks
+are able to still run correctly.</code></pre>
+</div>
+
+<p>
+  この設計は「所有者でない通常ユーザーが INSERT したとき、外部キー先のテーブルにも
+  RLS が掛かっていると整合性検査が失敗しうる」という問題を回避するためのものである。
+</p>
+
+<h2 id="sec-6-3">6.3　row_security GUC と plan invalidation</h2>
+
+<p>
+  <code>row_security</code> は接続ローカルの GUC で、既定は <code>on</code>。ユーザーが <code>off</code> に設定すると、
+  RLS が適用されるはずのクエリで <em>明示的にエラー</em> を発生させる。
+</p>
+
+<div class="example">
+  <span class="example-label">rls.c より</span>
+  <pre><code>if (!row_security && !noError)
+    ereport(ERROR,
+            (errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+             errmsg("query would be affected by row-level security policy for table \"%s\"",
+                    get_rel_name(relid)),
+             amowner ? errhint("To disable the policy for the table's owner, use ALTER TABLE NO FORCE ROW LEVEL SECURITY.") : 0));</code></pre>
+</div>
+
+<p>
+  目的は「ダンプや一括ロード時に、暗黙の行フィルタによってデータが欠落することを利用者に気付かせる」
+  ことにある。<code>pg_dump</code> はデフォルトでこの GUC を <code>off</code> にしてダンプを試み、
+  RLS で阻まれる行があれば即座にエラーとして検出する。
+</p>
+
+<p>
+  プラン無効化の観点では次の流れが鍵となる。
+</p>
+
+<ol>
+  <li>書き換え時、<code>get_row_security_policies()</code> は最後に <code>*hasRowSecurity = true</code> を立てる。</li>
+  <li>rewriter はこの値を <code>Query-&gt;hasRowSecurity</code> へ伝搬する
+      （<a href="https://github.com/shinyaaa/postgres/blob/dbaa4dc3c8dd77a0e1c977024d4ae150e00456b3/src/backend/rewrite/rewriteHandler.c#L504">rewriteHandler.c L504</a> ほか）。</li>
+  <li>plancache はこのフラグを持つプランを「ロール変更・GUC 変更・カタログ無効化のいずれかで再計画必須」と扱う。</li>
+  <li><code>RelationBuildRowSecurity()</code> の再実行は relcache 無効化で誘発される
+      （<a href="ch03.html#sec-3-3">3.3 節</a>）。</li>
+</ol>
+
+<figure>
+  <pre class="mermaid">
+sequenceDiagram
+    participant App as アプリケーション
+    participant PC as plancache
+    participant RW as rewriter
+    participant RC as relcache
+    App->>PC: 同じ SQL を再実行
+    PC->>PC: hasRowSecurity? かつ 環境変化?
+    alt 変化あり
+        PC->>RW: 再 rewrite + 再 plan
+        RW->>RC: RelationGetRowSecurity (rd_rsdesc)
+    else 変化なし
+        PC-->>App: キャッシュ済みプラン
+    end
+  </pre>
+  <figcaption>図 6.1: hasRowSecurity フラグと plancache の協調。</figcaption>
+</figure>
+
+<h2 id="sec-6-4">6.4　LEAKPROOF と最適化との相互作用</h2>
+
+<p>
+  RLS の述語（<code>securityQuals</code>）はセキュリティバリアとして扱われる。これは、
+  プランナがフィルタやインデックス条件を行レベル安全境界の <em>内側</em> に押し下げてよいかを
+  関数の <code>leakproof</code> 属性で判定するという意味である。LEAKPROOF でない関数は
+  バリアより上に置かれ、見せたくない行の値を「副作用つきの関数」が観測する可能性を排除する。
+</p>
+
+<p>
+  実装上は、<code>get_row_security_policies()</code> 自体は単に「<code>securityQuals</code> に式を入れる」だけで、
+  バリアとしての扱いはプランナ側の <code>securityQuals</code> 取り扱いに委ねられている。
+  これによって RLS とセキュリティバリアビューの取り扱いを同じ枠組みで実現している。
+</p>
+
+<div class="warn"><strong>注意</strong>
+  運用上、独自関数を RLS の述語で使う場合は、安全性を確認したうえで
+  <code>CREATE FUNCTION ... LEAKPROOF</code> として宣言しないと、
+  プランナによる qual の押し下げが効かず、性能上の不利益が出ることがある。
+  LEAKPROOF を付けるにはスーパーユーザー権限が必要。
+</div>
+
+<h2>まとめ</h2>
+
+<p>
+  全章を通じて、RLS は次の 3 層に分けて理解すると見通しが良い。
+</p>
+
+<ol>
+  <li><strong>カタログ層</strong>: <code>pg_policy</code> と <code>pg_class.relrowsecurity</code> /
+      <code>relforcerowsecurity</code> がポリシーの永続表現を担う。</li>
+  <li><strong>キャッシュ層</strong>: <code>RowSecurityDesc</code> が relcache 上にロードされ、
+      DDL 完了時の <code>CacheInvalidateRelcache()</code> で再構築される。</li>
+  <li><strong>クエリ層</strong>: rewriter が <code>get_row_security_policies()</code> 経由で
+      <code>securityQuals</code> と <code>withCheckOptions</code> を Query に注入し、
+      <code>hasRowSecurity</code> フラグで plancache と協調する。</li>
+</ol>
+
+<p>
+  この三層がそれぞれ独立しているおかげで、ポリシーは DDL から書き換え、最適化、実行までを
+  一貫したインターフェースで扱える。RLS を運用する際の挙動は、ほぼすべてこの 3 層のどこに
+  対応するかを意識すれば説明可能である。
+</p>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch05.html">
+      <span class="dir">← 前の章</span>
+      <span class="ttl">第5章 ポリシー結合の意味論とコマンド別の挙動</span>
+    </a>
+    <a class="up" href="index.html">
+      <span class="dir">↑ 目次</span>
+      <span class="ttl">トップページ</span>
+    </a>
+    <span class="pager-spacer" aria-hidden="true"></span>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">&copy; 2026 PostgreSQL Internals Notes &middot; PostgreSQL 19beta1 · dbaa4dc · 2026-06-29 10:46 &middot; 本資料は PostgreSQL のソースコードに基づく解説です。</footer>
+</body>
+</html>
