@@ -53,7 +53,23 @@
       "WebFetch(domain:www.highgo.ca)",
       "WebFetch(domain:www.mail-archive.com)",
       "WebFetch(domain:www.spinics.net)",
-      "mcp__pgsql-ml-mcp"
+      "mcp__pgsql-ml-mcp",
+      "Bash(ssh shinya@192.168.1.3:*)",
+      "Bash(gh *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh *)",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/gh-repo-guard.sh\""
+          }
+        ]
+      }
     ]
   },
   "enabledMcpjsonServers": [
