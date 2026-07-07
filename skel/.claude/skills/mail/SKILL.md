@@ -55,9 +55,16 @@ hackers email stands on its motivation and concreteness, not its prose.
 
 4. **Draft** following the structure and style below.
 
-5. **Present** the email as: a suggested **Subject** line, then the **body** in a
-   plain-text code block so the user can copy it verbatim. Note separately anything
-   they still need to fill in (e.g. a benchmark number, a message-id link) and any
+5. **Write the draft to a file.** Save it to `work/<branch>/vN.md`, where `<branch>`
+   is the current git branch (`git rev-parse --abbrev-ref HEAD`) and `N` is the patch
+   series version. Take `N` from the `vN-` prefix that `git format-patch` produces
+   (a v7 series gives `work/<branch>/v7.md`), or ask the user when no patch exists yet.
+   Lead the file with the patch version as a Markdown heading (e.g. `# v7`), then a
+   suggested **Subject** line, then the **body**. The `.md` extension is only for the
+   working file, so keep the body itself as paste-ready plain-text email content with
+   no Markdown styling (no `**bold**`, no `[text](url)`), because mail clients do not
+   render it. After writing, tell the user the path, and note separately anything they
+   still need to fill in (e.g. a benchmark number, a message-id link) and any
    attachments to add via `git format-patch`.
 
 ## Line breaks — important
@@ -123,8 +130,9 @@ they are what make a draft sound like the user rather than a generic AI.
   as `[N]`.
 - **Tone:** plain, technical, courteous, concise. No marketing language, no
   hedging filler, no exclamation marks in the argument.
-- **No semicolons.** Don't use semicolons in the prose. Split into separate
-  sentences, or use a dash or "and" instead. (Quoted text from others stays
+- **No semicolons, and avoid dashes.** Don't use semicolons in the prose, and avoid
+  em dashes (the `--` connector) as much as possible. Split into separate sentences,
+  or use a comma, parentheses, or "and" instead. (Quoted text from others stays
   verbatim.)
 
 ## Committer conventions to layer in
