@@ -1,6 +1,11 @@
 ---
 name: codex
-description: Call OpenAI Codex CLI for a second opinion when stuck or for code review. Usage - /codex review, /codex ask <question>, /codex <prompt>.
+description: >-
+  Call OpenAI Codex CLI for a second opinion when stuck or for code review.
+  Usage - /codex review, /codex ask <question>, /codex <prompt>. Also use when
+  the user asks for "another model's opinion", "a second opinion",
+  "Codexに聞いて", "セカンドオピニオン", or wants an independent review of
+  uncommitted changes.
 ---
 
 # Codex Second Opinion
@@ -10,6 +15,12 @@ Call the OpenAI Codex CLI to get a second opinion or code review.
 ## Arguments
 
 $ARGUMENTS
+
+## Preflight
+
+Check that the CLI exists (`command -v codex`). If it is not installed, tell
+the user and stop — do not try to install it yourself (it needs an OpenAI
+account; typically installed via `npm install -g @openai/codex`).
 
 ## Mode Selection
 
@@ -68,4 +79,8 @@ codex exec -s read-only "<prompt>"
 - If Codex output is long, summarize key points
 - If Codex's suggestion conflicts with your analysis, present both views and let the user decide
 - Always use `read-only` sandbox or `--uncommitted` to prevent Codex from making write operations
-- Use a 120-second timeout for Codex commands
+- Use a 120-second timeout for Codex commands. Reviews of large diffs can take
+  longer — if a command times out, re-run it in the background and report the
+  result when it completes instead of giving up
+- Codex output is a second opinion, not ground truth — verify concrete claims
+  (line numbers, API behavior) against the actual code before relaying them

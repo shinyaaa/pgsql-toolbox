@@ -1,6 +1,12 @@
 ---
 name: commit
-description: Create a git commit following PostgreSQL commit message conventions. Analyzes staged/unstaged changes and composes a properly formatted commit message.
+description: >-
+  Create a git commit following PostgreSQL commit message conventions.
+  Analyzes staged/unstaged changes and composes a properly formatted summary
+  line, narrative body, and attribution tags (Author/Reviewed-by/Discussion).
+  Use whenever the user asks to commit work in a PostgreSQL worktree — "commit
+  this", "make a commit", "コミットして", "コミットメッセージを書いて" — even if they don't
+  mention PostgreSQL conventions explicitly.
 ---
 
 # PostgreSQL Commit
@@ -97,7 +103,11 @@ Attribution rules (from the PostgreSQL wiki guidance):
 
 ### Version-specific footer
 
-The footer depends on whether this is the initial patch or a later revision.
+This footer applies when committing the user's own patch in a development
+worktree (work destined for pgsql-hackers). The full tag set above describes
+the general committer format; for the user's own patches, use this simplified
+footer instead. The footer depends on whether this is the initial patch or a
+later revision.
 
 **v1 (initial patch):** use this fixed footer verbatim, leaving the
 `Reviewed-by:` and `Discussion:` values blank to be filled in later:
@@ -121,7 +131,8 @@ Discussion: https://postgr.es/m/
 ### Anti-patterns to Avoid
 
 - Do not use past tense in the summary line ("Fixed", "Added")
-- Do not exceed 72 characters in the summary line
+- Do not exceed the summary line length limit (aim under 64 characters, never
+  more than about 76)
 - Do not omit the blank line between summary and body
 - Do not use "by me" in tags; spell out the full name
 - Do not wrap body text beyond 72 characters

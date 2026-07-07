@@ -129,6 +129,22 @@ search_messages(query="heapam_tuple_insert")
 → group results by thread_id to see distinct discussions
 ```
 
+## Archive Freshness
+
+The archive is a local database refreshed in batches (a daily batch runs via
+the pgsql-toolbox dashboard), not a live feed. If search results seem to stop
+at some past date, suspect a stale or partially downloaded archive — not the
+mailing list going quiet.
+
+- Don't judge freshness by `list_mailing_lists`' `last_message` field: bogus
+  future-dated Date headers in the archive (e.g. year 2036) make it unreliable.
+  Check the dates of actual recent search results instead.
+- When you suspect staleness, tell the user explicitly rather than silently
+  reporting incomplete results. The fix is to re-run the refresh batch from the
+  pgsql-toolbox dashboard (http://localhost:30001 → MCP Server tab → "Run batch
+  now", or `curl -X POST http://localhost:30001/api/mcp/batch`), wait for it to
+  finish, then search again.
+
 ## Tips
 
 - **Start broad, then narrow**: Begin with a general search and use `list_name` or `author`
