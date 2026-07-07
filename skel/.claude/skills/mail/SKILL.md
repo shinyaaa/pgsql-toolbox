@@ -15,10 +15,14 @@ description: >-
 
 Draft emails for the `pgsql-hackers@lists.postgresql.org` mailing list that read
 like Shinya Kato wrote them, and that respect the community conventions
-committers expect. The goal is a ready-to-send plain-text email — correct
-structure, motivation-first argument, concrete examples, proper citations, and
-the right signature — that the user can paste into their mail client (or
-`git send-email`) with minimal editing.
+committers expect. The goal is a ready-to-send, **concise** plain-text email —
+correct structure, motivation-first argument, concrete examples, proper
+citations, and the right signature — that the user can paste into their mail
+client (or `git send-email`) with minimal editing.
+
+The user tends to over-write, so bias hard toward brevity: the draft should be as
+short as the change warrants, never longer. See [Keep it short](#keep-it-short-the-default)
+below — treat it as the overriding principle when it conflicts with anything else here.
 
 ## When this applies
 
@@ -32,6 +36,34 @@ Three email types, all on pgsql-hackers:
 
 If it's ambiguous which one, ask. The branch context is a strong hint: a feature
 branch with local commits and no cited thread usually means a proposal.
+
+## Keep it short (the default)
+
+Brevity is the single most important thing to get right here. The user's instinct
+is to over-write, and a hackers email earns attention by being easy to skim, not
+by being exhaustive. When any other guidance in this skill pulls toward "more,"
+this section wins. Concretely:
+
+- **Say each point once.** Don't restate the motivation in the opener, again in the
+  proposal, and again in the closing. If a sentence repeats an idea already made,
+  delete it.
+- **A sentence or two of motivation is usually enough.** Reserve a full motivation
+  paragraph for changes where the "why" is genuinely non-obvious. Don't build a case
+  for something reviewers will immediately see the point of.
+- **Add a labeled section only when it carries content.** `Design:`,
+  `Design Considerations:`, `Regarding Testing:` are optional, not a template to
+  fill. Many good proposals are just: the one-line proposal, one concrete example,
+  and "The patch is attached. Thoughts?"
+- **Let the example do the work.** A fenced SQL/output block usually replaces a
+  paragraph of description. Show it, then cut the prose that would have described it.
+- **No throat-clearing, no summary.** Open with the proposal in the first sentence.
+  Don't wind up, and don't end by re-summarizing what you just said.
+- **Match length to the change.** A one-line fix is a few sentences; only a large,
+  non-obvious feature earns the full treatment (patch breakdown, benchmarks,
+  trade-offs). When in doubt, write the shorter version.
+- **Do a trim pass before handing it over.** Reread the finished draft and delete
+  every word, sentence, and section that doesn't change the reader's understanding
+  or decision. If removing it loses nothing, it was padding — remove it.
 
 ## Workflow
 
@@ -53,7 +85,10 @@ hackers email stands on its motivation and concreteness, not its prose.
    MCP tools to locate related prior threads, the commit that introduced a related
    feature, or a commitfest entry, and offer them as `[N]` references. See "Citations".
 
-4. **Draft** following the structure and style below.
+4. **Draft** following the structure and style below, then **do a trim pass**
+   (see "Keep it short"): cut every sentence, and every labeled section, that
+   doesn't add information or change the reader's decision. Aim for the shortest
+   version that still stands on its motivation and concreteness.
 
 5. **Write the draft to a file.** Save it to `work/<branch>/vN.md`, where `<branch>`
    is the current git branch (`git rev-parse --abbrev-ref HEAD`) and `N` is the patch
@@ -129,7 +164,8 @@ they are what make a draft sound like the user rather than a generic AI.
 - **References** go at the bottom as `[N] https://…` footnotes, referenced inline
   as `[N]`.
 - **Tone:** plain, technical, courteous, concise. No marketing language, no
-  hedging filler, no exclamation marks in the argument.
+  hedging filler, no exclamation marks in the argument. Brevity is part of the
+  voice — the user's real emails are short, so when in doubt, cut (see "Keep it short").
 - **No semicolons, and avoid dashes.** Don't use semicolons in the prose, and avoid
   em dashes (the `--` connector) as much as possible. Split into separate sentences,
   or use a comma, parentheses, or "and" instead. (Quoted text from others stays
