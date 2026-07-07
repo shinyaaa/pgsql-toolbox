@@ -47,6 +47,17 @@ body {
   text-decoration: none;
   letter-spacing: 0.02em;
 }
+.site-header .back-link {
+  color: rgba(255, 255, 255, 0.7);
+  text-decoration: none;
+  font-size: 0.78rem;
+  margin-right: 14px;
+  white-space: nowrap;
+}
+.site-header .back-link:hover {
+  color: #fff;
+}
+
 .version-badge {
   margin-left: 14px;
   padding: 2px 9px;
