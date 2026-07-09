@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第7章 実践: 観察と制限事項 | PostgreSQL プロパティグラフ（SQL/PGQ）の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-07-09 12:21</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL プロパティグラフ（SQL/PGQ）の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-07-09 12:21</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 プロパティグラフ概論</a>
+    <ol class="sect">
+        <li><a href="ch01.html#sec-1-1">1.1 SQL/PGQ とプロパティグラフモデル</a></li>
+        <li><a href="ch01.html#sec-1-2">1.2 論理オブジェクトとしてのプロパティグラフ</a></li>
+        <li><a href="ch01.html#sec-1-3">1.3 クエリ処理パイプライン全体像</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 グラフの定義: CREATE PROPERTY GRAPH</a>
+    <ol class="sect">
+        <li><a href="ch02.html#sec-2-1">2.1 構文の全体像</a></li>
+        <li><a href="ch02.html#sec-2-2">2.2 頂点・辺と KEY / SOURCE / DESTINATION</a></li>
+        <li><a href="ch02.html#sec-2-3">2.3 ラベルとプロパティ</a></li>
+        <li><a href="ch02.html#sec-2-4">2.4 一貫性チェック</a></li>
+        <li><a href="ch02.html#sec-2-5">2.5 カタログへの登録</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 システムカタログ</a>
+    <ol class="sect">
+        <li><a href="ch03.html#sec-3-1">3.1 カタログの全体像</a></li>
+        <li><a href="ch03.html#sec-3-2">3.2 pg_propgraph_element</a></li>
+        <li><a href="ch03.html#sec-3-3">3.3 label と element_label</a></li>
+        <li><a href="ch03.html#sec-3-4">3.4 property と label_property</a></li>
+        <li><a href="ch03.html#sec-3-5">3.5 pg_get_propgraphdef</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 GRAPH_TABLE の構文解析</a>
+    <ol class="sect">
+        <li><a href="ch04.html#sec-4-1">4.1 GRAPH_TABLE 構文と MATCH パターン</a></li>
+        <li><a href="ch04.html#sec-4-2">4.2 パースツリー</a></li>
+        <li><a href="ch04.html#sec-4-3">4.3 解析変換の流れ</a></li>
+        <li><a href="ch04.html#sec-4-4">4.4 変数・ラベル・プロパティ参照の解決</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 GRAPH_TABLE の書き換え</a>
+    <ol class="sect">
+        <li><a href="ch05.html#sec-5-1">5.1 書き換えの起点</a></li>
+        <li><a href="ch05.html#sec-5-2">5.2 path_factor と path_element</a></li>
+        <li><a href="ch05.html#sec-5-3">5.3 パスの列挙 (DFS)</a></li>
+        <li><a href="ch05.html#sec-5-4">5.4 1 パスから 1 クエリを生成</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 複数パス・UNION・循環パターン</a>
+    <ol class="sect">
+        <li><a href="ch06.html#sec-6-1">6.1 複数パスと UNION ALL</a></li>
+        <li><a href="ch06.html#sec-6-2">6.2 辺-頂点リンク qual の生成</a></li>
+        <li><a href="ch06.html#sec-6-3">6.3 双方向辺</a></li>
+        <li><a href="ch06.html#sec-6-4">6.4 循環パターンと同一変数の併合</a></li>
+        <li><a href="ch06.html#sec-6-5">6.5 空パスパターン</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch07.html">第7章 実践: 観察と制限事項</a>
+    <ol class="sect">
+        <li><a href="ch07.html#sec-7-1">7.1 完全な例: myshop グラフ</a></li>
+        <li><a href="ch07.html#sec-7-2">7.2 書き換え結果を観察する</a></li>
+        <li><a href="ch07.html#sec-7-3">7.3 権限・ビュー・準備文との相互作用</a></li>
+        <li><a href="ch07.html#sec-7-4">7.4 現在の実装上の制限</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第7章　実践: 観察と制限事項</h1>
+        <p>
+最終章では、これまでの内部動作を踏まえ、実際に動く完全な例を示し、書き換え結果を
+自分の目で確認する方法、周辺機能（権限・ビュー・準備文）との相互作用、そして現時点の
+実装上の制限をまとめる。
+</p>
+
+<h2 id="sec-7-1">7.1　完全な例: myshop グラフ</h2>
+<p>
+リグレッションテスト <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/test/regress/sql/graph_table.sql"><code>graph_table.sql</code></a> の
+<code>myshop</code> グラフは、EC サイトを模したグラフである（図 7.1）。顧客・注文・
+ウィッシュリスト・商品を頂点とし、それらの関連を辺で結ぶ。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    C["customers"] -- customer_orders --> O["orders"]
+    C -- customer_wishlists --> W["wishlists"]
+    O -- order_items --> P["products"]
+    W -- wishlist_items --> P
+  </pre>
+  <figcaption>図 7.1: myshop プロパティグラフの構造</figcaption>
+</figure>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>SELECT * FROM GRAPH_TABLE (myshop
+    MATCH (c IS customers)-[IS cust_lists]->(l IS lists)-[IS list_items]->(p IS products)
+    COLUMNS (c.name AS customer_name, p.name AS product_name, l.list_type))
+ORDER BY customer_name, product_name, list_type;</code></pre>
+</div>
+<p>
+ここで <code>lists</code> は <code>orders</code> と <code>wishlists</code> の両頂点に、
+<code>cust_lists</code>／<code>list_items</code> は複数の辺に共有されたラベルである。
+第6章で見たとおり、共有ラベルは複数のパスクエリを生み、それらが UNION されて 1 つの結果になる。
+</p>
+
+<h2 id="sec-7-2">7.2　書き換え結果を観察する</h2>
+<p>
+<code>GRAPH_TABLE</code> をビューに包むと、<code>pg_get_viewdef()</code> や
+<code>EXPLAIN</code> を通じて、書き換え後の姿——すなわち辺と頂点の結合と、
+共有ラベルによる <code>UNION ALL</code>——を間接的に観察できる。
+</p>
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>CREATE VIEW vg1 AS
+    SELECT * FROM GRAPH_TABLE (g1 MATCH () COLUMNS (1 AS one));
+EXPLAIN SELECT * FROM GRAPH_TABLE (myshop
+    MATCH (c IS customers)-[IS customer_orders]->(o IS orders)
+    COLUMNS (c.name));</code></pre>
+</div>
+<p>
+プランには <code>GRAPH_TABLE</code> という語は現れず、対象テーブル（<code>customers</code>,
+<code>customer_orders</code>, <code>orders</code>）の結合として現れる。これが
+「専用実行器を持たない」という設計の直接の帰結である。
+</p>
+
+<h2 id="sec-7-3">7.3　権限・ビュー・準備文との相互作用</h2>
+<ul>
+  <li><strong>権限</strong>: 基底表へのアクセスは<strong>実行ユーザー</strong>の権限で判定される
+    （<code>SECURITY INVOKER</code> 相当）。プロパティグラフと基底表の双方に適切な権限が必要。
+    これは第5章の <code>selectedCols</code> 設定に対応する。</li>
+  <li><strong>ビュー・関数への埋め込み</strong>: <code>GRAPH_TABLE</code> はビュー定義や
+    SQL/PL/pgSQL 関数、サブクエリ、<code>LATERAL</code> 結合の中に自由に置ける。ビューが
+    参照するラベルやプロパティを <code>ALTER PROPERTY GRAPH ... DROP</code> しようとすると、
+    依存関係により拒否される。</li>
+  <li><strong>準備文とキャッシュ無効化</strong>: <code>PREPARE</code> 済みの文があっても、
+    <code>ALTER PROPERTY GRAPH</code> による定義変更は次回実行時に反映される。カタログ変更が
+    プランキャッシュを無効化するためである。</li>
+</ul>
+
+<h2 id="sec-7-4">7.4　現在の実装上の制限</h2>
+<p>
+本実装（PostgreSQL 19beta1 の SQL/PGQ パッチ）には、パーサや書き換えロジックが明示的に
+弾く未対応機能がいくつかある。主なものを挙げる。
+</p>
+<ul>
+  <li><strong>量指定子</strong>（<code>-&gt;{1,2}</code> のような可変長パス）は未対応
+    （<em>element pattern quantifier is not supported</em>）。</li>
+  <li><strong>入れ子パスパターン</strong>（<code>PAREN_EXPR</code>）は未対応。</li>
+  <li><strong>1 つの GRAPH_TABLE に複数のパスパターン</strong>（カンマ区切り）は未対応。</li>
+  <li><strong>GRAPH_TABLE 内のサブクエリ</strong>は未対応
+    （<em>subqueries within GRAPH_TABLE reference are not supported</em>）。</li>
+  <li><strong>非局所の要素変数参照</strong>（要素 <code>WHERE</code> から他要素の参照）は不可。</li>
+  <li><strong>隣接する頂点パターン</strong>や、辺で始まる／終わるパスは構文的に不正。</li>
+  <li>同名変数の併合における<strong>ラベル式の論理積</strong>、および同名辺による
+    <strong>頂点の再併合を伴うウォーク</strong>は未対応。</li>
+</ul>
+
+<div class="info"><strong>まとめ</strong>
+SQL/PGQ のグラフ照会は、<code>GRAPH_TABLE</code> を<strong>辺-頂点等結合とパスの UNION</strong>へ
+書き換えるという一点に集約されている。カタログ（第3章）が定義を保持し、解析変換（第4章）が
+パターンを意味づけし、書き換え（第5・6章）がそれを普通の SQL に翻訳する。専用実行器を
+持たないこの設計は、既存のプランナ・実行器・権限・依存関係の仕組みをそのまま活用できる
+点で、PostgreSQL への機能追加として極めて理にかなっている。</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch06.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第6章 複数パス・UNION・循環パターン</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <span class="pager-spacer" aria-hidden="true"></span>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風・内部構造解説 / 対象: PostgreSQL 19beta1 (SQL/PGQ パッチ) · shinyaaa/postgres</footer>
+</body>
+</html>

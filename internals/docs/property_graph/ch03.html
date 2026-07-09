@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第3章 システムカタログ | PostgreSQL プロパティグラフ（SQL/PGQ）の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-07-09 12:21</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL プロパティグラフ（SQL/PGQ）の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-07-09 12:21</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 プロパティグラフ概論</a>
+    <ol class="sect">
+        <li><a href="ch01.html#sec-1-1">1.1 SQL/PGQ とプロパティグラフモデル</a></li>
+        <li><a href="ch01.html#sec-1-2">1.2 論理オブジェクトとしてのプロパティグラフ</a></li>
+        <li><a href="ch01.html#sec-1-3">1.3 クエリ処理パイプライン全体像</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 グラフの定義: CREATE PROPERTY GRAPH</a>
+    <ol class="sect">
+        <li><a href="ch02.html#sec-2-1">2.1 構文の全体像</a></li>
+        <li><a href="ch02.html#sec-2-2">2.2 頂点・辺と KEY / SOURCE / DESTINATION</a></li>
+        <li><a href="ch02.html#sec-2-3">2.3 ラベルとプロパティ</a></li>
+        <li><a href="ch02.html#sec-2-4">2.4 一貫性チェック</a></li>
+        <li><a href="ch02.html#sec-2-5">2.5 カタログへの登録</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch03.html">第3章 システムカタログ</a>
+    <ol class="sect">
+        <li><a href="ch03.html#sec-3-1">3.1 カタログの全体像</a></li>
+        <li><a href="ch03.html#sec-3-2">3.2 pg_propgraph_element</a></li>
+        <li><a href="ch03.html#sec-3-3">3.3 label と element_label</a></li>
+        <li><a href="ch03.html#sec-3-4">3.4 property と label_property</a></li>
+        <li><a href="ch03.html#sec-3-5">3.5 pg_get_propgraphdef</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 GRAPH_TABLE の構文解析</a>
+    <ol class="sect">
+        <li><a href="ch04.html#sec-4-1">4.1 GRAPH_TABLE 構文と MATCH パターン</a></li>
+        <li><a href="ch04.html#sec-4-2">4.2 パースツリー</a></li>
+        <li><a href="ch04.html#sec-4-3">4.3 解析変換の流れ</a></li>
+        <li><a href="ch04.html#sec-4-4">4.4 変数・ラベル・プロパティ参照の解決</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 GRAPH_TABLE の書き換え</a>
+    <ol class="sect">
+        <li><a href="ch05.html#sec-5-1">5.1 書き換えの起点</a></li>
+        <li><a href="ch05.html#sec-5-2">5.2 path_factor と path_element</a></li>
+        <li><a href="ch05.html#sec-5-3">5.3 パスの列挙 (DFS)</a></li>
+        <li><a href="ch05.html#sec-5-4">5.4 1 パスから 1 クエリを生成</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 複数パス・UNION・循環パターン</a>
+    <ol class="sect">
+        <li><a href="ch06.html#sec-6-1">6.1 複数パスと UNION ALL</a></li>
+        <li><a href="ch06.html#sec-6-2">6.2 辺-頂点リンク qual の生成</a></li>
+        <li><a href="ch06.html#sec-6-3">6.3 双方向辺</a></li>
+        <li><a href="ch06.html#sec-6-4">6.4 循環パターンと同一変数の併合</a></li>
+        <li><a href="ch06.html#sec-6-5">6.5 空パスパターン</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 実践: 観察と制限事項</a>
+    <ol class="sect">
+        <li><a href="ch07.html#sec-7-1">7.1 完全な例: myshop グラフ</a></li>
+        <li><a href="ch07.html#sec-7-2">7.2 書き換え結果を観察する</a></li>
+        <li><a href="ch07.html#sec-7-3">7.3 権限・ビュー・準備文との相互作用</a></li>
+        <li><a href="ch07.html#sec-7-4">7.4 現在の実装上の制限</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第3章　システムカタログ</h1>
+        <p>
+プロパティグラフの定義は、5 つの専用システムカタログに分割して格納される。本章では
+各カタログの役割・列・索引を、ヘッダ定義に即して解説する。これらのカタログは
+第5・6章の書き換え処理が参照する一次情報源であり、その構造を理解しておくことが
+書き換えロジックを追う前提となる。
+</p>
+
+<h2 id="sec-3-1">3.1　カタログの全体像</h2>
+<p>
+図 3.1 に 5 カタログとその主要な参照関係を示す。中心は個々の要素（頂点／辺）を表す
+<code>pg_propgraph_element</code> で、そこからラベル、プロパティ、そしてラベルとプロパティを
+結ぶ関連テーブルが伸びる。すべての行が <code>pg_class</code> 上のプロパティグラフ OID
+（<code>pgXpgid</code> 列）を通じて 1 つのグラフに属する。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    PGC["pg_class (relkind='g')<br/>プロパティグラフ本体"]
+    ELEM["pg_propgraph_element<br/>要素 = 頂点/辺"]
+    LABEL["pg_propgraph_label<br/>ラベル"]
+    ELABEL["pg_propgraph_element_label<br/>要素とラベルの関連 (M:N)"]
+    PROP["pg_propgraph_property<br/>プロパティ (名前と型)"]
+    LPROP["pg_propgraph_label_property<br/>ラベル別プロパティ値式"]
+    PGC --> ELEM
+    PGC --> LABEL
+    PGC --> PROP
+    ELEM --> ELABEL
+    LABEL --> ELABEL
+    ELABEL --> LPROP
+    PROP --> LPROP
+  </pre>
+  <figcaption>図 3.1: プロパティグラフ関連カタログの関係</figcaption>
+</figure>
+
+<h2 id="sec-3-2">3.2　pg_propgraph_element — 要素テーブル</h2>
+<p>
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/catalog/pg_propgraph_element.h#L30"><code>pg_propgraph_element</code></a>
+は 1 つの頂点または辺を 1 行で表す。主な列は次のとおり。
+</p>
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph E["pg_propgraph_element"]
+        direction TB
+        A["oid : 要素 OID"]
+        B["pgepgid : 所属グラフ (pg_class)"]
+        C["pgerelid : 実体テーブル (pg_class)"]
+        D["pgealias : エイリアス"]
+        F["pgekind : 'v'=頂点 / 'e'=辺"]
+        G["pgesrcvertexid / pgedestvertexid : 辺の始点/終点要素"]
+        H["pgekey[] : キー列番号"]
+        I2["pgesrckey[]/pgesrcref[]/pgesrceqop[] : 始点結合情報"]
+        J["pgedestkey[]/pgedestref[]/pgedesteqop[] : 終点結合情報"]
+    end
+  </pre>
+  <figcaption>図 3.2: pg_propgraph_element の主な列</figcaption>
+</figure>
+<p>
+<code>pgekind</code> は <code>PGEKIND_VERTEX ('v')</code> か <code>PGEKIND_EDGE ('e')</code> を取る。
+辺の場合のみ、始点・終点頂点の<strong>要素 OID</strong>（<code>pgesrcvertexid</code>,
+<code>pgedestvertexid</code>）と、結合に使う 3 組の配列——辺側キー列番号（<code>pgesrckey</code>）、
+頂点側被参照列番号（<code>pgesrcref</code>）、等価演算子 OID（<code>pgesrceqop</code>）——が
+埋まる。この「キー列・被参照列・演算子」の三つ組が、第6章で辺-頂点結合条件を組み立てる
+ための材料になる。<code>(pgepgid, pgealias)</code> に一意索引があり、エイリアスでの検索を支える。
+</p>
+
+<h2 id="sec-3-3">3.3　pg_propgraph_label と pg_propgraph_element_label</h2>
+<p>
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/catalog/pg_propgraph_label.h#L29"><code>pg_propgraph_label</code></a> は、
+あるグラフ（<code>pglpgid</code>）に定義されたラベル名（<code>pgllabel</code>）を 1 行で表す。
+ラベルと要素は多対多の関係にあり、これを仲介するのが
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/catalog/pg_propgraph_element_label.h#L29"><code>pg_propgraph_element_label</code></a>
+である。1 行が「ラベル <code>pgellabelid</code> が要素 <code>pgelelid</code> に付いている」ことを表す。
+</p>
+<p>
+このカタログには <code>pgellabelid</code> 単独の索引
+（<code>PropgraphElementLabelLabelIndexId</code>）があり、「あるラベルを持つ要素をすべて集める」
+という第5章の中心処理を効率化している。
+</p>
+
+<h2 id="sec-3-4">3.4　pg_propgraph_property と pg_propgraph_label_property</h2>
+<p>
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/catalog/pg_propgraph_property.h#L29"><code>pg_propgraph_property</code></a> は、
+グラフ内のプロパティを名前（<code>pgpname</code>）・型（<code>pgptypid</code>）・
+型修飾子（<code>pgptypmod</code>）・照合順序（<code>pgpcollation</code>）で 1 行に表す。
+プロパティの<strong>型情報</strong>はここに一元化されており、2.4 節の型一貫性チェックの拠り所となる。
+</p>
+<p>
+実際の<strong>値の式</strong>は、ラベルごとに異なりうるため別カタログ
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/catalog/pg_propgraph_label_property.h#L29"><code>pg_propgraph_label_property</code></a>
+に置かれる。1 行が「要素ラベル <code>plpellabelid</code> におけるプロパティ <code>plppropid</code> の
+値式は <code>plpexpr</code> である」ことを表す。<code>plpexpr</code> は
+<code>pg_node_tree</code> 型で、実体テーブルの列を参照する式ツリーがシリアライズされている。
+書き換え時にはこの式を取り出して実際の <code>Var</code> に貼り込む（第5章）。
+</p>
+
+<div class="note"><strong>メモ</strong>
+プロパティ「名前・型」（<code>pg_propgraph_property</code>）と、ラベル別の「値式」
+（<code>pg_propgraph_label_property</code>）を分離していることが、
+「同名プロパティは同型でなければならないが、ラベルによって値式は異なりうる」という
+SQL/PGQ の意味論を素直にカタログ構造へ落とし込んでいる。</div>
+
+<h2 id="sec-3-5">3.5　pg_get_propgraphdef で定義を復元する</h2>
+<p>
+分散して格納された定義は、<code>pg_get_propgraphdef(regclass)</code> で元の
+<code>CREATE PROPERTY GRAPH</code> 文へ逆整形（reverse-parse）できる。<code>\dG</code>／
+<code>\dG+</code> といった psql メタコマンドや <code>pg_dump</code> もこの関数を利用する。
+</p>
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>SELECT pg_get_propgraphdef('g5'::regclass);</code></pre>
+</div>
+<div class="example">
+  <span class="example-label">実行結果（抜粋）</span>
+  <pre><code>CREATE PROPERTY GRAPH g5
+    VERTEX TABLES (
+        t11 ...,
+        t12 ...
+    )
+    EDGE TABLES (
+        t13 ... SOURCE KEY (d) REFERENCES t11 (a) ...
+                DESTINATION KEY (e) REFERENCES t12 (b) ...
+    )</code></pre>
+</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch02.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第2章 グラフの定義: CREATE PROPERTY GRAPH</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch04.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第4章 GRAPH_TABLE の構文解析</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風・内部構造解説 / 対象: PostgreSQL 19beta1 (SQL/PGQ パッチ) · shinyaaa/postgres</footer>
+</body>
+</html>

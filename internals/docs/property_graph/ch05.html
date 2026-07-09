@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章 GRAPH_TABLE の書き換え | PostgreSQL プロパティグラフ（SQL/PGQ）の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-07-09 12:21</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL プロパティグラフ（SQL/PGQ）の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-07-09 12:21</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 プロパティグラフ概論</a>
+    <ol class="sect">
+        <li><a href="ch01.html#sec-1-1">1.1 SQL/PGQ とプロパティグラフモデル</a></li>
+        <li><a href="ch01.html#sec-1-2">1.2 論理オブジェクトとしてのプロパティグラフ</a></li>
+        <li><a href="ch01.html#sec-1-3">1.3 クエリ処理パイプライン全体像</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 グラフの定義: CREATE PROPERTY GRAPH</a>
+    <ol class="sect">
+        <li><a href="ch02.html#sec-2-1">2.1 構文の全体像</a></li>
+        <li><a href="ch02.html#sec-2-2">2.2 頂点・辺と KEY / SOURCE / DESTINATION</a></li>
+        <li><a href="ch02.html#sec-2-3">2.3 ラベルとプロパティ</a></li>
+        <li><a href="ch02.html#sec-2-4">2.4 一貫性チェック</a></li>
+        <li><a href="ch02.html#sec-2-5">2.5 カタログへの登録</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 システムカタログ</a>
+    <ol class="sect">
+        <li><a href="ch03.html#sec-3-1">3.1 カタログの全体像</a></li>
+        <li><a href="ch03.html#sec-3-2">3.2 pg_propgraph_element</a></li>
+        <li><a href="ch03.html#sec-3-3">3.3 label と element_label</a></li>
+        <li><a href="ch03.html#sec-3-4">3.4 property と label_property</a></li>
+        <li><a href="ch03.html#sec-3-5">3.5 pg_get_propgraphdef</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 GRAPH_TABLE の構文解析</a>
+    <ol class="sect">
+        <li><a href="ch04.html#sec-4-1">4.1 GRAPH_TABLE 構文と MATCH パターン</a></li>
+        <li><a href="ch04.html#sec-4-2">4.2 パースツリー</a></li>
+        <li><a href="ch04.html#sec-4-3">4.3 解析変換の流れ</a></li>
+        <li><a href="ch04.html#sec-4-4">4.4 変数・ラベル・プロパティ参照の解決</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch05.html">第5章 GRAPH_TABLE の書き換え</a>
+    <ol class="sect">
+        <li><a href="ch05.html#sec-5-1">5.1 書き換えの起点</a></li>
+        <li><a href="ch05.html#sec-5-2">5.2 path_factor と path_element</a></li>
+        <li><a href="ch05.html#sec-5-3">5.3 パスの列挙 (DFS)</a></li>
+        <li><a href="ch05.html#sec-5-4">5.4 1 パスから 1 クエリを生成</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 複数パス・UNION・循環パターン</a>
+    <ol class="sect">
+        <li><a href="ch06.html#sec-6-1">6.1 複数パスと UNION ALL</a></li>
+        <li><a href="ch06.html#sec-6-2">6.2 辺-頂点リンク qual の生成</a></li>
+        <li><a href="ch06.html#sec-6-3">6.3 双方向辺</a></li>
+        <li><a href="ch06.html#sec-6-4">6.4 循環パターンと同一変数の併合</a></li>
+        <li><a href="ch06.html#sec-6-5">6.5 空パスパターン</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 実践: 観察と制限事項</a>
+    <ol class="sect">
+        <li><a href="ch07.html#sec-7-1">7.1 完全な例: myshop グラフ</a></li>
+        <li><a href="ch07.html#sec-7-2">7.2 書き換え結果を観察する</a></li>
+        <li><a href="ch07.html#sec-7-3">7.3 権限・ビュー・準備文との相互作用</a></li>
+        <li><a href="ch07.html#sec-7-4">7.4 現在の実装上の制限</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第5章　GRAPH_TABLE の書き換え</h1>
+        <p>
+本章がドキュメントの核心である。解析変換で得た <code>RTE_GRAPH_TABLE</code> を、
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L109"><code>rewriteGraphTable()</code></a> が
+どのようにして辺と頂点の等結合からなる通常のサブクエリへ書き換えるのかを、
+1 本のパス（単一パス）を例に段階的に追う。ラベル選言による複数パスと UNION は第6章で扱う。
+</p>
+
+<h2 id="sec-5-1">5.1　書き換えの起点</h2>
+<p>
+書き換えは、リライタ本体 <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteHandler.c"><code>rewriteHandler.c</code></a> が
+範囲テーブルを走査して <code>RTE_GRAPH_TABLE</code> を見つけたときに
+<code>rewriteGraphTable()</code> を呼ぶことで始まる。この関数は次の 3 手で RTE を
+<strong>その場で</strong>書き換える。
+</p>
+<ol>
+  <li>パスパターンから<strong>パスクエリのリスト</strong>を生成する
+    （<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L174"><code>generate_queries_for_path_pattern()</code></a>）。</li>
+  <li>それらを <strong>UNION ALL</strong> で束ねて 1 つの <code>Query</code> にする
+    （<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L619"><code>generate_union_from_pathqueries()</code></a>）。</li>
+  <li>RTE の種別を <code>RTE_SUBQUERY</code> へ変え、<code>subquery</code> に上記クエリを差し込み、
+    <code>lateral = true</code> にする。グラフ固有フィールドは <code>NULL</code> でクリアする。</li>
+</ol>
+<p>
+これで RTE は「ラテラルなサブクエリ」に化ける。以降のプランナ・実行器はグラフのことを
+一切知らずに処理できる。
+</p>
+
+<h2 id="sec-5-2">5.2　path_factor と path_element</h2>
+<p>
+書き換えロジックは 2 つの内部構造体を軸に進む。
+</p>
+<ul>
+  <li><strong><a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L57"><code>path_factor</code></a></strong>:
+    パス中の 1 つの「位置」を表す。非循環パスでは 1 要素パターンに対応する。<code>kind</code>・
+    <code>variable</code>・<code>labelexpr</code>・<code>whereClause</code>、パス内での位置
+    <code>factorpos</code>、そして辺の場合の隣接頂点へのリンク <code>src_pf</code>／<code>dest_pf</code>
+    を持つ。</li>
+  <li><strong><a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L79"><code>path_element</code></a></strong>:
+    1 つの path_factor のラベル式が解決した<strong>具体的な要素</strong>を表す。要素 OID・
+    実体テーブル OID、辺なら始点・終点頂点 OID と結合条件（<code>src_quals</code>／
+    <code>dest_quals</code>）を持つ。</li>
+</ul>
+<p>
+つまり path_factor は「パターン上の位置」、path_element は「その位置に当てはまる実要素」であり、
+1 つの path_factor は複数の path_element を生みうる（ラベルが複数要素に付いている場合）。
+</p>
+
+<h2 id="sec-5-3">5.3　パスの列挙（K-partite グラフの DFS）</h2>
+<p>
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L174"><code>generate_queries_for_path_pattern()</code></a>
+は、まずパターン中の要素パターン列を path_factor のリストに変換し、隣接する頂点と辺の
+リンク（<code>src_pf</code>／<code>dest_pf</code>）を張る。次に各 path_factor について、
+そのラベル式を満たす要素を集めて path_element のリストを作る
+（<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L906"><code>get_path_elements_for_path_factor()</code></a>）。
+</p>
+<p>
+図 5.1 に示すように、K 個の要素パターンからなるパスパターンは、各パターンが要素の集合を
+持つ <strong>K 部グラフ（K-partite graph）</strong>とみなせる。1 本の具体的なパスは、
+各パターンから 1 要素ずつ選んだ組み合わせであり、可能なパスの総数は要素数の積になる。
+これを深さ優先探索（DFS）で列挙するのが
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L361"><code>generate_queries_for_path_pattern_recurse()</code></a>
+である。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph P0["パターン0 (頂点 a)"]
+        E00["要素 v1"]
+        E01["要素 v2"]
+    end
+    subgraph P1["パターン1 (辺 b)"]
+        E10["要素 e1_2"]
+    end
+    subgraph P2["パターン2 (頂点 c)"]
+        E20["要素 v2"]
+        E21["要素 v3"]
+    end
+    E00 --> E10
+    E01 --> E10
+    E10 --> E20
+    E10 --> E21
+  </pre>
+  <figcaption>図 5.1: パスパターンを K 部グラフとみなし、各層から 1 要素ずつ選んでパスを作る</figcaption>
+</figure>
+
+<p>
+DFS が末端に達するたびに、そのとき選ばれている要素の並び（1 本のパス）を
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L418"><code>generate_query_for_graph_path()</code></a>
+へ渡して 1 つのクエリを作る。辺が隣接頂点を実際には結んでいない組み合わせは
+「壊れたパス」として捨てられ（<code>NULL</code> を返す）、クエリは作られない。
+</p>
+
+<h2 id="sec-5-4">5.4　1 本のパスから 1 クエリを生成する</h2>
+<p>
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L418"><code>generate_query_for_graph_path()</code></a>
+は、与えられた 1 本のパスから <code>SELECT</code> クエリを組み立てる。生成物は次の 3 要素からなる。
+</p>
+<ul>
+  <li><strong>FROM リスト</strong>: パス中の各要素の実体テーブルに対する <code>RangeTblEntry</code>。
+    <code>path_factor.factorpos + 1</code> が各 RTE の <code>rtindex</code> になるよう、
+    要素の順に追加される。</li>
+  <li><strong>WHERE（qual）</strong>: (a) 辺と隣接頂点を結ぶ等結合条件、(b) 各要素の
+    <code>WHERE</code> 句、(c) <code>GRAPH_TABLE</code> 全体の <code>WHERE</code> 句、の論理積。</li>
+  <li><strong>ターゲットリスト</strong>: <code>COLUMNS</code> の各式。</li>
+</ul>
+<p>
+辺-頂点の結合条件は、5.2 節で述べたとおり path_element 生成時に
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L765"><code>create_pe_for_element()</code></a> が
+あらかじめ組み立てておいた <code>src_quals</code>／<code>dest_quals</code> を使う（詳細は第6章）。
+</p>
+<p>
+一方、<code>COLUMNS</code> や <code>WHERE</code> に現れる <code>GraphPropertyRef</code>（プロパティ参照）は、
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L1021"><code>replace_property_refs_mutator()</code></a> が
+実際の列参照へ<strong>展開</strong>する。手順はこうだ。参照された変数（path_element）に対応する
+ラベル群をたどり、そのプロパティの値式（<code>pg_propgraph_label_property.plpexpr</code>）を
+カタログから取り出し、式中の <code>Var</code> の <code>varno</code> をこの要素の <code>rtindex</code>
+（= <code>factorpos + 1</code>）へ付け替える（<code>ChangeVarNodes()</code>）。図 5.2 に流れを示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    A["GraphPropertyRef (c.name)"] --> B{"変数 c に対応する<br/>path_element を特定"}
+    B --> C["要素に紐づくラベルをたどり<br/>プロパティ値式 plpexpr を取得"]
+    C --> D["式中の Var の varno を<br/>factorpos+1 に付け替え"]
+    D --> E["実体テーブルの列参照 (Var) へ置換"]
+  </pre>
+  <figcaption>図 5.2: プロパティ参照から実列参照への展開</figcaption>
+</figure>
+
+<p>
+プロパティがその要素のどのラベルにも値式を持たない場合でも、パターンが選んだ
+いずれかのラベルにそのプロパティが関連していれば、SQL/PGQ 標準（6.5 節）に従って
+<code>NULL</code> 定数へ展開される。どのラベルとも無関係なプロパティを参照した場合にのみ
+エラーとなる。最後に、参照された列に <code>SELECT</code> 権限フラグを立てる処理があり、
+これは「プロパティグラフ所有者ではなく<strong>実行ユーザー</strong>の権限で基底表へアクセスする」
+という設計（<code>SECURITY INVOKER</code> なビューに相当）を裏付けている。
+</p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch04.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第4章 GRAPH_TABLE の構文解析</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch06.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第6章 複数パス・UNION・循環パターン</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風・内部構造解説 / 対象: PostgreSQL 19beta1 (SQL/PGQ パッチ) · shinyaaa/postgres</footer>
+</body>
+</html>
