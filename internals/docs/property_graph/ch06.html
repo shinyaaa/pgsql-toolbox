@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第6章 複数パス・UNION・循環パターン | PostgreSQL プロパティグラフ（SQL/PGQ）の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-07-09 12:21</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL プロパティグラフ（SQL/PGQ）の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-07-09 12:21</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 プロパティグラフ概論</a>
+    <ol class="sect">
+        <li><a href="ch01.html#sec-1-1">1.1 SQL/PGQ とプロパティグラフモデル</a></li>
+        <li><a href="ch01.html#sec-1-2">1.2 論理オブジェクトとしてのプロパティグラフ</a></li>
+        <li><a href="ch01.html#sec-1-3">1.3 クエリ処理パイプライン全体像</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 グラフの定義: CREATE PROPERTY GRAPH</a>
+    <ol class="sect">
+        <li><a href="ch02.html#sec-2-1">2.1 構文の全体像</a></li>
+        <li><a href="ch02.html#sec-2-2">2.2 頂点・辺と KEY / SOURCE / DESTINATION</a></li>
+        <li><a href="ch02.html#sec-2-3">2.3 ラベルとプロパティ</a></li>
+        <li><a href="ch02.html#sec-2-4">2.4 一貫性チェック</a></li>
+        <li><a href="ch02.html#sec-2-5">2.5 カタログへの登録</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 システムカタログ</a>
+    <ol class="sect">
+        <li><a href="ch03.html#sec-3-1">3.1 カタログの全体像</a></li>
+        <li><a href="ch03.html#sec-3-2">3.2 pg_propgraph_element</a></li>
+        <li><a href="ch03.html#sec-3-3">3.3 label と element_label</a></li>
+        <li><a href="ch03.html#sec-3-4">3.4 property と label_property</a></li>
+        <li><a href="ch03.html#sec-3-5">3.5 pg_get_propgraphdef</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 GRAPH_TABLE の構文解析</a>
+    <ol class="sect">
+        <li><a href="ch04.html#sec-4-1">4.1 GRAPH_TABLE 構文と MATCH パターン</a></li>
+        <li><a href="ch04.html#sec-4-2">4.2 パースツリー</a></li>
+        <li><a href="ch04.html#sec-4-3">4.3 解析変換の流れ</a></li>
+        <li><a href="ch04.html#sec-4-4">4.4 変数・ラベル・プロパティ参照の解決</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 GRAPH_TABLE の書き換え</a>
+    <ol class="sect">
+        <li><a href="ch05.html#sec-5-1">5.1 書き換えの起点</a></li>
+        <li><a href="ch05.html#sec-5-2">5.2 path_factor と path_element</a></li>
+        <li><a href="ch05.html#sec-5-3">5.3 パスの列挙 (DFS)</a></li>
+        <li><a href="ch05.html#sec-5-4">5.4 1 パスから 1 クエリを生成</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch06.html">第6章 複数パス・UNION・循環パターン</a>
+    <ol class="sect">
+        <li><a href="ch06.html#sec-6-1">6.1 複数パスと UNION ALL</a></li>
+        <li><a href="ch06.html#sec-6-2">6.2 辺-頂点リンク qual の生成</a></li>
+        <li><a href="ch06.html#sec-6-3">6.3 双方向辺</a></li>
+        <li><a href="ch06.html#sec-6-4">6.4 循環パターンと同一変数の併合</a></li>
+        <li><a href="ch06.html#sec-6-5">6.5 空パスパターン</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 実践: 観察と制限事項</a>
+    <ol class="sect">
+        <li><a href="ch07.html#sec-7-1">7.1 完全な例: myshop グラフ</a></li>
+        <li><a href="ch07.html#sec-7-2">7.2 書き換え結果を観察する</a></li>
+        <li><a href="ch07.html#sec-7-3">7.3 権限・ビュー・準備文との相互作用</a></li>
+        <li><a href="ch07.html#sec-7-4">7.4 現在の実装上の制限</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第6章　複数パス・UNION・循環パターン</h1>
+        <p>
+第5章では 1 本のパスがどう 1 クエリになるかを見た。本章では、ラベル選言によって
+複数のパスが生じる場合の <strong>UNION</strong>、辺-頂点の<strong>結合条件生成</strong>の詳細、
+そして<strong>双方向辺・循環パターン・空パス</strong>という特殊ケースの扱いを見る。
+</p>
+
+<h2 id="sec-6-1">6.1　複数パスと UNION ALL</h2>
+<p>
+1 つの要素パターンがラベル選言（<code>IS a|b</code>）を持ったり、ラベルが複数の要素に
+付いていたりすると、5.3 節の DFS は<strong>複数のパスクエリ</strong>を生成する。これらは
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L619"><code>generate_union_from_pathqueries()</code></a> が
+<strong>UNION ALL</strong> で束ねる。図 6.1 のように、各パスクエリがサブクエリとなり、
+<code>SetOperationStmt</code> の木として再帰的に連結される
+（<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L696"><code>generate_setop_from_pathqueries()</code></a>）。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    PP["パスパターン (ラベル選言あり)"] --> Q1["パスクエリ1<br/>customers-customer_orders-orders"]
+    PP --> Q2["パスクエリ2<br/>customers-customer_wishlists-wishlists"]
+    Q1 --> U["UNION ALL<br/>(SetOperationStmt)"]
+    Q2 --> U
+    U --> R["1 つの RTE_SUBQUERY"]
+  </pre>
+  <figcaption>図 6.1: ラベル選言から生じた複数パスクエリの UNION ALL</figcaption>
+</figure>
+
+<p>
+パスクエリが 1 本しかないときは UNION を作らずそのまま使う。UNION の外側クエリの
+ターゲットリストは、代表クエリの列名と、集合演算が算出した共通の型・照合順序から
+組み立てられる。
+</p>
+
+<h2 id="sec-6-2">6.2　辺-頂点リンク qual の生成</h2>
+<p>
+辺が隣接頂点を結ぶ等結合条件は
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L1168"><code>build_edge_vertex_link_quals()</code></a> が
+生成する。3.2 節で述べたカタログの三つ組——辺側キー列（<code>pgesrckey</code>）、
+頂点側被参照列（<code>pgesrcref</code>）、等価演算子 OID（<code>pgesrceqop</code>）——を
+配列として取り出し、列ごとに <code>OpExpr</code>（等価比較）を組み立てる。
+</p>
+<p>
+主キー／外部キーの qual と同じ流儀で、<strong>被参照側（頂点キー）を左オペランド、
+参照側（辺キー）を右オペランド</strong>とし、必要なら型キャストを挿入する。照合順序も
+その場で割り当てるため、書き換え後に改めて照合を付与する必要がない。これらの qual は
+第5章の <code>create_pe_for_element()</code> が path_element 生成時に一度だけ作り、
+同じ要素が複数パスに現れても使い回す。
+</p>
+
+<h2 id="sec-6-3">6.3　双方向辺（EDGE_PATTERN_ANY）</h2>
+<p>
+<code>-[ ]-</code> のように向きを指定しない辺は、<strong>両方向の辺に一致</strong>する。
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L418"><code>generate_query_for_graph_path()</code></a> は、
+まず「始点=src, 終点=dest」の向きで qual を作り、<code>EDGE_PATTERN_ANY</code> の場合は
+始点と終点を入れ替えた qual も作って、両者を <strong>OR</strong> で結ぶ。入れ替えは
+<code>ChangeVarNodes()</code> で qual 中の <code>varno</code> を付け替えることで実現する。
+</p>
+<div class="note"><strong>メモ</strong>
+始点テーブルと終点テーブルが同一（自己ループ的な辺）のとき、どちらの向きの qual も
+成立しうるため OR による表現が必要になる。図 6.2 に概念を示す。
+</div>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    A["頂点 v (varno=1)"] -- "qual: 正方向<br/>src=v AND dest=w" --> B["頂点 w (varno=3)"]
+    B -. "qual: 逆方向 (varno 入替)<br/>src=w AND dest=v" .-> A
+  </pre>
+  <figcaption>図 6.2: 双方向辺は正逆両方向の結合条件を OR で結ぶ</figcaption>
+</figure>
+
+<h2 id="sec-6-4">6.4　循環パターンと同一変数の併合</h2>
+<p>
+<code>(a)-&gt;(b)-&gt;(a)</code> のように同じ変数名が複数回現れるパターンは<strong>循環パス</strong>を表す。
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L174"><code>generate_queries_for_path_pattern()</code></a> は、
+同名変数の要素パターンを<strong>1 つの path_factor に併合</strong>する。併合時には両者の
+<code>WHERE</code> 句を <code>AND</code> で連結する。
+</p>
+<div class="warn"><strong>注意（未対応の組み合わせ）</strong>
+併合される 2 つの要素パターンが<strong>ともにラベル式を持つ</strong>場合、本来はラベルの論理積を
+取る必要があるが、これは未対応でエラーになる（一方だけがラベル式を持つ場合は
+そのラベル式が使われる）。また、同名の<strong>辺</strong>変数が複数の頂点対を結ぶような
+「辺・頂点が繰り返し現れるウォーク」も未対応で、<em>an edge cannot connect more than two
+vertices even in a cyclic pattern</em> というエラーになる。
+</div>
+
+<h2 id="sec-6-5">6.5　空パスパターン</h2>
+<p>
+あるパスパターンが<strong>1 本もパスを生まない</strong>——どの要素パターンも要素を持たない、
+あるいは辺が隣接頂点を結べない——場合、
+<a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L581"><code>generate_query_for_empty_path_pattern()</code></a> が
+<strong>1 行も返さないダミークエリ</strong>を作る。<code>WHERE</code> を定数 <code>false</code> にし、
+ターゲットリストは <code>COLUMNS</code> と同じ列を<strong>すべて NULL 定数</strong>で埋める。
+こうすることで、結果が空でも列の型・数は <code>GRAPH_TABLE</code> の宣言どおりに保たれ、
+上位クエリのプランが破綻しない。
+</p>
+<div class="example">
+  <span class="example-label">SQL（辺の総数を数える空パターンの活用）</span>
+  <pre><code>SELECT count(*) FROM GRAPH_TABLE (g1 MATCH ()-[]->() COLUMNS (1 AS one));</code></pre>
+</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch05.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第5章 GRAPH_TABLE の書き換え</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch07.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第7章 実践: 観察と制限事項</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風・内部構造解説 / 対象: PostgreSQL 19beta1 (SQL/PGQ パッチ) · shinyaaa/postgres</footer>
+</body>
+</html>

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第1章 プロパティグラフ概論 | PostgreSQL プロパティグラフ（SQL/PGQ）の内部構造 — PostgreSQL 19beta1 · 031904048aa · 2026-07-09 12:21</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL プロパティグラフ（SQL/PGQ）の内部構造</a>
+    <span class="version-badge">PostgreSQL 19beta1 · 031904048aa · 2026-07-09 12:21</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li class="current">
+    <a class="chap-title" href="ch01.html">第1章 プロパティグラフ概論</a>
+    <ol class="sect">
+        <li><a href="ch01.html#sec-1-1">1.1 SQL/PGQ とプロパティグラフモデル</a></li>
+        <li><a href="ch01.html#sec-1-2">1.2 論理オブジェクトとしてのプロパティグラフ</a></li>
+        <li><a href="ch01.html#sec-1-3">1.3 クエリ処理パイプライン全体像</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 グラフの定義: CREATE PROPERTY GRAPH</a>
+    <ol class="sect">
+        <li><a href="ch02.html#sec-2-1">2.1 構文の全体像</a></li>
+        <li><a href="ch02.html#sec-2-2">2.2 頂点・辺と KEY / SOURCE / DESTINATION</a></li>
+        <li><a href="ch02.html#sec-2-3">2.3 ラベルとプロパティ</a></li>
+        <li><a href="ch02.html#sec-2-4">2.4 一貫性チェック</a></li>
+        <li><a href="ch02.html#sec-2-5">2.5 カタログへの登録</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 システムカタログ</a>
+    <ol class="sect">
+        <li><a href="ch03.html#sec-3-1">3.1 カタログの全体像</a></li>
+        <li><a href="ch03.html#sec-3-2">3.2 pg_propgraph_element</a></li>
+        <li><a href="ch03.html#sec-3-3">3.3 label と element_label</a></li>
+        <li><a href="ch03.html#sec-3-4">3.4 property と label_property</a></li>
+        <li><a href="ch03.html#sec-3-5">3.5 pg_get_propgraphdef</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 GRAPH_TABLE の構文解析</a>
+    <ol class="sect">
+        <li><a href="ch04.html#sec-4-1">4.1 GRAPH_TABLE 構文と MATCH パターン</a></li>
+        <li><a href="ch04.html#sec-4-2">4.2 パースツリー</a></li>
+        <li><a href="ch04.html#sec-4-3">4.3 解析変換の流れ</a></li>
+        <li><a href="ch04.html#sec-4-4">4.4 変数・ラベル・プロパティ参照の解決</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 GRAPH_TABLE の書き換え</a>
+    <ol class="sect">
+        <li><a href="ch05.html#sec-5-1">5.1 書き換えの起点</a></li>
+        <li><a href="ch05.html#sec-5-2">5.2 path_factor と path_element</a></li>
+        <li><a href="ch05.html#sec-5-3">5.3 パスの列挙 (DFS)</a></li>
+        <li><a href="ch05.html#sec-5-4">5.4 1 パスから 1 クエリを生成</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 複数パス・UNION・循環パターン</a>
+    <ol class="sect">
+        <li><a href="ch06.html#sec-6-1">6.1 複数パスと UNION ALL</a></li>
+        <li><a href="ch06.html#sec-6-2">6.2 辺-頂点リンク qual の生成</a></li>
+        <li><a href="ch06.html#sec-6-3">6.3 双方向辺</a></li>
+        <li><a href="ch06.html#sec-6-4">6.4 循環パターンと同一変数の併合</a></li>
+        <li><a href="ch06.html#sec-6-5">6.5 空パスパターン</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 実践: 観察と制限事項</a>
+    <ol class="sect">
+        <li><a href="ch07.html#sec-7-1">7.1 完全な例: myshop グラフ</a></li>
+        <li><a href="ch07.html#sec-7-2">7.2 書き換え結果を観察する</a></li>
+        <li><a href="ch07.html#sec-7-3">7.3 権限・ビュー・準備文との相互作用</a></li>
+        <li><a href="ch07.html#sec-7-4">7.4 現在の実装上の制限</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第1章　プロパティグラフ概論</h1>
+        <p>
+本章では、プロパティグラフとは何か、そして PostgreSQL がそれをどのような
+オブジェクトとして扱うのかを俯瞰する。SQL/PGQ の 2 つの構成要素である
+<code>CREATE PROPERTY GRAPH</code>（グラフの定義）と <code>GRAPH_TABLE</code>
+（グラフの照会）の関係を押さえ、クエリ処理パイプライン全体のどこで何が起きるのかを
+最初に地図として示す。以降の章はこの地図の各領域を掘り下げるものである。
+</p>
+
+<h2 id="sec-1-1">1.1　SQL/PGQ とプロパティグラフモデル</h2>
+<p>
+<dfn>プロパティグラフ（property graph）</dfn>は、<dfn>頂点（vertex, 別名ノード node）</dfn>と
+<dfn>辺（edge, 別名リレーションシップ relationship）</dfn>からなるデータモデルである。
+頂点と辺はまとめて<dfn>要素（element）</dfn>と呼ばれ、各要素は 1 つ以上の
+<dfn>ラベル（label）</dfn>と、任意個の<dfn>プロパティ（property）</dfn>（名前付きの値）を持つ。
+辺は必ず 1 つの始点頂点と 1 つの終点頂点を結ぶ。
+</p>
+<p>
+<dfn>SQL/PGQ（SQL Property Graph Queries）</dfn>は、この考え方を SQL に取り込むための
+標準規格 ISO/IEC 9075-16 であり、SQL:2023 の一部として定められている。PostgreSQL 本体には
+まだ取り込まれていないが、本ドキュメントが対象とする <code>shinyaaa/postgres</code> フォークには
+SQL/PGQ を実装するパッチ（コミット <code>SQL Property Graph Queries (SQL/PGQ)</code>）が
+適用されており、<code>CREATE PROPERTY GRAPH</code> 文と、<code>SELECT</code> の
+<code>GRAPH_TABLE</code> 句が利用できる。図 1.1 に示すように、プロパティグラフは
+頂点・辺・ラベル・プロパティの 4 概念で構成される。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph V1["頂点 customers"]
+        VL1["ラベル: customers"]
+        VP1["プロパティ: customer_id, name, address"]
+    end
+    subgraph V2["頂点 orders"]
+        VL2["ラベル: orders / lists"]
+        VP2["プロパティ: order_id, ordered_when"]
+    end
+    V1 -- "辺 customer_orders<br/>(ラベル: customer_orders)" --> V2
+  </pre>
+  <figcaption>図 1.1: プロパティグラフの構成要素（頂点・辺・ラベル・プロパティ）</figcaption>
+</figure>
+
+<p>
+重要なのは、グラフのデータそのものは<strong>通常のテーブル（あるいはビューや外部テーブル）に
+格納されたまま</strong>だという点である。1 つの頂点／辺は 1 つのテーブルに対応し、
+プロパティグラフの定義はそれらのテーブルをグラフ構造として「束ねる」役割だけを担う。
+これは <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/doc/src/sgml/ref/create_property_graph.sgml"><code>create_property_graph.sgml</code></a> の
+Description に明記されている設計思想である。
+</p>
+
+<h2 id="sec-1-2">1.2　論理オブジェクトとしてのプロパティグラフ</h2>
+<p>
+<code>CREATE PROPERTY GRAPH</code> は物理的な実体を作らない。この点で
+<code>CREATE VIEW</code> によく似ており、「照会されたときにだけ使われる構造」を
+カタログに記録するにすぎない。プロパティグラフは <code>pg_class</code> 上の 1 タプルとして
+表現され、その <code>relkind</code> は <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/catalog/pg_class.h#L181"><code>RELKIND_PROPGRAPH</code></a>
+（文字 <code>'g'</code>）である。
+</p>
+<p>
+プロパティグラフはテーブルやビューと同じ名前空間を共有するため、同一スキーマ内で
+他のリレーション（テーブル・ビュー・シーケンス等）と名前が衝突してはならない。また
+プロパティグラフを直接 <code>SELECT</code> したり <code>INSERT</code> したりすることはできず、
+<strong><code>GRAPH_TABLE</code> 句の中からのみ</strong>参照できる。次の例のように、
+プロパティグラフを普通のテーブルのように扱おうとするとエラーになる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>SELECT * FROM myshop;          -- error
+COPY myshop TO stdout;         -- error
+INSERT INTO myshop VALUES (1); -- error</code></pre>
+</div>
+
+<div class="note"><strong>メモ</strong>
+プロパティグラフは記憶域を持たないため、<code>UNLOGGED</code> を付けて作ることはできない。
+一方、構成テーブルのいずれかが一時テーブルであれば、ビューと同様にプロパティグラフも
+自動的に一時オブジェクトになる（<code>CreatePropGraph()</code> がその判定を行う）。
+</div>
+
+<h2 id="sec-1-3">1.3　クエリ処理パイプライン全体像</h2>
+<p>
+SQL/PGQ の実装で最も特徴的なのは、<strong>専用の実行器（executor）ノードが一切追加されて
+いない</strong>ことである。グラフ照会の意味論は、すべて<strong>クエリ書き換え（rewrite）</strong>の
+段階で通常のリレーショナル演算（結合・和集合）へと変換され、以降のプランナと実行器は
+それを「ごく普通のサブクエリ」として扱う。図 1.2 にパイプライン全体を示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    A["SQL 文字列<br/>SELECT ... FROM GRAPH_TABLE (...)"] --> B
+    B["構文解析 (gram.y)<br/>RangeGraphTable ノード生成"] --> C
+    C["解析変換 (parse_clause.c / parse_graphtable.c)<br/>RTE_GRAPH_TABLE + GraphPattern"] --> D
+    D["書き換え (rewriteGraphTable.c)<br/>RTE_SUBQUERY へ変換 / パスクエリの UNION"] --> E
+    E["プランナ / 実行器<br/>通常のサブクエリとして処理"]
+  </pre>
+  <figcaption>図 1.2: GRAPH_TABLE を含むクエリの処理パイプライン</figcaption>
+</figure>
+
+<p>
+各段階の担当は次のとおりである。第2章以降で順に掘り下げる。
+</p>
+<ul>
+  <li><strong>構文解析</strong>: <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/parser/gram.y"><code>gram.y</code></a> が
+    <code>GRAPH_TABLE (...)</code> を <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/include/nodes/parsenodes.h#L721"><code>RangeGraphTable</code></a>
+    という生（raw）ノードへ落とし込む。</li>
+  <li><strong>解析変換</strong>: <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/parser/parse_clause.c#L938"><code>transformRangeGraphTable()</code></a>
+    がプロパティグラフを開き、パターンと <code>COLUMNS</code> を変換して、範囲テーブルエントリ
+    <code>RTE_GRAPH_TABLE</code> を作る（第4章）。</li>
+  <li><strong>書き換え</strong>: <a href="https://github.com/shinyaaa/postgres/blob/031904048aa22e7c70dc8e9c170e2743f9b0f090/src/backend/rewrite/rewriteGraphTable.c#L109"><code>rewriteGraphTable()</code></a>
+    が <code>RTE_GRAPH_TABLE</code> を、辺と頂点の等結合とパスの和集合からなる
+    <code>RTE_SUBQUERY</code> へ置き換える（第5・6章）。</li>
+  <li><strong>プランナ／実行器</strong>: 置き換え後はグラフ固有の情報が消えているため、
+    通常の SQL と全く同じ経路で最適化・実行される。</li>
+</ul>
+
+<p>
+つまり本ドキュメントの核心は、<strong>「グラフ定義がどうカタログに入るか」（第2・3章）</strong>と、
+<strong>「<code>GRAPH_TABLE</code> がどう解析され、どうリレーショナルクエリへ書き換えられるか」
+（第4〜6章）</strong>の 2 点に集約される。
+</p>
+      </article>
+      <nav class="pager">
+        <span class="pager-spacer" aria-hidden="true"></span>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch02.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第2章 グラフの定義: CREATE PROPERTY GRAPH</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風・内部構造解説 / 対象: PostgreSQL 19beta1 (SQL/PGQ パッチ) · shinyaaa/postgres</footer>
+</body>
+</html>
