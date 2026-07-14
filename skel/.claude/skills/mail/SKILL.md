@@ -42,28 +42,61 @@ branch with local commits and no cited thread usually means a proposal.
 Brevity is the single most important thing to get right here. The user's instinct
 is to over-write, and a hackers email earns attention by being easy to skim, not
 by being exhaustive. When any other guidance in this skill pulls toward "more,"
-this section wins. Concretely:
+this section wins.
 
-- **Say each point once.** Don't restate the motivation in the opener, again in the
-  proposal, and again in the closing. If a sentence repeats an idea already made,
-  delete it.
-- **A sentence or two of motivation is usually enough.** Reserve a full motivation
-  paragraph for changes where the "why" is genuinely non-obvious. Don't build a case
-  for something reviewers will immediately see the point of.
-- **Add a labeled section only when it carries content.** `Design:`,
-  `Design Considerations:`, `Regarding Testing:` are optional, not a template to
-  fill. Many good proposals are just: the one-line proposal, one concrete example,
-  and "The patch is attached. Thoughts?"
-- **Let the example do the work.** A fenced SQL/output block usually replaces a
-  paragraph of description. Show it, then cut the prose that would have described it.
-- **No throat-clearing, no summary.** Open with the proposal in the first sentence.
-  Don't wind up, and don't end by re-summarizing what you just said.
-- **Match length to the change.** A one-line fix is a few sentences; only a large,
-  non-obvious feature earns the full treatment (patch breakdown, benchmarks,
-  trade-offs). When in doubt, write the shorter version.
-- **Do a trim pass before handing it over.** Reread the finished draft and delete
-  every word, sentence, and section that doesn't change the reader's understanding
-  or decision. If removing it loses nothing, it was padding — remove it.
+**Deletion patterns.** These specific habits are what make drafts bloated. The
+trim pass is a hunt for them, not a vague reread:
+
+- **Translation tails.** A clause or sentence that re-explains what the previous
+  one already established: "..., so the common logic cannot drift apart", "In
+  effect, an administrator cannot assume that ...". The reader got it the first
+  time. Cut everything after the fact itself.
+- **Exhaustive variant enumeration.** Listing every sub-case in prose ("has
+  BYPASSRLS, is a superuser, or belongs to a role that is exempt from RLS on the
+  target table") — often twice. Name the primary case once; the example or the
+  patch carries the variants.
+- **Narrating the attached patch.** Reviewers read diffs. One sentence on the
+  approach at most; delete paragraphs describing mechanics, test additions, or
+  "make check passes".
+- **Prose duplicated in code-block comments.** If the fenced example's comments
+  tell the story ("-- BUG: still both rows"), cut the sentences that tell it again.
+- **Say each point once.** Not in the opener, again in the body, and again in the
+  closing. One closing line, one question — never two.
+- **Throat-clearing and summaries.** Open with the proposal in the first
+  sentence; don't end by re-summarizing.
+
+**Sentence shape.** One fact chain per sentence. A sentence stacking multiple
+subordinate clauses reads fine to the writer and slowly to everyone else — split it.
+
+**Match length to the change.** A one-line fix is a few sentences; only a large,
+non-obvious feature earns patch breakdowns, benchmarks, and trade-offs. Labeled
+sections (`Design:`, `Regarding Testing:`) exist only when they carry content.
+Many good proposals are just: the one-line proposal, one fenced example, and
+"The patch is attached. Thoughts?"
+
+**Worked trim** — a first draft vs. what the user actually sent (his own edit):
+
+> *Draft:* The cause is that RevalidateCachedQuery() and CheckCachedPlan() only
+> compare the current role OID against the value recorded when the plan was
+> built (rewriteRoleId/planRoleId), they never notice that the role's
+> rolbypassrls, rolsuper, or membership set changed while the OID stayed the
+> same. plancache.c also never registers a syscache callback on pg_authid or
+> pg_auth_members, so nothing else prompts a cached plan to be reconsidered when
+> a role's privileges change. In effect, an administrator who runs ALTER ROLE
+> ... NOBYPASSRLS (or revokes SUPERUSER, or removes a role from a table-owning
+> group role) cannot assume that a live session under that role has actually
+> lost access, if that session already prepared a statement while the privilege
+> was still in effect.
+
+> *Sent:* RevalidateCachedQuery()/CheckCachedPlan() only compare the role OID,
+> not its attributes, and plancache.c never subscribes to
+> pg_authid/pg_auth_members invalidations, so the revoked privilege keeps being
+> honored until the session ends or the statement is deallocated.
+
+Three sentences became one: the parentheticals went, the variant enumeration
+went, and the "In effect ..." translation tail went. Nothing a reviewer needs
+was lost. Aim for the *Sent* version on the first draft, not after the user
+edits it.
 
 ## Workflow
 
@@ -85,10 +118,12 @@ hackers email stands on its motivation and concreteness, not its prose.
    MCP tools to locate related prior threads, the commit that introduced a related
    feature, or a commitfest entry, and offer them as `[N]` references. See "Citations".
 
-4. **Draft** following the structure and style below, then **do a trim pass**
-   (see "Keep it short"): cut every sentence, and every labeled section, that
-   doesn't add information or change the reader's decision. Aim for the shortest
-   version that still stands on its motivation and concreteness.
+4. **Draft** following the structure and style below, then **do a trim pass**:
+   go through the deletion patterns in "Keep it short" one by one and hunt each
+   in the draft — translation tails, variant enumerations, patch narration,
+   prose/comment duplication, repeated points, double closings. Then split any
+   sentence carrying more than one fact chain. The pass should visibly shorten
+   the draft; if it removed nothing, it wasn't a real pass.
 
 5. **Write the draft to a file.** Save it to `work/<branch>/vN.md`, where `<branch>`
    is the current git branch (`git rev-parse --abbrev-ref HEAD`) and `N` is the patch
