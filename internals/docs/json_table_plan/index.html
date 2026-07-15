@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PostgreSQL JSON_TABLE PLAN の内部構造 — PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL JSON_TABLE PLAN の内部構造</a>
+    <span class="version-badge">PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 JSON_TABLE と行生成モデル</a>
+    <ol class="sect">
+        <li><a href="ch01.html#sec-1-1">1.1 JSON_TABLE とは何か</a></li>
+        <li><a href="ch01.html#sec-1-2">1.2 PATH と行パターン</a></li>
+        <li><a href="ch01.html#sec-1-3">1.3 NESTED COLUMNS と PLAN の必要性</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PLAN 句の構文と意味論</a>
+    <ol class="sect">
+        <li><a href="ch02.html#sec-2-1">2.1 明示的 PLAN と PLAN DEFAULT</a></li>
+        <li><a href="ch02.html#sec-2-2">2.2 結合種別: INNER / OUTER / UNION / CROSS</a></li>
+        <li><a href="ch02.html#sec-2-3">2.3 文法規則とデフォルト</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 PLAN を表す内部データ構造</a>
+    <ol class="sect">
+        <li><a href="ch03.html#sec-3-1">3.1 未変換表現: JsonTablePlanSpec</a></li>
+        <li><a href="ch03.html#sec-3-2">3.2 変換後の実行木</a></li>
+        <li><a href="ch03.html#sec-3-3">3.3 列と行パターンの対応</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 パーサによる PLAN の変換</a>
+    <ol class="sect">
+        <li><a href="ch04.html#sec-4-1">4.1 transformJsonTableColumns の全体像</a></li>
+        <li><a href="ch04.html#sec-4-2">4.2 親子プランの検証</a></li>
+        <li><a href="ch04.html#sec-4-3">4.3 NESTED 列の再帰変換とシブリング結合</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 実行器の初期化</a>
+    <ol class="sect">
+        <li><a href="ch05.html#sec-5-1">5.1 JsonTablePlanState と JsonTableExecContext</a></li>
+        <li><a href="ch05.html#sec-5-2">5.2 JsonTableInitPlan による木の構築</a></li>
+        <li><a href="ch05.html#sec-5-3">5.3 列番号からプランへの対応表</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 行生成アルゴリズム</a>
+    <ol class="sect">
+        <li><a href="ch06.html#sec-6-1">6.1 ドキュメント設定と行パターン評価</a></li>
+        <li><a href="ch06.html#sec-6-2">6.2 JsonTablePlanNextRow: 親子結合</a></li>
+        <li><a href="ch06.html#sec-6-3">6.3 シブリング結合: UNION と CROSS</a></li>
+        <li><a href="ch06.html#sec-6-4">6.4 OUTER / INNER の意味論を実例で確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 観察と検証</a>
+    <ol class="sect">
+        <li><a href="ch07.html#sec-7-1">7.1 デフォルトプランの等価な明示形</a></li>
+        <li><a href="ch07.html#sec-7-2">7.2 UNION と CROSS の違いを観察する</a></li>
+        <li><a href="ch07.html#sec-7-3">7.3 逆整形とバージョン上の注意</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>PostgreSQL JSON_TABLE PLAN の内部構造</h1>
+        <p class="version-hero">PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</p>
+        <p class="lead"><code>JSON_TABLE</code> は JSON ドキュメントをリレーションに変換する SQL/JSON 標準の機能である。
+その中でも <strong>PLAN 句</strong>は、<code>NESTED COLUMNS</code> で表現される親子・兄弟のパスを
+どのように結合して行を組み立てるかを制御する、内部構造がもっとも凝縮した部分にあたる。
+本ドキュメントは PostgreSQL 20devel（<code>shinyaaa/postgres</code> サブモジュール）のソースコードを
+主たる典拠として、PLAN 句の構文・意味論から、パーサが構築する実行木、そして実行器が行を
+1 件ずつ生成するアルゴリズムまでを、図と実例で解き明かす。想定読者は PostgreSQL の内部実装に
+関心のあるエンジニアで、SQL/JSON の基本的な構文は既知とする。</p>
+      </div>
+      <div class="toc-grid">
+        <a class="toc-card" href="ch01.html">
+  <span class="num">第1章</span>
+  <span class="title">JSON_TABLE と行生成モデル</span>
+  <span class="desc">JSON_TABLE が JSON を行に展開する仕組みと、NESTED COLUMNS が PLAN を必要とする理由を示す。</span>
+</a>
+        <a class="toc-card" href="ch02.html">
+  <span class="num">第2章</span>
+  <span class="title">PLAN 句の構文と意味論</span>
+  <span class="desc">明示 PLAN と PLAN DEFAULT の書き方、INNER/OUTER/UNION/CROSS の意味と既定を整理する。</span>
+</a>
+        <a class="toc-card" href="ch03.html">
+  <span class="num">第3章</span>
+  <span class="title">PLAN を表す内部データ構造</span>
+  <span class="desc">未変換の JsonTablePlanSpec と、実行木 JsonTablePathScan / JsonTableSiblingJoin を対比する。</span>
+</a>
+        <a class="toc-card" href="ch04.html">
+  <span class="num">第4章</span>
+  <span class="title">パーサによる PLAN の変換</span>
+  <span class="desc">transformJsonTableColumns と NESTED 列の再帰変換、および PLAN の妥当性検査を追う。</span>
+</a>
+        <a class="toc-card" href="ch05.html">
+  <span class="num">第5章</span>
+  <span class="title">実行器の初期化</span>
+  <span class="desc">JsonTablePlanState 木の構築と、列番号からプラン状態への対応表 colplanstates を解説する。</span>
+</a>
+        <a class="toc-card" href="ch06.html">
+  <span class="num">第6章</span>
+  <span class="title">行生成アルゴリズム</span>
+  <span class="desc">JsonTablePlanNextRow による親子結合・兄弟結合の再帰と、OUTER/INNER/UNION/CROSS の実装を追う。</span>
+</a>
+        <a class="toc-card" href="ch07.html">
+  <span class="num">第7章</span>
+  <span class="title">観察と検証</span>
+  <span class="desc">デフォルトプランの等価性、UNION と CROSS の違い、逆整形とバージョン上の注意を実例で確認する。</span>
+</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風・内部構造解説 / 対象: PostgreSQL 20devel · shinyaaa/postgres</footer>
+</body>
+</html>

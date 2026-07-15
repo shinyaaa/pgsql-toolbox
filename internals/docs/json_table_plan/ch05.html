@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章 実行器の初期化 | PostgreSQL JSON_TABLE PLAN の内部構造 — PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL JSON_TABLE PLAN の内部構造</a>
+    <span class="version-badge">PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 JSON_TABLE と行生成モデル</a>
+    <ol class="sect">
+        <li><a href="ch01.html#sec-1-1">1.1 JSON_TABLE とは何か</a></li>
+        <li><a href="ch01.html#sec-1-2">1.2 PATH と行パターン</a></li>
+        <li><a href="ch01.html#sec-1-3">1.3 NESTED COLUMNS と PLAN の必要性</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PLAN 句の構文と意味論</a>
+    <ol class="sect">
+        <li><a href="ch02.html#sec-2-1">2.1 明示的 PLAN と PLAN DEFAULT</a></li>
+        <li><a href="ch02.html#sec-2-2">2.2 結合種別: INNER / OUTER / UNION / CROSS</a></li>
+        <li><a href="ch02.html#sec-2-3">2.3 文法規則とデフォルト</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 PLAN を表す内部データ構造</a>
+    <ol class="sect">
+        <li><a href="ch03.html#sec-3-1">3.1 未変換表現: JsonTablePlanSpec</a></li>
+        <li><a href="ch03.html#sec-3-2">3.2 変換後の実行木</a></li>
+        <li><a href="ch03.html#sec-3-3">3.3 列と行パターンの対応</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 パーサによる PLAN の変換</a>
+    <ol class="sect">
+        <li><a href="ch04.html#sec-4-1">4.1 transformJsonTableColumns の全体像</a></li>
+        <li><a href="ch04.html#sec-4-2">4.2 親子プランの検証</a></li>
+        <li><a href="ch04.html#sec-4-3">4.3 NESTED 列の再帰変換とシブリング結合</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch05.html">第5章 実行器の初期化</a>
+    <ol class="sect">
+        <li><a href="ch05.html#sec-5-1">5.1 JsonTablePlanState と JsonTableExecContext</a></li>
+        <li><a href="ch05.html#sec-5-2">5.2 JsonTableInitPlan による木の構築</a></li>
+        <li><a href="ch05.html#sec-5-3">5.3 列番号からプランへの対応表</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 行生成アルゴリズム</a>
+    <ol class="sect">
+        <li><a href="ch06.html#sec-6-1">6.1 ドキュメント設定と行パターン評価</a></li>
+        <li><a href="ch06.html#sec-6-2">6.2 JsonTablePlanNextRow: 親子結合</a></li>
+        <li><a href="ch06.html#sec-6-3">6.3 シブリング結合: UNION と CROSS</a></li>
+        <li><a href="ch06.html#sec-6-4">6.4 OUTER / INNER の意味論を実例で確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 観察と検証</a>
+    <ol class="sect">
+        <li><a href="ch07.html#sec-7-1">7.1 デフォルトプランの等価な明示形</a></li>
+        <li><a href="ch07.html#sec-7-2">7.2 UNION と CROSS の違いを観察する</a></li>
+        <li><a href="ch07.html#sec-7-3">7.3 逆整形とバージョン上の注意</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第5章　実行器の初期化</h1>
+        <p>
+  実行フェーズに移る。本章は、静的な実行木（<code>JsonTablePlan</code>）から、行を数える動的状態
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/utils/adt/jsonpath_exec.c#L204"><code>JsonTablePlanState</code></a>
+  の木を構築する初期化処理を扱う。ここで各列と、その値を供給するプラン状態が結び付けられる。
+</p>
+
+<h2 id="sec-5-1">5.1　JsonTablePlanState と JsonTableExecContext</h2>
+<p>
+  実行時、プラン木の各ノードには 1 つの <code>JsonTablePlanState</code> が対応する。これは
+  jsonpath 評価の結果リストとその反復子、現在選択中の行パターン値、序数カウンタ、そして
+  親・子・左右の兄弟へのポインタを保持する。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/jsonpath_exec.c（抜粋）</span>
+  <pre><code>typedef struct JsonTablePlanState
+{
+    JsonTablePlan *plan;              /* 元のプランノード */
+    JsonPath   *path;                 /* 評価する jsonpath (PathScan のみ) */
+    MemoryContext mcxt;               /* 行パターン評価用コンテキスト */
+    List       *args;                 /* PASSING 引数 */
+    JsonValueList found;              /* jsonpath 結果リスト */
+    JsonValueListIterator iter;       /* その反復子 */
+    JsonTablePlanRowSource current;   /* 現在行の行パターン値 */
+    int         ordinal;              /* ORDINALITY カウンタ */
+    struct JsonTablePlanState *nested;   /* 子プラン状態 */
+    struct JsonTablePlanState *left;     /* 左兄弟 */
+    struct JsonTablePlanState *right;    /* 右兄弟 */
+    struct JsonTablePlanState *parent;   /* 親プラン状態 */
+    bool        cross;                /* SiblingJoin: 直積か */
+    bool        outerJoin;            /* PathScan: 子との OUTER 結合か */
+    bool        advanceNested;        /* 制御フラグ */
+    bool        advanceRight;
+    bool        reset;
+} JsonTablePlanState;</code></pre>
+</div>
+
+<p>
+  実行全体をまとめるのが
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/utils/adt/jsonpath_exec.c#L256"><code>JsonTableExecContext</code></a>
+  で、ルートのプラン状態 <code>rootplanstate</code> と、後述の
+  <strong>列番号→プラン状態</strong>の対応表 <code>colplanstates</code> を持つ。<code>magic</code> 値で
+  取り違えを検出する健全性チェックが入っている。
+</p>
+
+<h2 id="sec-5-2">5.2　JsonTableInitPlan による木の構築</h2>
+<p>
+  初期化の入口は
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/utils/adt/jsonpath_exec.c#L4427"><code>JsonTableInitOpaque()</code></a>
+  である。PASSING 引数を評価して <code>JsonPathVariable</code> のリストにし、
+  <code>colplanstates</code> 配列を確保したうえで、
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/utils/adt/jsonpath_exec.c#L4508"><code>JsonTableInitPlan()</code></a>
+  を呼んでプラン状態木を再帰構築する。
+</p>
+
+<figure>
+  <pre class="mermaid">
+sequenceDiagram
+    participant TFS as TableFuncScan
+    participant IO as JsonTableInitOpaque
+    participant IP as JsonTableInitPlan
+    TFS->>IO: 初期化
+    IO->>IO: PASSING 引数を評価
+    IO->>IO: colplanstates 配列を確保
+    IO->>IP: rootplan で再帰開始
+    IP->>IP: PathScan なら mcxt 生成・path 展開
+    IP->>IP: colMin..colMax を colplanstates に登録
+    IP->>IP: child / left / right を再帰初期化
+    IP-->>IO: rootplanstate
+  </pre>
+  <figcaption>図 5.1: 実行木の初期化シーケンス</figcaption>
+</figure>
+
+<p>
+  <code>JsonTableInitPlan()</code> は、ノードが <code>JsonTablePathScan</code> なら
+  <code>outerJoin</code> を写し、コンパイル済み jsonpath を <code>path</code> に展開し、行パターン評価専用の
+  メモリコンテキスト <code>mcxt</code> を生成する。<code>JsonTableSiblingJoin</code> なら <code>cross</code>
+  を写し、左右の子を再帰初期化する。親ポインタ <code>parent</code> は呼び出し時に渡される。
+</p>
+
+<h2 id="sec-5-3">5.3　列番号からプランへの対応表</h2>
+<p>
+  第 3 章で見た <code>colMin</code>／<code>colMax</code> はここで使われる。
+  <code>JsonTableInitPlan()</code> は各 <code>PathScan</code> について
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/jsonpath_exec.c（抜粋）</span>
+  <pre><code>for (i = scan-&gt;colMin; i &gt;= 0 &amp;&amp; i &lt;= scan-&gt;colMax; i++)
+    cxt-&gt;colplanstates[i] = planstate;</code></pre>
+</div>
+
+<p>
+  として、自分が担当する列番号の位置に自身のプラン状態を書き込む。これにより、実行時に
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/utils/adt/jsonpath_exec.c#L4826"><code>JsonTableGetValue()</code></a>
+  が列番号 <code>colnum</code> を受け取ったとき、<code>colplanstates[colnum]</code> から
+  「その列の値を供給する行パターンはどのプラン状態が保持しているか」を O(1) で引ける。
+  <code>colMin = colMax = -1</code> のスキャン（自前の列を持たない）はこのループを 1 度も回さない。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph CVE["colvalexprs (全列を平坦化)"]
+        C0["col0: 親.id"]
+        C1["col1: 親.name"]
+        C2["col2: 子.tag"]
+    end
+    subgraph CPS["colplanstates"]
+        M0["[0] → 親 PathScan 状態"]
+        M1["[1] → 親 PathScan 状態"]
+        M2["[2] → 子 PathScan 状態"]
+    end
+    C0 -.-> M0
+    C1 -.-> M1
+    C2 -.-> M2
+  </pre>
+  <figcaption>図 5.2: 列番号からプラン状態への対応（colplanstates）</figcaption>
+</figure>
+
+<p>
+  図 5.2 に示すように、親スキャンが列 0〜1 を、子スキャンが列 2 を担当する場合、
+  <code>colplanstates</code> はそれぞれのプラン状態を指す。行が確定した後の列値取り出しは、
+  この表を通じて「正しい階層の現在行」から計算される。
+</p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch04.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第4章 パーサによる PLAN の変換</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch06.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第6章 行生成アルゴリズム</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風・内部構造解説 / 対象: PostgreSQL 20devel · shinyaaa/postgres</footer>
+</body>
+</html>

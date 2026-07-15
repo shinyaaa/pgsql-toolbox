@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第7章 観察と検証 | PostgreSQL JSON_TABLE PLAN の内部構造 — PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL JSON_TABLE PLAN の内部構造</a>
+    <span class="version-badge">PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 JSON_TABLE と行生成モデル</a>
+    <ol class="sect">
+        <li><a href="ch01.html#sec-1-1">1.1 JSON_TABLE とは何か</a></li>
+        <li><a href="ch01.html#sec-1-2">1.2 PATH と行パターン</a></li>
+        <li><a href="ch01.html#sec-1-3">1.3 NESTED COLUMNS と PLAN の必要性</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PLAN 句の構文と意味論</a>
+    <ol class="sect">
+        <li><a href="ch02.html#sec-2-1">2.1 明示的 PLAN と PLAN DEFAULT</a></li>
+        <li><a href="ch02.html#sec-2-2">2.2 結合種別: INNER / OUTER / UNION / CROSS</a></li>
+        <li><a href="ch02.html#sec-2-3">2.3 文法規則とデフォルト</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 PLAN を表す内部データ構造</a>
+    <ol class="sect">
+        <li><a href="ch03.html#sec-3-1">3.1 未変換表現: JsonTablePlanSpec</a></li>
+        <li><a href="ch03.html#sec-3-2">3.2 変換後の実行木</a></li>
+        <li><a href="ch03.html#sec-3-3">3.3 列と行パターンの対応</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 パーサによる PLAN の変換</a>
+    <ol class="sect">
+        <li><a href="ch04.html#sec-4-1">4.1 transformJsonTableColumns の全体像</a></li>
+        <li><a href="ch04.html#sec-4-2">4.2 親子プランの検証</a></li>
+        <li><a href="ch04.html#sec-4-3">4.3 NESTED 列の再帰変換とシブリング結合</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 実行器の初期化</a>
+    <ol class="sect">
+        <li><a href="ch05.html#sec-5-1">5.1 JsonTablePlanState と JsonTableExecContext</a></li>
+        <li><a href="ch05.html#sec-5-2">5.2 JsonTableInitPlan による木の構築</a></li>
+        <li><a href="ch05.html#sec-5-3">5.3 列番号からプランへの対応表</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 行生成アルゴリズム</a>
+    <ol class="sect">
+        <li><a href="ch06.html#sec-6-1">6.1 ドキュメント設定と行パターン評価</a></li>
+        <li><a href="ch06.html#sec-6-2">6.2 JsonTablePlanNextRow: 親子結合</a></li>
+        <li><a href="ch06.html#sec-6-3">6.3 シブリング結合: UNION と CROSS</a></li>
+        <li><a href="ch06.html#sec-6-4">6.4 OUTER / INNER の意味論を実例で確認する</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch07.html">第7章 観察と検証</a>
+    <ol class="sect">
+        <li><a href="ch07.html#sec-7-1">7.1 デフォルトプランの等価な明示形</a></li>
+        <li><a href="ch07.html#sec-7-2">7.2 UNION と CROSS の違いを観察する</a></li>
+        <li><a href="ch07.html#sec-7-3">7.3 逆整形とバージョン上の注意</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第7章　観察と検証</h1>
+        <p>
+  最終章では、これまで見た内部構造を SQL の観察で裏付ける。デフォルトプランと明示プランの
+  等価性、UNION と CROSS の違い、そして逆整形（deparse）やバージョン上の注意点を扱う。
+</p>
+
+<h2 id="sec-7-1">7.1　デフォルトプランの等価な明示形</h2>
+<p>
+  PLAN を省略したときの既定は「親子 = OUTER、兄弟 = UNION」だった。これは
+  <code>PLAN DEFAULT (OUTER, UNION)</code> と等価であり、単一 NESTED なら
+  <code>PLAN (root OUTER child)</code> とも等価である。次の 3 クエリは同じ結果を返す。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL（3 つは等価）</span>
+  <pre><code>-- (1) PLAN 省略
+... COLUMNS (k text PATH '$.k',
+      NESTED PATH '$.items[*]' COLUMNS (v int PATH '$'))
+
+-- (2) PLAN DEFAULT
+... COLUMNS (...) PLAN DEFAULT (OUTER, UNION)
+
+-- (3) 明示 PLAN
+... '$[*]' AS root COLUMNS (k text PATH '$.k',
+      NESTED PATH '$.items[*]' AS items COLUMNS (v int PATH '$'))
+    PLAN (root OUTER items)</code></pre>
+</div>
+
+<p>
+  内部的には、いずれも同型の <code>JsonTablePathScan</code>（<code>outerJoin = true</code>）＋子スキャンへ
+  変換される。第 4 章で見た <code>makeJsonTablePathScan()</code> の
+  <code>outerJoin = planspec == NULL || (join_type &amp; JSTP_JOIN_OUTER)</code> が、この等価性を生む。
+</p>
+
+<h2 id="sec-7-2">7.2　UNION と CROSS の違いを観察する</h2>
+<p>
+  兄弟 NESTED を 2 つ持つドキュメントで、既定（UNION）と CROSS を比べる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL（既定 = UNION）</span>
+  <pre><code>SELECT * FROM JSON_TABLE(
+  '{"a":[1,2], "b":[9,8]}',
+  '$'
+  COLUMNS (
+    NESTED PATH '$.a[*]' COLUMNS (x int PATH '$'),
+    NESTED PATH '$.b[*]' COLUMNS (y int PATH '$')
+  )
+) jt;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果（UNION: 継ぎ足し）</span>
+  <pre><code> x | y
+---+----
+ 1 |
+ 2 |
+   | 9
+   | 8
+(4 rows)</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">SQL（PLAN DEFAULT で CROSS）</span>
+  <pre><code>SELECT * FROM JSON_TABLE(
+  '{"a":[1,2], "b":[9,8]}',
+  '$'
+  COLUMNS (
+    NESTED PATH '$.a[*]' COLUMNS (x int PATH '$'),
+    NESTED PATH '$.b[*]' COLUMNS (y int PATH '$')
+  )
+  PLAN DEFAULT (CROSS)
+) jt;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果（CROSS: 直積）</span>
+  <pre><code> x | y
+---+----
+ 1 | 9
+ 1 | 8
+ 2 | 9
+ 2 | 8
+(4 rows)</code></pre>
+</div>
+
+<p>
+  UNION は 2+2=4 行の継ぎ足し（他方の列は NULL）、CROSS は 2×2=4 行の直積となる。第 6 章の
+  <code>JsonTableSiblingJoin</code> の <code>cross</code> フラグが、この 2 つの結果を切り替えている。
+</p>
+
+<h2 id="sec-7-3">7.3　逆整形とバージョン上の注意</h2>
+<p>
+  実行木からの逆整形（<code>pg_get_viewdef</code> 等での再表示）は
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/utils/adt/ruleutils.c#L12682"><code>get_json_table_nested_columns()</code></a>
+  などが担う。これは <code>JsonTablePathScan</code> と <code>JsonTableSiblingJoin</code> を辿り、
+  <code>NESTED PATH ... COLUMNS (...)</code> の構造として復元する。PostgreSQL の逆整形は
+  <strong>PLAN 句そのものを明示的に再生成せず</strong>、NESTED の入れ子構造として表現する点に注意する。
+</p>
+
+<div class="warn"><strong>注意</strong>PLAN 句の構文（明示 PLAN と PLAN DEFAULT）は SQL 標準に由来するが、
+実装や既定の詳細はバージョンで差がありうる。本ドキュメントは PostgreSQL 20devel
+（<code>shinyaaa/postgres</code>、コミット <code>d15a6bc2e16</code>）のソースに基づく。運用時は対象バージョンの
+挙動を実測で確認することを勧める。</div>
+
+<p>
+  最後に PLAN 内部構造の全体像を、パース時から実行時までの一連の変換として図 7.1 にまとめる。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    SQL["PLAN 句<br/>(構文)"] --> SPEC["JsonTablePlanSpec<br/>(未変換木)"]
+    SPEC --> TRANS["transformJsonTable*<br/>(検証と変換)"]
+    TRANS --> TREE["JsonTablePathScan /<br/>JsonTableSiblingJoin<br/>(実行木)"]
+    TREE --> INIT["JsonTableInitPlan<br/>(状態木を構築)"]
+    INIT --> STATE["JsonTablePlanState<br/>(動的状態)"]
+    STATE --> ROWS["JsonTablePlanNextRow<br/>(行を1件ずつ生成)"]
+  </pre>
+  <figcaption>図 7.1: PLAN 句が構文から行生成へ至る変換の全体像</figcaption>
+</figure>
+
+<p>
+  PLAN 句は、SQL/JSON の宣言的な結合指定を、PostgreSQL の実行器が理解できる二分木と状態機械へ
+  橋渡しする層である。親子は <code>PathScan.child</code>＋<code>outerJoin</code>、兄弟は
+  <code>SiblingJoin.cross</code> という最小限の表現に落とし込み、
+  <code>JsonTablePlanNextRow()</code> の再帰でネストしたループ結合を実現している――これが
+  JSON_TABLE PLAN の内部構造の要諦である。
+</p>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch06.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第6章 行生成アルゴリズム</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <span class="pager-spacer" aria-hidden="true"></span>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風・内部構造解説 / 対象: PostgreSQL 20devel · shinyaaa/postgres</footer>
+</body>
+</html>

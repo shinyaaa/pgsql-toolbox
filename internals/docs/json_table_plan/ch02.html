@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第2章 PLAN 句の構文と意味論 | PostgreSQL JSON_TABLE PLAN の内部構造 — PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL JSON_TABLE PLAN の内部構造</a>
+    <span class="version-badge">PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 JSON_TABLE と行生成モデル</a>
+    <ol class="sect">
+        <li><a href="ch01.html#sec-1-1">1.1 JSON_TABLE とは何か</a></li>
+        <li><a href="ch01.html#sec-1-2">1.2 PATH と行パターン</a></li>
+        <li><a href="ch01.html#sec-1-3">1.3 NESTED COLUMNS と PLAN の必要性</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch02.html">第2章 PLAN 句の構文と意味論</a>
+    <ol class="sect">
+        <li><a href="ch02.html#sec-2-1">2.1 明示的 PLAN と PLAN DEFAULT</a></li>
+        <li><a href="ch02.html#sec-2-2">2.2 結合種別: INNER / OUTER / UNION / CROSS</a></li>
+        <li><a href="ch02.html#sec-2-3">2.3 文法規則とデフォルト</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 PLAN を表す内部データ構造</a>
+    <ol class="sect">
+        <li><a href="ch03.html#sec-3-1">3.1 未変換表現: JsonTablePlanSpec</a></li>
+        <li><a href="ch03.html#sec-3-2">3.2 変換後の実行木</a></li>
+        <li><a href="ch03.html#sec-3-3">3.3 列と行パターンの対応</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 パーサによる PLAN の変換</a>
+    <ol class="sect">
+        <li><a href="ch04.html#sec-4-1">4.1 transformJsonTableColumns の全体像</a></li>
+        <li><a href="ch04.html#sec-4-2">4.2 親子プランの検証</a></li>
+        <li><a href="ch04.html#sec-4-3">4.3 NESTED 列の再帰変換とシブリング結合</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 実行器の初期化</a>
+    <ol class="sect">
+        <li><a href="ch05.html#sec-5-1">5.1 JsonTablePlanState と JsonTableExecContext</a></li>
+        <li><a href="ch05.html#sec-5-2">5.2 JsonTableInitPlan による木の構築</a></li>
+        <li><a href="ch05.html#sec-5-3">5.3 列番号からプランへの対応表</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 行生成アルゴリズム</a>
+    <ol class="sect">
+        <li><a href="ch06.html#sec-6-1">6.1 ドキュメント設定と行パターン評価</a></li>
+        <li><a href="ch06.html#sec-6-2">6.2 JsonTablePlanNextRow: 親子結合</a></li>
+        <li><a href="ch06.html#sec-6-3">6.3 シブリング結合: UNION と CROSS</a></li>
+        <li><a href="ch06.html#sec-6-4">6.4 OUTER / INNER の意味論を実例で確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 観察と検証</a>
+    <ol class="sect">
+        <li><a href="ch07.html#sec-7-1">7.1 デフォルトプランの等価な明示形</a></li>
+        <li><a href="ch07.html#sec-7-2">7.2 UNION と CROSS の違いを観察する</a></li>
+        <li><a href="ch07.html#sec-7-3">7.3 逆整形とバージョン上の注意</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第2章　PLAN 句の構文と意味論</h1>
+        <p>
+  本章では PLAN 句の 2 つの書き方――具体的な結合を指定する <code>PLAN(...)</code> と、既定戦略だけを
+  差し替える <code>PLAN DEFAULT(...)</code>――を、文法規則と意味論の両面から整理する。4 つの結合種別
+  INNER / OUTER / UNION / CROSS がそれぞれ何を意味するかを明確にする。
+</p>
+
+<h2 id="sec-2-1">2.1　明示的 PLAN と PLAN DEFAULT</h2>
+<p>
+  文法上、PLAN 句は
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/gram.y#L15344"><code>json_table_plan_clause_opt</code></a>
+  で定義される。取りうる形は次の 3 通りである。
+</p>
+<ul>
+  <li><code>PLAN ( &lt;plan&gt; )</code> ―― パスの結合方法を名前付きで具体的に記述する（<em>明示プラン</em>）。</li>
+  <li><code>PLAN DEFAULT ( &lt;choices&gt; )</code> ―― 既定の結合戦略だけを差し替える（<em>デフォルトプラン</em>）。</li>
+  <li>省略 ―― プラン指定なし。内部的には「暗黙のデフォルトプラン」が使われる。</li>
+</ul>
+<p>
+  明示プランは各パスに付けた<strong>名前</strong>で構造を記述する。たとえば
+  <code>PLAN (root OUTER child)</code> のように、ルートパス名と子パス名を結合演算子でつなぐ。
+  一方 <code>PLAN DEFAULT (INNER, UNION)</code> は個々のパス名を書かず、親子・兄弟の既定結合の種類だけを
+  指定する。
+</p>
+
+<h2 id="sec-2-2">2.2　結合種別: INNER / OUTER / UNION / CROSS</h2>
+<p>
+  結合種別は
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/include/nodes/parsenodes.h#L2000"><code>JsonTablePlanJoinType</code></a>
+  として、ビットフラグの列挙で定義される。
+</p>
+
+<div class="example">
+  <span class="example-label">src/include/nodes/parsenodes.h</span>
+  <pre><code>typedef enum JsonTablePlanJoinType
+{
+    JSTP_JOIN_INNER = 0x01,
+    JSTP_JOIN_OUTER = 0x02,
+    JSTP_JOIN_CROSS = 0x04,
+    JSTP_JOIN_UNION = 0x08,
+} JsonTablePlanJoinType;</code></pre>
+</div>
+
+<p>
+  4 種は 2 つの軸に分かれる。<strong>親子（縦）方向</strong>は INNER か OUTER のいずれか、
+  <strong>兄弟（横）方向</strong>は UNION か CROSS のいずれかである。
+</p>
+<ul>
+  <li><strong>OUTER</strong>: 親行に対応する子行が無くても、親行を（子列を NULL にして）残す。</li>
+  <li><strong>INNER</strong>: 子行が無い親行は結果から落とす。</li>
+  <li><strong>UNION</strong>: 兄弟の <code>NESTED</code> 群を「継ぎ足し」で並べる。ある兄弟の行を出すとき、
+      他の兄弟の列は NULL になる。</li>
+  <li><strong>CROSS</strong>: 兄弟の <code>NESTED</code> 群の直積（デカルト積）を取る。</li>
+</ul>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    ROOT["PLAN 結合種別"]
+    ROOT --> V["親子方向"]
+    ROOT --> H["兄弟方向"]
+    V --> OUTER["OUTER: 子が無くても親を残す"]
+    V --> INNER["INNER: 子が無い親を捨てる"]
+    H --> UNION["UNION: 兄弟を継ぎ足す"]
+    H --> CROSS["CROSS: 兄弟の直積を取る"]
+  </pre>
+  <figcaption>図 2.1: 結合種別の 2 軸（親子方向と兄弟方向）</figcaption>
+</figure>
+
+<p>
+  図 2.1 のとおり、親子方向と兄弟方向は独立して選べる。明示プランでは
+  <code>parent OUTER child</code> や <code>a UNION b</code> のように演算子で書き分け、
+  デフォルトプランでは <code>DEFAULT(OUTER, UNION)</code> のようにカンマ区切りで両軸を指定する。
+</p>
+
+<h2 id="sec-2-3">2.3　文法規則とデフォルト</h2>
+<p>
+  明示プランの文法は、単純プラン（パス名）を起点に、外部結合・内部結合・和結合・直積結合を
+  組み立てる規則からなる。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/parser/gram.y（抜粋）</span>
+  <pre><code>json_table_plan_simple:  name
+json_table_plan_outer:   json_table_plan_simple OUTER  json_table_plan_primary
+json_table_plan_inner:   json_table_plan_simple INNER  json_table_plan_primary
+json_table_plan_union:   json_table_plan_primary UNION json_table_plan_primary
+json_table_plan_cross:   json_table_plan_primary CROSS json_table_plan_primary</code></pre>
+</div>
+
+<p>
+  ここで OUTER/INNER の<strong>左辺は必ず単純プラン（パス名）</strong>である点に注意する。すなわち
+  親子結合の親は 1 つの名前付きパスでなければならない。一方 UNION/CROSS は
+  <code>json_table_plan_primary</code>（単純プラン、または括弧で囲んだプラン）どうしを結合するため、
+  兄弟の入れ子構造を表現できる。これらの規則は最終的に
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/nodes/makefuncs.c#L1005"><code>makeJsonTableJoinedPlan()</code></a>
+  などを呼んで <code>JsonTablePlanSpec</code> ノードを構築する。
+</p>
+
+<p>
+  デフォルトプランの選択肢は
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/gram.y#L15400"><code>json_table_default_plan_choices</code></a>
+  で定義され、親子方向（INNER/OUTER）と兄弟方向（UNION/CROSS）を最大 1 つずつ指定できる。
+  片方だけ指定した場合、もう片方は補完される。文法規則の還元アクションを読むと、
+</p>
+<ul>
+  <li>親子方向だけ指定 → 兄弟方向は <code>JSTP_JOIN_UNION</code> を補う。</li>
+  <li>兄弟方向だけ指定 → 親子方向は <code>JSTP_JOIN_OUTER</code> を補う。</li>
+</ul>
+<p>
+  つまり PostgreSQL の<strong>既定は「親子 = OUTER、兄弟 = UNION」</strong>である。PLAN 句を完全に省略した
+  場合もこの既定が適用される。SQL 標準に照らすと、この既定は標準が定める既定と一致する。
+</p>
+
+<div class="warn"><strong>注意</strong>トップレベルの <code>ON ERROR</code> は
+<code>EMPTY [ARRAY]</code> か <code>ERROR</code> のみ許され、それ以外は
+<a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/parse_jsontable.c#L98"><code>transformJsonTable()</code></a>
+の冒頭で構文エラーになる。PLAN とは独立した制約だが、JSON_TABLE 全体の妥当性検査の一部である。</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch01.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第1章 JSON_TABLE と行生成モデル</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch03.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第3章 PLAN を表す内部データ構造</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風・内部構造解説 / 対象: PostgreSQL 20devel · shinyaaa/postgres</footer>
+</body>
+</html>
