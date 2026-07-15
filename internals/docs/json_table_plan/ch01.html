@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第1章 JSON_TABLE と行生成モデル | PostgreSQL JSON_TABLE PLAN の内部構造 — PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL JSON_TABLE PLAN の内部構造</a>
+    <span class="version-badge">PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li class="current">
+    <a class="chap-title" href="ch01.html">第1章 JSON_TABLE と行生成モデル</a>
+    <ol class="sect">
+        <li><a href="ch01.html#sec-1-1">1.1 JSON_TABLE とは何か</a></li>
+        <li><a href="ch01.html#sec-1-2">1.2 PATH と行パターン</a></li>
+        <li><a href="ch01.html#sec-1-3">1.3 NESTED COLUMNS と PLAN の必要性</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PLAN 句の構文と意味論</a>
+    <ol class="sect">
+        <li><a href="ch02.html#sec-2-1">2.1 明示的 PLAN と PLAN DEFAULT</a></li>
+        <li><a href="ch02.html#sec-2-2">2.2 結合種別: INNER / OUTER / UNION / CROSS</a></li>
+        <li><a href="ch02.html#sec-2-3">2.3 文法規則とデフォルト</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 PLAN を表す内部データ構造</a>
+    <ol class="sect">
+        <li><a href="ch03.html#sec-3-1">3.1 未変換表現: JsonTablePlanSpec</a></li>
+        <li><a href="ch03.html#sec-3-2">3.2 変換後の実行木</a></li>
+        <li><a href="ch03.html#sec-3-3">3.3 列と行パターンの対応</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 パーサによる PLAN の変換</a>
+    <ol class="sect">
+        <li><a href="ch04.html#sec-4-1">4.1 transformJsonTableColumns の全体像</a></li>
+        <li><a href="ch04.html#sec-4-2">4.2 親子プランの検証</a></li>
+        <li><a href="ch04.html#sec-4-3">4.3 NESTED 列の再帰変換とシブリング結合</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 実行器の初期化</a>
+    <ol class="sect">
+        <li><a href="ch05.html#sec-5-1">5.1 JsonTablePlanState と JsonTableExecContext</a></li>
+        <li><a href="ch05.html#sec-5-2">5.2 JsonTableInitPlan による木の構築</a></li>
+        <li><a href="ch05.html#sec-5-3">5.3 列番号からプランへの対応表</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 行生成アルゴリズム</a>
+    <ol class="sect">
+        <li><a href="ch06.html#sec-6-1">6.1 ドキュメント設定と行パターン評価</a></li>
+        <li><a href="ch06.html#sec-6-2">6.2 JsonTablePlanNextRow: 親子結合</a></li>
+        <li><a href="ch06.html#sec-6-3">6.3 シブリング結合: UNION と CROSS</a></li>
+        <li><a href="ch06.html#sec-6-4">6.4 OUTER / INNER の意味論を実例で確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 観察と検証</a>
+    <ol class="sect">
+        <li><a href="ch07.html#sec-7-1">7.1 デフォルトプランの等価な明示形</a></li>
+        <li><a href="ch07.html#sec-7-2">7.2 UNION と CROSS の違いを観察する</a></li>
+        <li><a href="ch07.html#sec-7-3">7.3 逆整形とバージョン上の注意</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第1章　JSON_TABLE と行生成モデル</h1>
+        <p>
+  本章では <code>JSON_TABLE</code> が JSON ドキュメントをどのように行の集合へ展開するのか、その
+  基本モデルを確認する。とりわけ <code>NESTED COLUMNS</code> が登場したときに「どの行とどの行を
+  組み合わせるか」という結合の問題が生じることを示し、それを制御するのが PLAN 句であることを
+  導く。以降の章の前提となる用語と考え方をここで固める。
+</p>
+
+<h2 id="sec-1-1">1.1　JSON_TABLE とは何か</h2>
+<p>
+  <code>JSON_TABLE</code> は FROM 句に置かれ、1 つの JSON ドキュメント（<em>コンテキストアイテム</em>）を
+  入力として受け取り、複数行・複数列のリレーションを生成する。パーサはこれを
+  <code>TableFunc</code> ノード（<code>functype = TFT_JSON_TABLE</code>）へ変換する。変換の入口が
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/parse_jsontable.c#L84"><code>transformJsonTable()</code></a> で、
+  コンテキストアイテムと行パターン式は <code>TableFunc.docexpr</code> に、各列を計算する式は
+  <code>TableFunc.colvalexprs</code> に格納される。
+</p>
+<p>
+  実行時には汎用の <code>TableFuncScan</code> ノードがこの <code>TableFunc</code> を駆動する。
+  JSON_TABLE 固有の振る舞いは、コールバックの集合
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/utils/adt/jsonpath_exec.c#L408"><code>JsonbTableRoutine</code></a>
+  として実装されている。すなわち <code>SetDocument</code>（ドキュメント設定）、
+  <code>FetchRow</code>（次の行を取り出す）、<code>GetValue</code>（列値を計算する）などである。
+</p>
+
+<h2 id="sec-1-2">1.2　PATH と行パターン</h2>
+<p>
+  <code>JSON_TABLE</code> の中心概念は<strong>行パターン（row pattern）</strong>である。ルートの
+  <code>PATH</code> に書かれた jsonpath 式をコンテキストアイテムに適用した結果の各要素が、
+  1 行に対応する。図 1.1 に最小の例を示す。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>SELECT * FROM JSON_TABLE(
+  '[{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]',
+  '$[*]'
+  COLUMNS (
+    id   int  PATH '$.id',
+    name text PATH '$.name'
+  )
+) jt;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果</span>
+  <pre><code> id | name
+----+------
+  1 | a
+  2 | b
+(2 rows)</code></pre>
+</div>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    DOC["JSON 配列<br/>(コンテキストアイテム)"] --> PATH["行パターン path<br/>$[*]"]
+    PATH --> R1["要素 0 → 行1"]
+    PATH --> R2["要素 1 → 行2"]
+    R1 --> C1["列 id / name を評価"]
+    R2 --> C2["列 id / name を評価"]
+  </pre>
+  <figcaption>図 1.1: ルート path が生成する行パターンと列評価</figcaption>
+</figure>
+
+<p>
+  各列の値は、その行の行パターン値を新たなコンテキストとして、列ごとの jsonpath
+  （例: <code>$.id</code>）を評価して得る。列は種類ごとに <code>JSON_VALUE</code>／
+  <code>JSON_QUERY</code>／<code>JSON_EXISTS</code> のいずれかへ変換される
+  （<a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/parse_jsontable.c#L483"><code>transformJsonTableColumn()</code></a>）。
+</p>
+
+<h2 id="sec-1-3">1.3　NESTED COLUMNS と PLAN の必要性</h2>
+<p>
+  行パターンの要素がさらに配列を内包するとき、<code>NESTED PATH ... COLUMNS (...)</code> を使って
+  その内側の配列を展開できる。ここで初めて「結合」が問題になる。図 1.2 のように、親の 1 行に
+  対して子の行が 0 個・1 個・複数個と変わりうるため、両者をどう組み合わせるかを決めなければ
+  ならない。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    subgraph Parent["親 (NESTED でない列)"]
+        P1["親行 A"]
+        P2["親行 B"]
+    end
+    subgraph Child["子 (NESTED COLUMNS)"]
+        A1["A の子 a1"]
+        A2["A の子 a2"]
+        B0["B の子 なし"]
+    end
+    P1 --> A1
+    P1 --> A2
+    P2 --> B0
+  </pre>
+  <figcaption>図 1.2: 親行ごとに子行数が異なる（B は子を持たない）</figcaption>
+</figure>
+
+<p>
+  図 1.2 に示すように、親 A は子を 2 つ持ち、親 B は子を持たない。この状況で
+  「B の行を結果に残すか（OUTER 相当）／捨てるか（INNER 相当）」、また複数の
+  <code>NESTED</code> が兄弟として並ぶとき「それらを直積するか（CROSS）／継ぎ足すか（UNION）」を
+  決める必要がある。これを制御するのが <strong>PLAN 句</strong>である。PostgreSQL の既定では、
+  親子は OUTER 結合、兄弟は UNION 結合となる。次章でこの構文と意味論を詳しく見る。
+</p>
+
+<div class="note"><strong>メモ</strong>PLAN 句を書かない場合でも、内部的には必ず「既定のプラン」が
+組み立てられる。つまり PLAN は<em>省略可能な明示</em>であって、結合戦略そのものは常に存在する。</div>
+      </article>
+      <nav class="pager">
+        <span class="pager-spacer" aria-hidden="true"></span>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch02.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第2章 PLAN 句の構文と意味論</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風・内部構造解説 / 対象: PostgreSQL 20devel · shinyaaa/postgres</footer>
+</body>
+</html>

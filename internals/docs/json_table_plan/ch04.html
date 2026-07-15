@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第4章 パーサによる PLAN の変換 | PostgreSQL JSON_TABLE PLAN の内部構造 — PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL JSON_TABLE PLAN の内部構造</a>
+    <span class="version-badge">PostgreSQL 20devel · d15a6bc2e16 · 2026-07-15 00:51</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 JSON_TABLE と行生成モデル</a>
+    <ol class="sect">
+        <li><a href="ch01.html#sec-1-1">1.1 JSON_TABLE とは何か</a></li>
+        <li><a href="ch01.html#sec-1-2">1.2 PATH と行パターン</a></li>
+        <li><a href="ch01.html#sec-1-3">1.3 NESTED COLUMNS と PLAN の必要性</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 PLAN 句の構文と意味論</a>
+    <ol class="sect">
+        <li><a href="ch02.html#sec-2-1">2.1 明示的 PLAN と PLAN DEFAULT</a></li>
+        <li><a href="ch02.html#sec-2-2">2.2 結合種別: INNER / OUTER / UNION / CROSS</a></li>
+        <li><a href="ch02.html#sec-2-3">2.3 文法規則とデフォルト</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 PLAN を表す内部データ構造</a>
+    <ol class="sect">
+        <li><a href="ch03.html#sec-3-1">3.1 未変換表現: JsonTablePlanSpec</a></li>
+        <li><a href="ch03.html#sec-3-2">3.2 変換後の実行木</a></li>
+        <li><a href="ch03.html#sec-3-3">3.3 列と行パターンの対応</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch04.html">第4章 パーサによる PLAN の変換</a>
+    <ol class="sect">
+        <li><a href="ch04.html#sec-4-1">4.1 transformJsonTableColumns の全体像</a></li>
+        <li><a href="ch04.html#sec-4-2">4.2 親子プランの検証</a></li>
+        <li><a href="ch04.html#sec-4-3">4.3 NESTED 列の再帰変換とシブリング結合</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 実行器の初期化</a>
+    <ol class="sect">
+        <li><a href="ch05.html#sec-5-1">5.1 JsonTablePlanState と JsonTableExecContext</a></li>
+        <li><a href="ch05.html#sec-5-2">5.2 JsonTableInitPlan による木の構築</a></li>
+        <li><a href="ch05.html#sec-5-3">5.3 列番号からプランへの対応表</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 行生成アルゴリズム</a>
+    <ol class="sect">
+        <li><a href="ch06.html#sec-6-1">6.1 ドキュメント設定と行パターン評価</a></li>
+        <li><a href="ch06.html#sec-6-2">6.2 JsonTablePlanNextRow: 親子結合</a></li>
+        <li><a href="ch06.html#sec-6-3">6.3 シブリング結合: UNION と CROSS</a></li>
+        <li><a href="ch06.html#sec-6-4">6.4 OUTER / INNER の意味論を実例で確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 観察と検証</a>
+    <ol class="sect">
+        <li><a href="ch07.html#sec-7-1">7.1 デフォルトプランの等価な明示形</a></li>
+        <li><a href="ch07.html#sec-7-2">7.2 UNION と CROSS の違いを観察する</a></li>
+        <li><a href="ch07.html#sec-7-3">7.3 逆整形とバージョン上の注意</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第4章　パーサによる PLAN の変換</h1>
+        <p>
+  本章は、生の <code>JsonTablePlanSpec</code> と列定義から実行木を組み立てるパーサ変換を追う。
+  中心は
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/parse_jsontable.c#L269"><code>transformJsonTableColumns()</code></a>
+  と
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/parse_jsontable.c#L563"><code>transformJsonTableNestedColumns()</code></a>
+  の相互再帰である。ここで PLAN の妥当性検査と、既定プランの木への展開が行われる。
+</p>
+
+<h2 id="sec-4-1">4.1　transformJsonTableColumns の全体像</h2>
+<p>
+  <code>transformJsonTableColumns()</code> は「あるパスとその配下の列集合」を受け取り、1 つの
+  <code>JsonTablePathScan</code> を返す。処理の骨子は図 4.1 のとおりである。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    START["transformJsonTableColumns(planspec, columns, pathspec)"]
+    START --> COLMIN["colMin = 現在の colvalexprs 長"]
+    COLMIN --> CHECK{"planspec は<br/>DEFAULT か?"}
+    CHECK -->|"デフォルト"| APPEND
+    CHECK -->|"明示"| VALID["親子プランを検証<br/>パス名一致 / 子プラン検査"]
+    VALID --> APPEND["appendJsonTableColumns<br/>(非 NESTED 列を追加)"]
+    APPEND --> COLMAX["colMax を確定<br/>(全て NESTED なら -1)"]
+    COLMAX --> NESTED["transformJsonTableNestedColumns<br/>(子プランを再帰生成)"]
+    NESTED --> SCAN["makeJsonTablePathScan<br/>(JsonTablePathScan を構築)"]
+  </pre>
+  <figcaption>図 4.1: transformJsonTableColumns の処理フロー</figcaption>
+</figure>
+
+<p>
+  まず <code>colMin</code> に現在の <code>colvalexprs</code> の長さを記録する。次に
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/parse_jsontable.c#L361"><code>appendJsonTableColumns()</code></a>
+  が非 NESTED 列（<code>FOR ORDINALITY</code>・通常列・<code>EXISTS</code> 等）を変換して
+  <code>colvalexprs</code> に追加する。追加後の長さと <code>colMin</code> を比べ、変化が無ければ
+  「自分は直接の列を持たない」として <code>colMin = colMax = -1</code> とする。最後に子プランを
+  再帰生成し、
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/parse_jsontable.c#L663"><code>makeJsonTablePathScan()</code></a>
+  で <code>JsonTablePathScan</code> を組み立てる。
+</p>
+<p>
+  <code>makeJsonTablePathScan()</code> は行パターン path 文字列を
+  <code>jsonpath_in</code> でコンパイルして <code>Const</code> 化し、<code>outerJoin</code> を
+  「デフォルトプラン、または <code>join_type</code> に <code>JSTP_JOIN_OUTER</code> ビットが立つ場合に真」と
+  定める。ここが「既定が OUTER」を実装している箇所である。
+</p>
+
+<h2 id="sec-4-2">4.2　親子プランの検証</h2>
+<p>
+  明示プラン（非デフォルト）の場合、変換に先立って妥当性が検査される。
+  <code>transformJsonTableColumns()</code> 内のロジックは次を要求する。
+</p>
+<ul>
+  <li><code>JSTP_JOINED</code> の <code>join_type</code> は <strong>INNER か OUTER</strong> のいずれか
+      （親子結合のみ、ここで UNION/CROSS は不可）。そうでなければ
+      <em>「Expected INNER or OUTER.」</em> の構文エラー。</li>
+  <li>親プラン（<code>plan1</code> または単純プラン）の <code>pathname</code> が、いま処理している
+      <code>pathspec-&gt;name</code> と<strong>一致</strong>すること。不一致なら
+      <em>「PATH name mismatch」</em> エラー。</li>
+  <li>子プランは
+      <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/parse_jsontable.c#L750"><code>validateJsonTableChildPlan()</code></a>
+      でさらに検査する。</li>
+</ul>
+<p>
+  <code>validateJsonTableChildPlan()</code> は、子プラン側のパス名を
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/parse_jsontable.c#L719"><code>collectSiblingPathsInJsonTablePlan()</code></a>
+  で集め、実際の <code>NESTED</code> 列の集合と突き合わせる。次の 3 点を保証する。
+</p>
+<ol>
+  <li>すべての NESTED 列がパス名を持つ（無名なら自動生成されるが、明示 PLAN からは参照不可）。</li>
+  <li>すべての NESTED 列が、プラン側の兄弟ノードに対応先を持つ（無ければ
+      <em>「PLAN clause for nested path ... was not found」</em>）。</li>
+  <li>プラン側に余分・重複ノードが無い（あれば
+      <em>「PLAN clause contains some extra or duplicate sibling nodes」</em>）。</li>
+</ol>
+<p>
+  この検査により、明示 PLAN と実際の列構造の齟齬がパース時に確実に検出される。
+</p>
+
+<h2 id="sec-4-3">4.3　NESTED 列の再帰変換とシブリング結合</h2>
+<p>
+  子プランの生成は
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/parse_jsontable.c#L563"><code>transformJsonTableNestedColumns()</code></a>
+  が担う。プラン種別ごとに分岐する。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    IN["transformJsonTableNestedColumns(planspec)"]
+    IN --> D{"plan_type?"}
+    D -->|"NULL / DEFAULT"| LOOP["NESTED 列を順に走査"]
+    LOOP --> BUILD["各 NESTED を再帰変換し<br/>直前の兄弟と SiblingJoin で連結"]
+    BUILD --> RET1["先頭は単独、以降は<br/>makeJsonTableSiblingJoin"]
+    D -->|"SIMPLE"| FIND1["pathname で NESTED 列を検索"]
+    D -->|"JOINED (INNER/OUTER)"| FIND2["plan1.pathname で NESTED 列を検索"]
+    D -->|"JOINED (UNION/CROSS)"| REC["左右を再帰変換し<br/>SiblingJoin で結合"]
+    FIND1 --> REC2["見つけた列を再帰変換"]
+    FIND2 --> REC2
+  </pre>
+  <figcaption>図 4.2: transformJsonTableNestedColumns のプラン種別ごとの分岐</figcaption>
+</figure>
+
+<p>
+  図 4.2 のとおり、<strong>デフォルトプラン</strong>では <code>columns</code> 中の <code>NESTED</code> 列を
+  順に走査し、それぞれを再帰変換したうえで、直前までの結果と
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/parse_jsontable.c#L705"><code>makeJsonTableSiblingJoin()</code></a>
+  で連結していく。連結時の <code>cross</code> は <code>planspec</code> の <code>join_type</code> に
+  <code>JSTP_JOIN_CROSS</code> ビットが立っているかで決まる。つまり複数兄弟は左結合的に
+  <code>SiblingJoin</code> の連鎖になる。
+</p>
+<p>
+  <strong>SIMPLE / JOINED(INNER,OUTER)</strong> では、プランが名指しするパス名で対応する
+  <code>NESTED</code> 列を
+  <a href="https://github.com/shinyaaa/postgres/blob/d15a6bc2e16d4b330d6d455e41ce1ab3395d8e03/src/backend/parser/parse_jsontable.c#L536"><code>findNestedJsonTableColumn()</code></a>
+  で探し、その列を再帰変換する。<strong>JOINED(UNION,CROSS)</strong> では <code>plan1</code>／<code>plan2</code>
+  を個別に再帰変換し、<code>join_type</code> に応じて <code>cross</code> を立てた
+  <code>SiblingJoin</code> にまとめる。こうして明示 PLAN の二分木が、実行木の
+  <code>SiblingJoin</code> と <code>PathScan.child</code> の入れ子へ写し取られる。
+</p>
+
+<div class="info"><strong>関連</strong>ここで生成された <code>JsonTablePlan</code> の木は
+<code>TableFunc.plan</code> に格納され、実行時に第 5 章の初期化ルーチンが解釈する。</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch03.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第3章 PLAN を表す内部データ構造</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch05.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第5章 実行器の初期化</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">The Internals of PostgreSQL 風・内部構造解説 / 対象: PostgreSQL 20devel · shinyaaa/postgres</footer>
+</body>
+</html>
