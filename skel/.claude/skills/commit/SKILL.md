@@ -5,8 +5,14 @@ description: >-
   Analyzes staged/unstaged changes and composes a properly formatted summary
   line, narrative body, and attribution tags (Author/Reviewed-by/Discussion).
   Use whenever the user asks to commit work in a PostgreSQL worktree — "commit
-  this", "make a commit", "コミットして", "コミットメッセージを書いて" — even if they don't
-  mention PostgreSQL conventions explicitly.
+  this", "make a commit", "コミットして", "コミットメッセージを書いて". Also use whenever the
+  task is to produce a patch to submit to pgsql-hackers, because a submittable
+  patch (git format-patch) is built from a commit and needs a conventional
+  message: "create a patch", "make a patch", "format-patch", "パッチを作成",
+  "パッチ作成", "パッチにして", "パッチ作成からメール作成まで". This means a request that only
+  names the downstream step (patch or mail) still triggers the commit first.
+  Trigger even when the user does not say "commit" explicitly or mention
+  PostgreSQL conventions.
 ---
 
 # PostgreSQL Commit
