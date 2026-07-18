@@ -588,6 +588,44 @@ def _rename_claude_session(session: str, branch: str, attempts: int = 3) -> bool
     return False
 
 
+def _enable_remote_control(session: str, attempts: int = 3) -> str:
+    """Send /rc to enable Remote Control and return the session URL.
+
+    Teleported sessions start without Remote Control, so Claude Code prints
+    no session URL. The /rc (/remote-control) command enables it, at which
+    point the canonical https://claude.ai/code/... URL appears in the pane.
+    Returns that URL, or "" if it never showed up.
+    """
+    for attempt in range(1, attempts + 1):
+        # If Remote Control is already active (e.g. from a prior attempt), the
+        # URL is already on screen; return it rather than toggling /rc again.
+        url = _claude_session_url(session)
+        if url:
+            return url
+        # Clear any leftover input from a previous attempt.
+        _send_keys(session, "C-u")
+        time.sleep(0.5)
+        _send_keys(session, "/rc", literal=True)
+        time.sleep(CLAUDE_STARTUP_BUFFER)
+        # /rc takes no argument, so the slash-command autocomplete popup may
+        # still be open: the first Enter closes it (or selects the command),
+        # the second submits. A redundant Enter on an empty prompt is a no-op,
+        # so this is safe whichever way the popup behaves.
+        _send_keys(session, "Enter")
+        time.sleep(0.5)
+        _send_keys(session, "Enter")
+        # Give Claude Code a moment to connect and print the URL.
+        for _ in range(6):
+            time.sleep(1)
+            url = _claude_session_url(session)
+            if url:
+                return url
+        logger.info(
+            f"  /rc attempt {attempt}/{attempts} produced no URL; retrying"
+        )
+    return ""
+
+
 def setup_tmux_claude(branch: str, src_dir: Path,
                       teleport_session: Optional[str] = None):
     """Create a tmux session, start Claude Code, and rename the session.
@@ -596,8 +634,8 @@ def setup_tmux_claude(branch: str, src_dir: Path,
     session in the worktree with `claude --teleport <id>` instead of starting
     a fresh conversation. The teleport must run from a checkout of the same
     repository the cloud session was created in (the worktree satisfies this).
-    Note that teleported sessions start without Remote Control, so the session
-    URL is derived from the id rather than scraped from the pane.
+    Teleported sessions start without Remote Control, so /rc is sent afterwards
+    to enable it and surface the session URL for the dashboard link.
     """
     session = branch
 
@@ -645,9 +683,21 @@ def setup_tmux_claude(branch: str, src_dir: Path,
             f"rename it manually in the session with: /rename {branch}"
         )
 
+    # Teleported sessions start without Remote Control; enable it with /rc so
+    # the session can be driven remotely and prints its canonical URL.
+    if teleport_session:
+        logger.info("Enabling Remote Control for teleported session (/rc)...")
+        if _enable_remote_control(session):
+            logger.info("Remote Control enabled.")
+        else:
+            logger.warning(
+                "Could not confirm Remote Control after teleport; "
+                "enable it manually in the session with: /rc"
+            )
+
     # Record the Claude Code session URL so the dashboard can link to it.
-    # Teleported sessions start without Remote Control and so print no URL;
-    # derive it from the session id instead so the dashboard "CC" link works.
+    # If /rc surfaced the canonical URL we use that; otherwise fall back to
+    # deriving it from the teleport session id.
     url = _claude_session_url(session)
     if not url and teleport_session:
         url = f"https://claude.ai/code/{teleport_session}"
