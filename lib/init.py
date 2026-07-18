@@ -626,6 +626,34 @@ def _enable_remote_control(session: str, attempts: int = 3) -> str:
     return ""
 
 
+def _align_teleport_branch(src_dir: Path, branch: str):
+    """Rename the branch teleport checked out to the project name.
+
+    `claude --teleport` checks out the cloud session's own branch (e.g.
+    "claude/foo-xyz"), so the worktree ends up on a branch that doesn't match
+    the project/worktree name that pg_init created. Rename it to `branch`,
+    force-replacing the unused placeholder branch setup_worktree left behind,
+    so the git branch, the worktree directory, and the dashboard entry all
+    agree. `git branch -M` preserves upstream tracking, so the renamed branch
+    still follows the original cloud branch.
+    """
+    result = _run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=str(src_dir), check=False, capture=True,
+    )
+    current = (result.stdout or "").strip()
+    if not current or current == "HEAD":
+        logger.warning(
+            "Teleported worktree is not on a named branch; "
+            "skipping branch rename."
+        )
+        return
+    if current == branch:
+        return  # already on the project branch, nothing to do
+    logger.info(f"Renaming teleported branch '{current}' -> '{branch}'")
+    _run(["git", "branch", "-M", branch], cwd=str(src_dir), check=False)
+
+
 def setup_tmux_claude(branch: str, src_dir: Path,
                       teleport_session: Optional[str] = None):
     """Create a tmux session, start Claude Code, and rename the session.
@@ -635,7 +663,8 @@ def setup_tmux_claude(branch: str, src_dir: Path,
     a fresh conversation. The teleport must run from a checkout of the same
     repository the cloud session was created in (the worktree satisfies this).
     Teleported sessions start without Remote Control, so /rc is sent afterwards
-    to enable it and surface the session URL for the dashboard link.
+    to enable it and surface the session URL for the dashboard link, and the
+    branch teleport checked out (claude/...) is renamed to the project name.
     """
     session = branch
 
@@ -683,8 +712,9 @@ def setup_tmux_claude(branch: str, src_dir: Path,
             f"rename it manually in the session with: /rename {branch}"
         )
 
-    # Teleported sessions start without Remote Control; enable it with /rc so
-    # the session can be driven remotely and prints its canonical URL.
+    # Teleported sessions need post-processing: enable Remote Control with /rc
+    # so the session can be driven remotely (and prints its canonical URL), and
+    # rename the branch teleport checked out to match the project/worktree name.
     if teleport_session:
         logger.info("Enabling Remote Control for teleported session (/rc)...")
         if _enable_remote_control(session):
@@ -694,6 +724,7 @@ def setup_tmux_claude(branch: str, src_dir: Path,
                 "Could not confirm Remote Control after teleport; "
                 "enable it manually in the session with: /rc"
             )
+        _align_teleport_branch(src_dir, branch)
 
     # Record the Claude Code session URL so the dashboard can link to it.
     # If /rc surfaced the canonical URL we use that; otherwise fall back to
