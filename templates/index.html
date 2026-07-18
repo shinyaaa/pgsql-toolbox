@@ -872,6 +872,15 @@ function getPrefixBg(branchName) {
   return match ? match.bg : 'var(--prefix-unknown)';
 }
 let selectedPrefix = PREFIXES[0].prefix;
+let branchAutoFilled = false;  // true while create-branch holds an auto-filled default
+
+// MMDD for today, e.g. "0718" — default name for temporary branches
+function todayMMDD() {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return mm + dd;
+}
 
 function initPrefixChips() {
   const container = document.getElementById('prefix-chips');
@@ -887,10 +896,29 @@ function selectPrefix(prefix) {
     c.classList.toggle('active', c.dataset.prefix === prefix);
   });
   document.getElementById('create-prefix-display').textContent = prefix;
-  document.getElementById('create-branch').focus();
+  const input = document.getElementById('create-branch');
+  if (prefix === 'tmp-') {
+    // Default temporary branches to today's date (e.g. 0718)
+    if (!input.value.trim() || branchAutoFilled) {
+      input.value = todayMMDD();
+      branchAutoFilled = true;
+    }
+  } else if (branchAutoFilled) {
+    // Drop the auto-filled date when switching to a non-temporary category
+    input.value = '';
+    branchAutoFilled = false;
+  }
+  input.focus();
+  const len = input.value.length;
+  input.setSelectionRange(len, len);
 }
 
 initPrefixChips();
+
+// A manual edit means the value is no longer our auto-filled default
+document.getElementById('create-branch').addEventListener('input', () => {
+  branchAutoFilled = false;
+});
 
 function toggleSection(section) {
   const el = document.getElementById(section + '-section');
@@ -1347,6 +1375,7 @@ function getStandbysFromModal() {
 }
 
 function openCreateModal() {
+  branchAutoFilled = false;
   document.getElementById('create-branch').value = '';
   document.getElementById('create-base').value = 'master';
   document.getElementById('create-teleport').value = '';
