@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.config import REPL_STREAMING_ASYNC, REPL_STREAMING_SYNC, REPL_LOGICAL
 from lib.init import init_branch
+from lib.operations import normalize_teleport_session
 
 
 def main():
@@ -28,6 +29,11 @@ def main():
         "-s", "--standby", action="append", dest="standbys",
         choices=["sync", "async", "logical"],
         help="Add a standby (repeatable). e.g. -s sync -s async",
+    )
+    parser.add_argument(
+        "-t", "--teleport", dest="teleport_session", metavar="SESSION",
+        help="Resume a Claude Code cloud session in the worktree "
+             "(session id or claude.ai/code URL)",
     )
     args = parser.parse_args()
 
@@ -54,7 +60,14 @@ def main():
         standbys = [{"type": type_map[s]} for s in args.standbys]
 
     try:
-        init_branch(branch, base_branch, standbys=standbys)
+        teleport_session = normalize_teleport_session(args.teleport_session)
+    except ValueError as e:
+        print(f"\nError: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        init_branch(branch, base_branch, standbys=standbys,
+                    teleport_session=teleport_session)
     except Exception as e:
         print(f"\nError: {e}", file=sys.stderr)
         sys.exit(1)

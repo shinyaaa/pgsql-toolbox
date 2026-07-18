@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 # Valid branch name: alphanumeric, hyphens, underscores, dots, slashes (no .., no leading /)
 _BRANCH_NAME_RE = re.compile(r'^[A-Za-z0-9][\w.\-/]*$')
 
+# A Claude Code cloud/teleport session id, e.g. "session_01ABC...". We keep the
+# character class deliberately tight because the id is later typed into a shell
+# as `claude --teleport <id>`, so it must never contain shell metacharacters.
+_SESSION_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
+
 
 def validate_branch_name(name: str) -> str:
     """Validate and return the branch name, or raise ValueError."""
@@ -28,6 +33,28 @@ def validate_branch_name(name: str) -> str:
     if not _BRANCH_NAME_RE.match(name):
         raise ValueError(f"Invalid branch name: {name!r}")
     return name
+
+
+def normalize_teleport_session(raw: Optional[str]) -> Optional[str]:
+    """Normalize a Claude Code teleport session identifier.
+
+    Accepts either a bare session id ("session_01ABC...") or the full cloud
+    session URL ("https://claude.ai/code/session_01ABC..."), and returns the
+    bare id suitable for `claude --teleport <id>`. Returns None when the input
+    is empty/whitespace (teleport not requested); raises ValueError when a
+    non-empty value cannot be turned into a safe session id.
+    """
+    if not raw or not raw.strip():
+        return None
+    session = raw.strip()
+    # If a cloud session URL was pasted, take the id after ".../code/",
+    # dropping any query/fragment and trailing slash.
+    if "claude.ai/code/" in session:
+        session = session.split("claude.ai/code/", 1)[1]
+        session = session.split("?", 1)[0].split("#", 1)[0].strip("/")
+    if not _SESSION_ID_RE.match(session):
+        raise ValueError(f"Invalid teleport session id: {raw!r}")
+    return session
 
 
 def run_cmd(cmd, check=True, capture=False, cwd=None, timeout=None,

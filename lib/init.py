@@ -588,8 +588,17 @@ def _rename_claude_session(session: str, branch: str, attempts: int = 3) -> bool
     return False
 
 
-def setup_tmux_claude(branch: str, src_dir: Path):
-    """Create a tmux session, start Claude Code, and rename the session."""
+def setup_tmux_claude(branch: str, src_dir: Path,
+                      teleport_session: Optional[str] = None):
+    """Create a tmux session, start Claude Code, and rename the session.
+
+    When teleport_session is given, resume that existing Claude Code cloud
+    session in the worktree with `claude --teleport <id>` instead of starting
+    a fresh conversation. The teleport must run from a checkout of the same
+    repository the cloud session was created in (the worktree satisfies this).
+    Note that teleported sessions start without Remote Control, so the session
+    URL is derived from the id rather than scraped from the pane.
+    """
     session = branch
 
     # Check if session already exists
@@ -607,8 +616,12 @@ def setup_tmux_claude(branch: str, src_dir: Path):
         capture_output=True, text=True,
     )
 
-    # Start Claude Code
-    _send_keys(session, "claude", "Enter")
+    # Start Claude Code (optionally resuming a cloud session via teleport).
+    if teleport_session:
+        logger.info(f"Resuming Claude Code cloud session: {teleport_session}")
+        _send_keys(session, f"claude --teleport {teleport_session}", "Enter")
+    else:
+        _send_keys(session, "claude", "Enter")
 
     # Wait until Claude Code is idle at its input prompt. A fresh worktree
     # shows blocking dialogs first (folder-trust, then .mcp.json approval);
@@ -633,7 +646,11 @@ def setup_tmux_claude(branch: str, src_dir: Path):
         )
 
     # Record the Claude Code session URL so the dashboard can link to it.
+    # Teleported sessions start without Remote Control and so print no URL;
+    # derive it from the session id instead so the dashboard "CC" link works.
     url = _claude_session_url(session)
+    if not url and teleport_session:
+        url = f"https://claude.ai/code/{teleport_session}"
     if url:
         logger.info(f"Claude Code session: {url}")
         try:
@@ -648,7 +665,8 @@ def setup_tmux_claude(branch: str, src_dir: Path):
 
 def init_branch(branch: str, base_branch: str = "master",
                 standbys: Optional[list] = None,
-                log_file: Optional[Path] = None) -> Path:
+                log_file: Optional[Path] = None,
+                teleport_session: Optional[str] = None) -> Path:
     """Initialize a complete PostgreSQL development environment.
 
     This is the main entry point that orchestrates the full setup:
@@ -666,6 +684,9 @@ def init_branch(branch: str, base_branch: str = "master",
 
     Args:
         standbys: Optional list of dicts, e.g. [{"type": "streaming_sync"}, {"type": "streaming_async"}]
+        teleport_session: Optional Claude Code cloud session id to resume in
+            the worktree via `claude --teleport <id>` instead of starting a
+            fresh conversation.
 
     Returns the log file path.
     """
@@ -731,7 +752,7 @@ def init_branch(branch: str, base_branch: str = "master",
             logger.info("Replication cluster setup complete!")
 
         # 12. Setup tmux + Claude Code
-        setup_tmux_claude(branch, src_dir)
+        setup_tmux_claude(branch, src_dir, teleport_session=teleport_session)
 
         logger.info("")
         logger.info("PostgreSQL development environment setup complete!")

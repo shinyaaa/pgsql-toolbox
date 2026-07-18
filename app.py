@@ -15,6 +15,7 @@ from lib.init import init_branch
 from lib.operations import (
     archive_branch,
     check_pg_running,
+    normalize_teleport_session,
     parse_port_lock,
     pg_ctl_path,
     pg_data_path,
@@ -182,10 +183,11 @@ def api_delete_branch(name):
     return jsonify({"ok": True})
 
 
-def _run_pg_init(branch, base_branch, standbys=None):
+def _run_pg_init(branch, base_branch, standbys=None, teleport_session=None):
     """Run pg_init in background thread."""
     try:
-        init_branch(branch, base_branch, standbys=standbys)
+        init_branch(branch, base_branch, standbys=standbys,
+                    teleport_session=teleport_session)
         with _pg_init_lock:
             pg_init_tasks[branch] = {"status": "done"}
     except Exception as e:
@@ -213,6 +215,7 @@ def api_pg_init():
     try:
         branch = validate_branch_name(data.get("branch", ""))
         base_branch = validate_branch_name(data.get("base_branch", "master"))
+        teleport_session = normalize_teleport_session(data.get("teleport_session"))
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
@@ -222,7 +225,9 @@ def api_pg_init():
         pg_init_tasks[branch] = {"status": "running"}
 
     thread = threading.Thread(
-        target=_run_pg_init, args=(branch, base_branch, standbys), daemon=True
+        target=_run_pg_init,
+        args=(branch, base_branch, standbys, teleport_session),
+        daemon=True,
     )
     thread.start()
 

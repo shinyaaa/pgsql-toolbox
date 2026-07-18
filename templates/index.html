@@ -821,6 +821,10 @@
       <input type="text" id="create-base" value="master" placeholder="master">
     </div>
     <div class="form-group">
+      <label>Claude Code Session <span style="font-weight:400;color:var(--muted)">(optional — teleport)</span></label>
+      <input type="text" id="create-teleport" placeholder="session_... or https://claude.ai/code/session_...">
+    </div>
+    <div class="form-group">
       <label>Replication</label>
       <div class="standby-config" id="standby-config"></div>
       <button type="button" class="btn-add-standby" onclick="addStandbyRow()">+ Add Standby</button>
@@ -1345,6 +1349,7 @@ function getStandbysFromModal() {
 function openCreateModal() {
   document.getElementById('create-branch').value = '';
   document.getElementById('create-base').value = 'master';
+  document.getElementById('create-teleport').value = '';
   document.getElementById('create-output').style.display = 'none';
   document.getElementById('create-output').textContent = '';
   document.getElementById('create-btn').disabled = false;
@@ -1358,6 +1363,7 @@ function openCreateModal() {
 async function createWorktree() {
   const suffix = document.getElementById('create-branch').value.trim();
   const base = document.getElementById('create-base').value.trim();
+  const teleport = document.getElementById('create-teleport').value.trim();
   if (!suffix) { alert('Branch name is required'); return; }
   const branch = selectedPrefix + suffix;
 
@@ -1367,7 +1373,7 @@ async function createWorktree() {
     const resp = await fetch('/api/pg_init', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ branch, base_branch: base, standbys: getStandbysFromModal() }),
+      body: JSON.stringify({ branch, base_branch: base, standbys: getStandbysFromModal(), teleport_session: teleport }),
     });
     const data = await resp.json();
     if (!data.ok) {
