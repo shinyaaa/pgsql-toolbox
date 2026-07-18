@@ -1085,6 +1085,10 @@ function renderActiveRow(b) {
     menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();clusterAction('${esc(b.name)}','reload');closeAllMenus()">Reload All</button>`);
     menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();clusterAction('${esc(b.name)}','build');closeAllMenus()">Build All</button>`);
   }
+  if (b.exists_on_disk) {
+    const resumingLabel = claudeResuming.has(b.name) ? 'Resuming Claude...' : 'Resume Claude Code';
+    menuItems.push(`<button class="kebab-menu-item" ${claudeResuming.has(b.name) ? 'disabled' : ''} onclick="event.stopPropagation();resumeClaude('${esc(b.name)}');closeAllMenus()">${resumingLabel}</button>`);
+  }
   menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();openLogModal('${esc(b.name)}')">View Log</button>`);
   menuItems.push(`<button class="kebab-menu-item" onclick="event.stopPropagation();openEditModal('${esc(b.name)}');closeAllMenus()">Edit</button>`);
   if (b.exists_on_disk) {
@@ -1511,6 +1515,30 @@ async function clusterAction(name, action) {
   } catch (e) {
     showToast(`${name}: ${action} failed - ${e.message}`, 'error', 6000);
   }
+  fetchBranches();
+}
+
+// --- Resume Claude Code in tmux ---
+const claudeResuming = new Set();
+
+async function resumeClaude(name) {
+  if (claudeResuming.has(name)) return;
+  claudeResuming.add(name);
+  renderTable();
+  showToast(`${name}: resuming Claude Code in tmux (claude --resume)...`, 'success', 6000);
+  try {
+    const resp = await fetch(`/api/branches/${encodeURIComponent(name)}/claude/resume`, { method: 'POST' });
+    const data = await resp.json();
+    if (data.ok) {
+      const rc = data.url ? ' — Remote Control enabled' : ' — Remote Control unconfirmed (run /rc in the session)';
+      showToast(`${name}: Claude Code resumed${rc}`, 'success', 6000);
+    } else {
+      showToast(`${name}: Claude resume failed - ${data.error}`, 'error', 8000);
+    }
+  } catch (e) {
+    showToast(`${name}: Claude resume failed - ${e.message}`, 'error', 8000);
+  }
+  claudeResuming.delete(name);
   fetchBranches();
 }
 

@@ -490,6 +490,21 @@ def _pane_title(session: str) -> str:
     return result.stdout or ""
 
 
+def _pane_command(session: str) -> str:
+    """Return the command currently running in the tmux pane."""
+    result = subprocess.run(
+        ["tmux", "display-message", "-t", session, "-p",
+         "#{pane_current_command}"],
+        capture_output=True, text=True,
+    )
+    return (result.stdout or "").strip()
+
+
+# pane_current_command values that mean the pane is sitting at an idle shell,
+# i.e. it is safe to type a new command into it.
+_SHELL_COMMANDS = {"bash", "zsh", "sh", "fish", "ksh", "dash"}
+
+
 _SESSION_URL_RE = re.compile(r"https://claude\.ai/code/\S+")
 
 
@@ -742,6 +757,81 @@ def setup_tmux_claude(branch: str, src_dir: Path,
 
     logger.info(f"tmux session '{session}' created with Claude Code running.")
     logger.info(f"  Attach: tmux attach -t {session}")
+
+
+def resume_claude_session(branch: str) -> str:
+    """Relaunch Claude Code in tmux, resuming the conversation named `branch`.
+
+    Used when the tmux session or Claude Code process is gone (or Remote
+    Control has silently dropped): setup_tmux_claude renamed the conversation
+    to the branch name with /rename, so `claude --resume <branch>` picks the
+    same conversation back up. Runs it in a tmux session named after the
+    branch (created if missing, reused if its pane is an idle shell), then
+    re-enables Remote Control with /rc and stores the session URL.
+
+    Returns the session URL, or "" if Remote Control could not be confirmed.
+    Raises RuntimeError when the worktree is missing, the tmux session is
+    busy running something else, or Claude Code never reaches its prompt.
+    """
+    src_dir = MAIN_REPO if branch == "master" else PGSQL_DIR / branch / "postgres"
+    if not (src_dir / ".git").exists():
+        raise RuntimeError(f"Worktree not found: {src_dir}")
+
+    session = branch
+    result = subprocess.run(
+        ["tmux", "has-session", "-t", session],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        # Only reuse the session if its pane is an idle shell; otherwise the
+        # keystrokes would be typed into whatever is running there (possibly
+        # a live Claude Code instance).
+        current = _pane_command(session)
+        if current not in _SHELL_COMMANDS:
+            raise RuntimeError(
+                f"tmux session '{session}' is busy running '{current}'. "
+                f"Attach with: tmux attach -t {session}"
+            )
+        logger.info(f"Reusing idle tmux session '{session}'.")
+    else:
+        logger.info(f"Creating tmux session '{session}'...")
+        subprocess.run(
+            ["tmux", "new-session", "-d", "-s", session, "-c", str(src_dir)],
+            capture_output=True, text=True,
+        )
+
+    logger.info(f"Resuming Claude Code conversation '{branch}'...")
+    _send_keys(session, f"claude --resume {branch}", "Enter")
+
+    logger.info("Waiting for Claude Code to start...")
+    if not _wait_for_claude_prompt(session):
+        tail = "\n".join(_capture_pane(session).strip().splitlines()[-5:])
+        raise RuntimeError(
+            f"Claude Code prompt not detected within {CLAUDE_STARTUP_TIMEOUT}s "
+            f"in tmux session '{session}'. Last pane output:\n{tail}"
+        )
+    time.sleep(CLAUDE_STARTUP_BUFFER)
+
+    # Resumed sessions start without Remote Control, which is the very thing
+    # this recovery path is for; re-enable it and surface the session URL.
+    logger.info("Enabling Remote Control (/rc)...")
+    url = _enable_remote_control(session)
+    if url:
+        logger.info(f"Claude Code session: {url}")
+        try:
+            from lib.db import set_claude_session_url
+            set_claude_session_url(branch, url)
+        except Exception as e:
+            logger.warning(f"Could not store Claude Code session URL: {e}")
+    else:
+        logger.warning(
+            "Could not confirm Remote Control; "
+            f"enable it manually in the session with: /rc"
+        )
+
+    logger.info(f"tmux session '{session}' resumed with Claude Code running.")
+    logger.info(f"  Attach: tmux attach -t {session}")
+    return url
 
 
 def init_branch(branch: str, base_branch: str = "master",

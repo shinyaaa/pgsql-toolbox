@@ -11,7 +11,7 @@ from flask import Flask, g, jsonify, render_template, request
 
 from lib.config import DB_PATH, GH_REPO, HIDDEN_DIRS, LOG_PREVIEW_SIZE, LOGS_DIR, PGSQL_DIR, standby_port
 from lib.db import get_standbys, init_db, remove_standbys
-from lib.init import init_branch
+from lib.init import init_branch, resume_claude_session
 from lib.operations import (
     archive_branch,
     check_pg_running,
@@ -332,6 +332,25 @@ def api_cluster_action(name):
         return jsonify({"ok": True, "action": action})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/branches/<name>/claude/resume", methods=["POST"])
+def api_claude_resume(name):
+    """Relaunch Claude Code in tmux, resuming the renamed conversation.
+
+    Recovery path for when Remote Control has dropped or the tmux session
+    died: runs `claude --resume <name>` in a tmux session named after the
+    branch, then re-enables Remote Control via /rc.
+    """
+    try:
+        branch = validate_branch_name(name)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
+        url = resume_claude_session(branch)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True, "url": url})
 
 
 @app.route("/api/branches/<name>/archive", methods=["POST"])
