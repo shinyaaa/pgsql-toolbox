@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第4章 判定関数の意味論 | PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定</a>
+    <span class="version-badge">PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 ロールとメンバーシップの基礎</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 ロール・メンバーシップ・権限の三層構造</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 pg_auth_members と 3 つのオプション</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 4 種類の判定関数とその使い分け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 メンバーシップ展開の中核 roles_is_member_of</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 RoleRecurseType — 3 つの探索モード</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 自己拡張リストによる幅優先探索</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 pg_database_owner の暗黙メンバーシップ</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ADMIN OPTION 保持者の同時収集</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 メンバーシップキャッシュの仕組み</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 cached_role / cached_roles の構造</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 initialize_acl によるコールバック登録</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 RoleMembershipCacheCallback による無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 roles_list_append とブルームフィルタ</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch04.html">第4章 判定関数の意味論</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 has_privs_of_role — 権限の自動継承</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 member_can_set_role — SET ROLE 可能性</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 is_member_of_role と is_member_of_role_nosuper</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 is_admin_of_role と select_best_admin</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 pg_has_role() との対応関係</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ACL のビットマスク判定 aclmask</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 Acl と AclItem のレイアウト</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 aclmask の三段アルゴリズム</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 aclmask_direct との違い</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 aclmembers と oid_cmp</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 GRANT の付与者選択 select_best_grantor</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 なぜ付与者を選び直すのか</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 GRANTED BY 指定時の処理</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 最良候補の探索とスコアリング</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 select_best_admin との対比</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 行レベルセキュリティへの適用</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 get_policies_for_relation — コマンド種別による選別</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 check_role_for_policy — ロール適用判定</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 permissive / restrictive と適用順序</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 継承がもたらす直感に反する挙動</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 まとめ</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第4章　判定関数の意味論</h1>
+        <p>
+  第2章で見たとおり、公開されているロール判定関数はいずれも <code>roles_is_member_of()</code> の
+  薄いラッパである。しかし「薄い」からこそ、どのラッパを選ぶかがそのまま権限モデルの意味を決める。
+  本章では 4 つの関数（および superuser を無視する変種）を順に読み、どこで使うべきかを整理する。
+</p>
+
+<h2 id="sec-4-1">4.1　has_privs_of_role — 権限の自動継承</h2>
+
+<p>
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5317"><code>has_privs_of_role()</code></a>
+  は「<code>member</code> が <code>role</code> の権限を自動的に行使できるか」を返す。
+  権限チェックで使うべき唯一の関数である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5308</span>
+  <pre><code>/*
+ * Does member have the privileges of role (directly or indirectly)?
+ *
+ * This is defined not to recurse through grants that are not inherited,
+ * and only inherited grants confer the associated privileges automatically.
+ *
+ * See also member_can_set_role, below.
+ */
+bool
+has_privs_of_role(Oid member, Oid role)
+{
+    /* Fast path for simple case */
+    if (member == role)
+        return true;
+
+    /* Superusers have every privilege, so are part of every role */
+    if (superuser_arg(member))
+        return true;
+
+    /*
+     * Find all the roles that member has the privileges of, including
+     * multi-level recursion, then see if target role is any one of them.
+     */
+    return list_member_oid(roles_is_member_of(member, ROLERECURSE_PRIVS,
+                                              InvalidOid, NULL),
+                           role);
+}</code></pre>
+</div>
+
+<p>
+  構造は 3 段である。図 4.1 に示すように、自己一致の早期リターン、スーパーユーザの早期リターン、そして
+  <code>ROLERECURSE_PRIVS</code> モードでの展開結果に対する線形探索、という順で進む。
+  4 つの関数すべてがこの型を共有しており、違うのは第 2 段の有無と展開モードだけである
+  （<a href="#sec-4-5">4.5</a> の対応表にまとめる）。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    IN["判定関数の呼び出し (member, role)"]
+    SELF{"member == role か"}
+    SUPER{"superuser_arg(member) か"}
+    EXPAND["roles_is_member_of(member, MODE, ...)"]
+    SEARCH["list_member_oid(list, role)"]
+    T1["true"]
+    T2["true"]
+    OUT["結果"]
+
+    IN --> SELF
+    SELF -->|"はい"| T1
+    SELF -->|"いいえ"| SUPER
+    SUPER -->|"はい"| T2
+    SUPER -->|"いいえ"| EXPAND
+    EXPAND --> SEARCH --> OUT
+  </pre>
+  <figcaption>図 4.1: 判定関数に共通する 3 段構造。MODE と superuser 判定の有無だけが異なる</figcaption>
+</figure>
+
+<p>
+  <code>superuser_arg()</code> による早期リターンは、「スーパーユーザはすべてのロールの
+  暗黙のメンバーである」という規則の実装である。これは <code>pg_auth_members</code> に行を作らずに
+  実現されており、<code>pg_database_owner</code>（<a href="ch02.html#sec-2-3">2.3</a>）と並ぶ
+  暗黙メンバーシップのもう一つの例である。
+</p>
+
+<h2 id="sec-4-2">4.2　member_can_set_role — SET ROLE 可能性</h2>
+
+<p>
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5351"><code>member_can_set_role()</code></a>
+  は <code>ROLERECURSE_SETROLE</code> モードを使う。コメントが用途を明示している。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5336</span>
+  <pre><code>/*
+ * Can member use SET ROLE to this role?
+ *
+ * There must be a chain of grants from 'member' to 'role' each of which
+ * permits SET ROLE; that is, each of which has set_option = true.
+ *
+ * It doesn't matter whether the grants are inheritable. That's a separate
+ * question; see has_privs_of_role.
+ *
+ * This function should be used to determine whether the session user can
+ * use SET ROLE to become the target user. We also use it to determine whether
+ * the session user can change an existing object to be owned by the target
+ * user, or create new objects owned by the target user.
+ */</code></pre>
+</div>
+
+<p>
+  最後の一文が重要である。<code>SET ROLE</code> の可否だけでなく、
+  <strong>オブジェクトの所有者になれるか</strong>の判定にも使われる。理屈としては、
+  「そのロールになりすませるなら、そのロールが所有するオブジェクトを作るのと変わらない」ということである。
+</p>
+
+<p>
+  そのためのエラー送出付きラッパが
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5374"><code>check_can_set_role()</code></a>
+  であり、各 DDL の <code>OWNER TO</code> 処理から広く呼ばれている。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5373</span>
+  <pre><code>void
+check_can_set_role(Oid member, Oid role)
+{
+    if (!member_can_set_role(member, role))
+        ereport(ERROR,
+                (errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+                 errmsg("must be able to SET ROLE \"%s\"",
+                        GetUserNameFromId(role, false))));
+}</code></pre>
+</div>
+
+<table>
+  <thead>
+    <tr><th>呼び出し元</th><th>文脈</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/commands/tablecmds.c#L16909"><code>tablecmds.c</code></a></td><td><code>ALTER TABLE ... OWNER TO</code></td></tr>
+    <tr><td><a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/commands/schemacmds.c#L103"><code>schemacmds.c</code></a></td><td><code>CREATE SCHEMA ... AUTHORIZATION</code></td></tr>
+    <tr><td><a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/commands/dbcommands.c#L990"><code>dbcommands.c</code></a></td><td><code>CREATE DATABASE ... OWNER</code></td></tr>
+    <tr><td><a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/commands/variable.c#L997"><code>variable.c</code></a></td><td><code>SET ROLE</code> の GUC assign フック</td></tr>
+    <tr><td><a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/init/usercontext.c#L40"><code>usercontext.c</code></a></td><td>メンテナンス処理での一時的なロール切り替え</td></tr>
+  </tbody>
+</table>
+
+<p>
+  <code>variable.c</code> の呼び出しでは、判定の主体が <code>GetUserId()</code> ではなく
+  <code>GetSessionUserId()</code> である点に注意したい。<code>SET ROLE</code> を重ねても
+  権限が積み上がらないよう、常にセッションユーザを基準に判定している。
+</p>
+
+<h2 id="sec-4-3">4.3　is_member_of_role と is_member_of_role_nosuper</h2>
+
+<p>
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5397"><code>is_member_of_role()</code></a>
+  は <code>ROLERECURSE_MEMBERS</code>、すなわちオプションを一切無視した展開を行う。
+  第1章で引用したとおり、コメントは「ほぼどこで呼んでも間違い」と断じている。
+</p>
+
+<p>
+  一方
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5425"><code>is_member_of_role_nosuper()</code></a>
+  は、<code>is_member_of_role()</code> から <code>superuser_arg()</code> の早期リターンを取り除いただけの関数である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5416</span>
+  <pre><code>/*
+ * Is member a member of role, not considering superuserness?
+ *
+ * This is identical to is_member_of_role except we ignore superuser
+ * status.
+ *
+ * Do not use this for privilege checking, instead use has_privs_of_role()
+ */</code></pre>
+</div>
+
+<p>
+  「スーパーユーザを特別扱いしない」ことが望ましい場面は限られるが、確かに存在する。
+  20devel における呼び出しは 2 箇所だけである。
+</p>
+
+<ul>
+  <li>
+    <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/libpq/hba.c#L938"><code>hba.c</code></a>
+    — <code>pg_hba.conf</code> の <code>+role</code> 記法によるマッチング。認証はまだ通っていないので、
+    「実質的にスーパーユーザだから全ロールに一致する」という扱いをしてはならない。
+  </li>
+  <li>
+    <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/commands/user.c#L1757"><code>user.c</code></a>
+    — メンバーシップ付与時の循環検出。スーパーユーザを全ロールのメンバーとみなすと、
+    あらゆる付与が循環と判定されてしまう。
+  </li>
+</ul>
+
+<div class="warn"><strong>注意</strong><code>is_member_of_role()</code> 系は「メンバーではあるが権限は及ばない」
+ケースを真と判定する。<a href="ch01.html#sec-1-2">1.2</a> の実験における <code>m_none</code> がまさにそれで、
+<code>MEMBER</code> は <code>t</code> だがテーブルは読めない。権限チェックにこれを使うと権限昇格になる。</div>
+
+<h2 id="sec-4-4">4.4　is_admin_of_role と select_best_admin</h2>
+
+<p>
+  この 2 つは、<a href="ch02.html#sec-2-4">2.4</a> で見た <code>admin_of</code>／<code>admin_role</code> の
+  仕組みを使う姉妹関数である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5441</span>
+  <pre><code>bool
+is_admin_of_role(Oid member, Oid role)
+{
+    Oid         admin_role;
+
+    if (superuser_arg(member))
+        return true;
+
+    /* By policy, a role cannot have WITH ADMIN OPTION on itself. */
+    if (member == role)
+        return false;
+
+    (void) roles_is_member_of(member, ROLERECURSE_MEMBERS, role, &amp;admin_role);
+    return OidIsValid(admin_role);
+}
+
+/* ... */
+
+Oid
+select_best_admin(Oid member, Oid role)
+{
+    Oid         admin_role;
+
+    /* By policy, a role cannot have WITH ADMIN OPTION on itself. */
+    if (member == role)
+        return InvalidOid;
+
+    (void) roles_is_member_of(member, ROLERECURSE_PRIVS, role, &amp;admin_role);
+    return admin_role;
+}</code></pre>
+</div>
+
+<p>
+  戻り値の型以外に、3 つの違いがある。
+</p>
+
+<ol>
+  <li><strong>展開モード</strong>: <code>is_admin_of_role()</code> は <code>ROLERECURSE_MEMBERS</code>、
+    <code>select_best_admin()</code> は <code>ROLERECURSE_PRIVS</code>。後者は
+    「<em>権限が及ぶ</em>ロールのうち <code>ADMIN OPTION</code> を持つもの」を探すので条件が厳しい。</li>
+  <li><strong>superuser の扱い</strong>: <code>select_best_admin()</code> にはスーパーユーザの
+    早期リターンがない。呼び出し元がスーパーユーザを別扱いするためである（後述）。</li>
+  <li><strong>自己に対する扱い</strong>: 両者とも <code>member == role</code> を偽とする。
+    コメントの <code>"By policy, a role cannot have WITH ADMIN OPTION on itself."</code> がそれを述べている。</li>
+</ol>
+
+<p>
+  この「自分自身の ADMIN にはなれない」規則は、SQL からも観察できる。
+  <code>agent_r</code> は <code>admin_r</code> を継承し、<code>admin_r</code> は
+  <code>club</code> に <code>ADMIN OPTION</code> を持つ、という階層で確かめる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>CREATE ROLE club;
+CREATE ROLE admin_r;
+CREATE ROLE agent_r LOGIN;
+GRANT club    TO admin_r WITH ADMIN OPTION;
+GRANT admin_r TO agent_r;              -- 既定で INHERIT TRUE
+
+SELECT pg_has_role('agent_r','club','MEMBER WITH ADMIN OPTION') AS agent_is_admin,
+       pg_has_role('admin_r','club','MEMBER WITH ADMIN OPTION') AS admin_is_admin,
+       pg_has_role('club',   'club','MEMBER WITH ADMIN OPTION') AS self_is_admin;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果</span>
+  <pre><code> agent_is_admin | admin_is_admin | self_is_admin
+----------------+----------------+---------------
+ t              | t              | f
+(1 row)</code></pre>
+</div>
+
+<p>
+  <code>select_best_admin()</code> の実際の使われ方は
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/commands/user.c#L2242"><code>user.c</code></a>
+  にある。<code>GRANT role TO ...</code> を実行したとき、<code>pg_auth_members.grantor</code> に
+  何を記録するかを決める処理である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/commands/user.c:2228</span>
+  <pre><code>        if (superuser_arg(currentUserId))
+            return BOOTSTRAP_SUPERUSERID;
+
+        /*
+         * Otherwise, the grantor must either have ADMIN OPTION on the role or
+         * inherit the privileges of a role which does. In the former case,
+         * record the grantor as the current user; in the latter, pick one of
+         * the roles that is "most directly" inherited by the current role
+         * (i.e. fewest "hops").
+         *
+         * (We shouldn't fail to find a best grantor, because we've already
+         * established that the current user has permission to perform the
+         * operation.)
+         */
+        grantorId = select_best_admin(currentUserId, roleid);
+        if (!OidIsValid(grantorId))
+            elog(ERROR, "no possible grantors");
+        return grantorId;</code></pre>
+</div>
+
+<p>
+  スーパーユーザは <code>select_best_admin()</code> を経ずに <code>BOOTSTRAP_SUPERUSERID</code> を返す。
+  これが、<code>select_best_admin()</code> 側に superuser の早期リターンがない理由である。
+  実際に <code>agent_r</code> として <code>GRANT</code> を実行すると、記録される付与者は
+  <code>agent_r</code> ではなく <code>admin_r</code> になる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL（agent_r で接続して実行）</span>
+  <pre><code>GRANT club TO newbie;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果（postgres で確認）</span>
+  <pre><code>SELECT pg_get_userbyid(roleid)  AS role,
+       pg_get_userbyid(member)  AS member,
+       pg_get_userbyid(grantor) AS grantor,
+       admin_option
+FROM   pg_auth_members
+WHERE  roleid = 'club'::regrole
+ORDER  BY 2;
+
+ role | member  | grantor  | admin_option
+------+---------+----------+--------------
+ club | admin_r | postgres | t
+ club | newbie  | admin_r  | f
+(2 rows)</code></pre>
+</div>
+
+<p>
+  この「実行者ではなく、権限の出所となるロールを付与者として記録する」考え方は、
+  オブジェクト権限側の <code>select_best_grantor()</code> と同じ設計思想に基づく。
+  第6章で対比しながら読む。
+</p>
+
+<h2 id="sec-4-5">4.5　pg_has_role() との対応関係</h2>
+
+<p>
+  ここまでの 4 関数は、SQL 関数 <code>pg_has_role()</code> の第 3 引数を通じてすべて呼び分けられる。
+  ディスパッチを行うのが
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5042"><code>pg_role_aclcheck()</code></a>
+  である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5041</span>
+  <pre><code>static AclResult
+pg_role_aclcheck(Oid role_oid, Oid roleid, AclMode mode)
+{
+    if (mode &amp; ACL_GRANT_OPTION_FOR(ACL_CREATE))
+    {
+        if (is_admin_of_role(roleid, role_oid))
+            return ACLCHECK_OK;
+    }
+    if (mode &amp; ACL_CREATE)
+    {
+        if (is_member_of_role(roleid, role_oid))
+            return ACLCHECK_OK;
+    }
+    if (mode &amp; ACL_USAGE)
+    {
+        if (has_privs_of_role(roleid, role_oid))
+            return ACLCHECK_OK;
+    }
+    if (mode &amp; ACL_SET)
+    {
+        if (member_can_set_role(roleid, role_oid))
+            return ACLCHECK_OK;
+    }
+    return ACLCHECK_NO_PRIV;
+}</code></pre>
+</div>
+
+<p>
+  権限文字列から <code>AclMode</code> への変換は
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5018"><code>convert_role_priv_string()</code></a>
+  が行う。ロールには本来対応する ACL ビットがないため、既存のビットを流用する「ごまかし」が行われている。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5008</span>
+  <pre><code>/*
+ * convert_role_priv_string
+ *      Convert text string to AclMode value.
+ *
+ * We use USAGE to denote whether the privileges of the role are accessible
+ * (has_privs_of_role), MEMBER to denote is_member, and MEMBER WITH GRANT
+ * (or ADMIN) OPTION to denote is_admin.  There is no ACL bit corresponding
+ * to MEMBER so we cheat and use ACL_CREATE for that.  This convention
+ * is shared only with pg_role_aclcheck, below.
+ */</code></pre>
+</div>
+
+<p>
+  以上をまとめると、SQL レベルの権限文字列と C レベルの判定関数は次の対応になる。
+  本書の実行例で <code>pg_has_role()</code> を多用しているのは、この対応があるためである。
+</p>
+
+<table>
+  <thead>
+    <tr><th><code>pg_has_role()</code> の権限文字列</th><th>内部 <code>AclMode</code></th><th>呼ばれる関数</th><th>展開モード</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>USAGE</code></td><td><code>ACL_USAGE</code></td><td><code>has_privs_of_role()</code></td><td><code>ROLERECURSE_PRIVS</code></td></tr>
+    <tr><td><code>SET</code></td><td><code>ACL_SET</code></td><td><code>member_can_set_role()</code></td><td><code>ROLERECURSE_SETROLE</code></td></tr>
+    <tr><td><code>MEMBER</code></td><td><code>ACL_CREATE</code>（流用）</td><td><code>is_member_of_role()</code></td><td><code>ROLERECURSE_MEMBERS</code></td></tr>
+    <tr><td><code>MEMBER WITH ADMIN OPTION</code></td><td><code>ACL_GRANT_OPTION_FOR(ACL_CREATE)</code></td><td><code>is_admin_of_role()</code></td><td><code>ROLERECURSE_MEMBERS</code> + <code>admin_of</code></td></tr>
+  </tbody>
+</table>
+
+<div class="info"><strong>関連</strong>次章では層をひとつ下りて、これらの関数を呼び出す側である
+ACL のビットマスク判定 <code>aclmask()</code> を読む。</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch03.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第3章 メンバーシップキャッシュの仕組み</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch05.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第5章 ACL のビットマスク判定 aclmask</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — postgres@d4046a48053 のソースコードに基づく</footer>
+</body>
+</html>

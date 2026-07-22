@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定</a>
+    <span class="version-badge">PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 ロールとメンバーシップの基礎</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 ロール・メンバーシップ・権限の三層構造</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 pg_auth_members と 3 つのオプション</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 4 種類の判定関数とその使い分け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 メンバーシップ展開の中核 roles_is_member_of</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 RoleRecurseType — 3 つの探索モード</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 自己拡張リストによる幅優先探索</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 pg_database_owner の暗黙メンバーシップ</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ADMIN OPTION 保持者の同時収集</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 メンバーシップキャッシュの仕組み</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 cached_role / cached_roles の構造</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 initialize_acl によるコールバック登録</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 RoleMembershipCacheCallback による無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 roles_list_append とブルームフィルタ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 判定関数の意味論</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 has_privs_of_role — 権限の自動継承</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 member_can_set_role — SET ROLE 可能性</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 is_member_of_role と is_member_of_role_nosuper</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 is_admin_of_role と select_best_admin</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 pg_has_role() との対応関係</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ACL のビットマスク判定 aclmask</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 Acl と AclItem のレイアウト</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 aclmask の三段アルゴリズム</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 aclmask_direct との違い</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 aclmembers と oid_cmp</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 GRANT の付与者選択 select_best_grantor</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 なぜ付与者を選び直すのか</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 GRANTED BY 指定時の処理</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 最良候補の探索とスコアリング</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 select_best_admin との対比</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 行レベルセキュリティへの適用</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 get_policies_for_relation — コマンド種別による選別</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 check_role_for_policy — ロール適用判定</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 permissive / restrictive と適用順序</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 継承がもたらす直感に反する挙動</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 まとめ</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>PostgreSQL Internals: ロールメンバーシップと ACL 権限判定</h1>
+        <p class="version-hero">PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</p>
+        <p class="lead">PostgreSQL の権限判定は、ロール間のメンバーシップグラフを展開する層と、オブジェクトごとの ACL 配列をビットマスクで走査する層の二段構えになっている。本書は <code>src/backend/utils/adt/acl.c</code> を中心に、メンバーシップの再帰展開・プロセスローカルキャッシュ・ACL ビットマスク判定・GRANT の付与者選択、そして行レベルセキュリティ（RLS）でのロール判定までを、ソースコードを追いながら解説する。対象は PostgreSQL 20devel（コミット d4046a48053）。C 言語のバックエンドコードを読む前提知識がある読者を想定する。</p>
+      </div>
+      <div class="toc-grid">
+        <a class="toc-card" href="ch01.html">
+  <span class="num">第1章</span>
+  <span class="title">ロールとメンバーシップの基礎</span>
+  <span class="desc">ロール・メンバーシップ・権限の三層構造と、判定関数の全体像を示す。</span>
+</a>
+        <a class="toc-card" href="ch02.html">
+  <span class="num">第2章</span>
+  <span class="title">メンバーシップ展開の中核 roles_is_member_of</span>
+  <span class="desc">メンバーシップグラフを幅優先で展開する中心関数を読む。</span>
+</a>
+        <a class="toc-card" href="ch03.html">
+  <span class="num">第3章</span>
+  <span class="title">メンバーシップキャッシュの仕組み</span>
+  <span class="desc">1 スロットのプロセスローカルキャッシュと、その無効化・高速化の実装を追う。</span>
+</a>
+        <a class="toc-card" href="ch04.html">
+  <span class="num">第4章</span>
+  <span class="title">判定関数の意味論</span>
+  <span class="desc">has_privs_of_role・member_can_set_role・is_member_of_role・is_admin_of_role の違いを明確にする。</span>
+</a>
+        <a class="toc-card" href="ch05.html">
+  <span class="num">第5章</span>
+  <span class="title">ACL のビットマスク判定 aclmask</span>
+  <span class="desc">Acl / AclItem のレイアウトと、権限ビットを集約する aclmask の三段構成を解説する。</span>
+</a>
+        <a class="toc-card" href="ch06.html">
+  <span class="num">第6章</span>
+  <span class="title">GRANT の付与者選択 select_best_grantor</span>
+  <span class="desc">権限の出所を一意に保つための付与者選択ロジックを読む。</span>
+</a>
+        <a class="toc-card" href="ch07.html">
+  <span class="num">第7章</span>
+  <span class="title">行レベルセキュリティへの適用</span>
+  <span class="desc">RLS がポリシーを選別する際に、どのロール判定関数を使うかを追う。</span>
+</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — postgres@d4046a48053 のソースコードに基づく</footer>
+</body>
+</html>

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第2章 メンバーシップ展開の中核 roles_is_member_of | PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定</a>
+    <span class="version-badge">PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 ロールとメンバーシップの基礎</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 ロール・メンバーシップ・権限の三層構造</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 pg_auth_members と 3 つのオプション</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 4 種類の判定関数とその使い分け</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch02.html">第2章 メンバーシップ展開の中核 roles_is_member_of</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 RoleRecurseType — 3 つの探索モード</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 自己拡張リストによる幅優先探索</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 pg_database_owner の暗黙メンバーシップ</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ADMIN OPTION 保持者の同時収集</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 メンバーシップキャッシュの仕組み</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 cached_role / cached_roles の構造</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 initialize_acl によるコールバック登録</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 RoleMembershipCacheCallback による無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 roles_list_append とブルームフィルタ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 判定関数の意味論</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 has_privs_of_role — 権限の自動継承</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 member_can_set_role — SET ROLE 可能性</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 is_member_of_role と is_member_of_role_nosuper</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 is_admin_of_role と select_best_admin</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 pg_has_role() との対応関係</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ACL のビットマスク判定 aclmask</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 Acl と AclItem のレイアウト</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 aclmask の三段アルゴリズム</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 aclmask_direct との違い</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 aclmembers と oid_cmp</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 GRANT の付与者選択 select_best_grantor</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 なぜ付与者を選び直すのか</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 GRANTED BY 指定時の処理</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 最良候補の探索とスコアリング</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 select_best_admin との対比</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 行レベルセキュリティへの適用</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 get_policies_for_relation — コマンド種別による選別</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 check_role_for_policy — ロール適用判定</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 permissive / restrictive と適用順序</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 継承がもたらす直感に反する挙動</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 まとめ</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第2章　メンバーシップ展開の中核 roles_is_member_of</h1>
+        <p>
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5185"><code>roles_is_member_of()</code></a>
+  は、指定したロールが（直接・間接に）メンバーであるロールをすべて列挙する静的関数である。
+  第1章で見た 4 つの判定関数はいずれもこの関数のラッパであり、権限判定のほぼすべての経路が
+  ここを通る。本章ではその探索アルゴリズムと、探索モードによる振る舞いの違いを読む。
+</p>
+
+<h2 id="sec-2-1">2.1　RoleRecurseType — 3 つの探索モード</h2>
+
+<p>
+  この関数の第 2 引数は <code>enum RoleRecurseType</code> であり、
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L78"><code>acl.c</code> の冒頭</a>
+  で定義されている。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:78</span>
+  <pre><code>    ROLERECURSE_MEMBERS = 0,    /* recurse unconditionally */
+    ROLERECURSE_PRIVS = 1,      /* recurse through inheritable grants */
+    ROLERECURSE_SETROLE = 2     /* recurse through grants with set_option */
+};
+static Oid  cached_role[] = {InvalidOid, InvalidOid, InvalidOid};
+static List *cached_roles[] = {NIL, NIL, NIL};
+static uint32 cached_db_hash;</code></pre>
+</div>
+
+<p>
+  モードの違いは、グラフを辿るときに <code>pg_auth_members</code> の行をどうフィルタするかだけである。
+  探索本体のループ内では次のように判定される。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5258</span>
+  <pre><code>            /* If we're supposed to ignore non-heritable grants, do so. */
+            if (type == ROLERECURSE_PRIVS &amp;&amp; !form-&gt;inherit_option)
+                continue;
+
+            /* If we're supposed to ignore non-SET grants, do so. */
+            if (type == ROLERECURSE_SETROLE &amp;&amp; !form-&gt;set_option)
+                continue;</code></pre>
+</div>
+
+<p>
+  ここで重要なのは、フィルタが<strong>辺（グラント）単位</strong>で効くことである。多段の
+  メンバーシップ連鎖では、途中の 1 本でも <code>inherit_option = false</code> があれば、
+  その先には権限が伝わらない。図 2.1 にその様子を示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    lv1["lv1"]
+    lv2["lv2"]
+    lv3["lv3"]
+    lv1 -- "INHERIT TRUE" --> lv2
+    lv2 -- "INHERIT FALSE" --> lv3
+    lv1 -.->|"ROLERECURSE_PRIVS では到達不能"| lv3
+  </pre>
+  <figcaption>図 2.1: 中間グラントが非継承だと、その先のロールの権限は及ばない</figcaption>
+</figure>
+
+<p>
+  図 2.1 の状況を実際に作って確かめる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>CREATE ROLE lv3;
+CREATE ROLE lv2;
+CREATE ROLE lv1;
+GRANT lv3 TO lv2;   -- 既定: INHERIT TRUE
+GRANT lv2 TO lv1;   -- 既定: INHERIT TRUE
+
+SELECT pg_has_role('lv1','lv3','USAGE')  AS privs_lv1_lv3,
+       pg_has_role('lv1','lv3','MEMBER') AS member_lv1_lv3;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果</span>
+  <pre><code> privs_lv1_lv3 | member_lv1_lv3
+---------------+----------------
+ t             | t
+(1 row)</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">SQL（中間リンクだけを非継承に張り替える）</span>
+  <pre><code>REVOKE lv3 FROM lv2;
+GRANT  lv3 TO lv2 WITH INHERIT FALSE;
+
+SELECT pg_has_role('lv1','lv3','USAGE')  AS privs_lv1_lv3,
+       pg_has_role('lv1','lv3','MEMBER') AS member_lv1_lv3,
+       pg_has_role('lv1','lv3','SET')    AS set_lv1_lv3;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果</span>
+  <pre><code> privs_lv1_lv3 | member_lv1_lv3 | set_lv1_lv3
+---------------+----------------+-------------
+ f             | t              | t
+(1 row)</code></pre>
+</div>
+
+<p>
+  <code>lv1</code> と <code>lv3</code> の間の辺は一切変えていないにもかかわらず、
+  <code>USAGE</code>（＝<code>has_privs_of_role</code>）だけが <code>f</code> になった。
+  <code>MEMBER</code> と <code>SET</code> は別モードで展開されるため影響を受けていない。
+</p>
+
+<h2 id="sec-2-2">2.2　自己拡張リストによる幅優先探索</h2>
+
+<p>
+  探索の実装は、List を「発見済み集合」と「未処理キュー」の両方として使い回す、簡潔だがやや技巧的な
+  ものである。ソースのコメントがその意図を明示している。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5222</span>
+  <pre><code>    /*
+     * Find all the roles that roleid is a member of, including multi-level
+     * recursion.  The role itself will always be the first element of the
+     * resulting list.
+     *
+     * Each element of the list is scanned to see if it adds any indirect
+     * memberships.  We can use a single list as both the record of
+     * already-found memberships and the agenda of roles yet to be scanned.
+     * This is a bit tricky but works because the foreach() macro doesn't
+     * fetch the next list element until the bottom of the loop.
+     */
+    roles_list = list_make1_oid(roleid);
+
+    foreach(l, roles_list)
+    {</code></pre>
+</div>
+
+<p>
+  <code>foreach()</code> がループ末尾まで次要素を取りに行かないため、ループ本体で
+  <code>roles_list</code> に要素を追加しても走査が破綻しない。追加は末尾に対して行われるので、
+  結果として探索は<strong>幅優先</strong>（breadth-first）になる。この順序は偶然の産物ではなく、
+  関数ヘッダで仕様として明記されている。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5176</span>
+  <pre><code> * For the benefit of select_best_grantor, the result is defined to be
+ * in breadth-first order, ie, closer relationships earlier.</code></pre>
+</div>
+
+<p>
+  「近い関係ほど先に来る」という保証は、第6章で読む
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5511"><code>select_best_grantor()</code></a>
+  や
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5472"><code>select_best_admin()</code></a>
+  が「ホップ数の少ない候補を優先する」ために使う。図 2.2 に探索の進行を示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    subgraph S0["初期状態"]
+        A0["roles_list = [A]"]
+    end
+    subgraph S1["A を走査: A→B, A→C を発見"]
+        A1["roles_list = [A, B, C]"]
+    end
+    subgraph S2["B を走査: B→D を発見"]
+        A2["roles_list = [A, B, C, D]"]
+    end
+    subgraph S3["C を走査: C→D は既出のため追加せず"]
+        A3["roles_list = [A, B, C, D]"]
+    end
+    S0 --> S1 --> S2 --> S3
+  </pre>
+  <figcaption>図 2.2: 単一リストを集合とキューに兼用した幅優先展開</figcaption>
+</figure>
+
+<p>
+  図 2.2 の最後のステップに現れる重複排除について、ソースは次のように注記している。
+  ループそのものはカタログ上あり得ないはずだが、菱形の経路は正当に存在しうる。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5266</span>
+  <pre><code>            /*
+             * Even though there shouldn't be any loops in the membership
+             * graph, we must test for having already seen this role. It is
+             * legal for instance to have both A-&gt;B and A-&gt;C-&gt;B.
+             */
+            roles_list = roles_list_append(roles_list, &amp;bf, otherid);</code></pre>
+</div>
+
+<p>
+  この重複判定を担う
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5125"><code>roles_list_append()</code></a>
+  は、線形探索がボトルネックにならないようブルームフィルタを併用する。詳細は第3章で扱う。
+</p>
+
+<p>
+  なお、直接のメンバーシップの取得には syscache のリスト検索
+  <code>SearchSysCacheList1(AUTHMEMMEMROLE, ...)</code> を使う。
+  <code>AUTHMEMMEMROLE</code> は
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/include/catalog/pg_auth_members.h#L71"><code>pg_auth_members_member_role_index</code></a>
+  （<code>member, roleid, grantor</code>）に対応するキャッシュであり、
+  「あるメンバーが所属するロール」を引く方向に最適化されている。
+</p>
+
+<h2 id="sec-2-3">2.3　pg_database_owner の暗黙メンバーシップ</h2>
+
+<p>
+  <code>pg_database_owner</code> は、<code>pg_auth_members</code> に行を持たない特殊な定義済みロールである。
+  「現在接続中のデータベースの所有者」が暗黙のメンバーになる、という規則が
+  <code>roles_is_member_of()</code> の中に直接埋め込まれている。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5275</span>
+  <pre><code>        /* implement pg_database_owner implicit membership */
+        if (memberid == dba &amp;&amp; OidIsValid(dba))
+            roles_list = roles_list_append(roles_list, &amp;bf,
+                                           ROLE_PG_DATABASE_OWNER);</code></pre>
+</div>
+
+<p>
+  <code>dba</code> は関数冒頭で <code>pg_database</code> の syscache から取得される。
+  ここには、データベースに接続していないバックエンドを考慮した分岐がある。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5204</span>
+  <pre><code>    /*
+     * Role expansion happens in a non-database backend when guc.c checks
+     * ROLE_PG_READ_ALL_SETTINGS for a physical walsender SHOW command.  In
+     * that case, no role gets pg_database_owner.
+     */
+    if (!OidIsValid(MyDatabaseId))
+        dba = InvalidOid;
+    else
+    {
+        HeapTuple   dbtup;
+
+        dbtup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+        if (!HeapTupleIsValid(dbtup))
+            elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
+        dba = ((Form_pg_database) GETSTRUCT(dbtup))-&gt;datdba;
+        ReleaseSysCache(dbtup);
+    }</code></pre>
+</div>
+
+<p>
+  この実装から、重要な帰結がひとつ導かれる。<strong>メンバーシップの展開結果は、接続中の
+  データベースに依存する</strong>。同じロールでも、自分が所有するデータベースに接続しているときだけ
+  <code>pg_database_owner</code> のメンバーになる。実際に確かめてみる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL（postgres で実行）</span>
+  <pre><code>CREATE ROLE dbowner LOGIN;
+CREATE DATABASE mydb OWNER dbowner;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果（dbowner で mydb に接続）</span>
+  <pre><code>=&gt; SELECT current_database(),
+          pg_has_role('dbowner','pg_database_owner','USAGE') AS is_dbowner;
+ current_database | is_dbowner
+------------------+------------
+ mydb             | t
+(1 row)</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果（同じ dbowner で postgres に接続）</span>
+  <pre><code>=&gt; SELECT current_database(),
+          pg_has_role('dbowner','pg_database_owner','USAGE') AS is_dbowner;
+ current_database | is_dbowner
+------------------+------------
+ postgres         | f
+(1 row)</code></pre>
+</div>
+
+<div class="note"><strong>メモ</strong>この「データベース依存性」があるため、メンバーシップキャッシュは
+<code>pg_database</code> の変更にも反応しなければならない。<code>initialize_acl()</code> が
+<code>DATABASEOID</code> に対してもコールバックを登録している理由がこれである（<a href="ch03.html#sec-3-2">3.2</a>）。</div>
+
+<h2 id="sec-2-4">2.4　ADMIN OPTION 保持者の同時収集</h2>
+
+<p>
+  <code>roles_is_member_of()</code> には、単なるメンバーシップ列挙に加えてもうひとつの役割がある。
+  引数 <code>admin_of</code> に有効な OID が渡された場合、展開の過程で「そのロールに対して
+  <code>ADMIN OPTION</code> を直接持つロール」を探し、最初に見つかったものを <code>*admin_role</code> に返す。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5179</span>
+  <pre><code> * If admin_of is not InvalidOid, this function sets *admin_role, either
+ * to the OID of the first role in the result list that directly possesses
+ * ADMIN OPTION on the role corresponding to admin_of, or to InvalidOid if
+ * there is no such role.</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5250</span>
+  <pre><code>            /*
+             * While otherid==InvalidOid shouldn't appear in the catalog, the
+             * OidIsValid() avoids crashing if that arises.
+             */
+            if (otherid == admin_of &amp;&amp; form-&gt;admin_option &amp;&amp;
+                OidIsValid(admin_of) &amp;&amp; !OidIsValid(*admin_role))
+                *admin_role = memberid;</code></pre>
+</div>
+
+<p>
+  <code>!OidIsValid(*admin_role)</code> の条件により、最初に見つかった 1 件だけが採用される。
+  探索が幅優先であることと組み合わせると、これは「ホップ数が最小の <code>ADMIN OPTION</code> 保持者」を
+  選ぶことになる。<code>is_admin_of_role()</code> はこの値が有効かどうかだけを見て真偽を返し、
+  <code>select_best_admin()</code> は値そのものを返す（<a href="ch04.html#sec-4-4">4.4</a>）。
+</p>
+
+<p>
+  注意すべきは、<code>ADMIN OPTION</code> の判定が<strong>モードのフィルタより前</strong>に置かれていることである。
+  上のコードは <code>inherit_option</code>／<code>set_option</code> による <code>continue</code> の
+  <em>手前</em>にある。したがって、<code>ROLERECURSE_PRIVS</code> モードであっても、
+  <code>admin_of</code> へ向かう最後の 1 本のグラント自体は継承可能である必要がない。
+  制約がかかるのは、そこに至るまでの経路（<code>memberid</code> がリストに載るまでの辺）だけである。
+</p>
+
+<div class="warn"><strong>注意</strong>ただし <code>admin_of</code> が有効な場合はキャッシュが使われない
+（<a href="ch03.html#sec-3-1">3.1</a> 参照）。<code>is_admin_of_role()</code> の呼び出しは常に
+グラフの再展開を伴うため、他の判定関数より重い。</div>
+
+<div class="info"><strong>関連</strong>展開結果をどうキャッシュし、どう無効化するかは
+<a href="ch03.html">第3章</a>で扱う。</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch01.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第1章 ロールとメンバーシップの基礎</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch03.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第3章 メンバーシップキャッシュの仕組み</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — postgres@d4046a48053 のソースコードに基づく</footer>
+</body>
+</html>

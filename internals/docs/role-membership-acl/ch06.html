@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第6章 GRANT の付与者選択 select_best_grantor | PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定</a>
+    <span class="version-badge">PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 ロールとメンバーシップの基礎</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 ロール・メンバーシップ・権限の三層構造</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 pg_auth_members と 3 つのオプション</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 4 種類の判定関数とその使い分け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 メンバーシップ展開の中核 roles_is_member_of</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 RoleRecurseType — 3 つの探索モード</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 自己拡張リストによる幅優先探索</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 pg_database_owner の暗黙メンバーシップ</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ADMIN OPTION 保持者の同時収集</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 メンバーシップキャッシュの仕組み</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 cached_role / cached_roles の構造</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 initialize_acl によるコールバック登録</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 RoleMembershipCacheCallback による無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 roles_list_append とブルームフィルタ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 判定関数の意味論</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 has_privs_of_role — 権限の自動継承</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 member_can_set_role — SET ROLE 可能性</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 is_member_of_role と is_member_of_role_nosuper</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 is_admin_of_role と select_best_admin</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 pg_has_role() との対応関係</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ACL のビットマスク判定 aclmask</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 Acl と AclItem のレイアウト</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 aclmask の三段アルゴリズム</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 aclmask_direct との違い</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 aclmembers と oid_cmp</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch06.html">第6章 GRANT の付与者選択 select_best_grantor</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 なぜ付与者を選び直すのか</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 GRANTED BY 指定時の処理</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 最良候補の探索とスコアリング</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 select_best_admin との対比</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 行レベルセキュリティへの適用</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 get_policies_for_relation — コマンド種別による選別</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 check_role_for_policy — ロール適用判定</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 permissive / restrictive と適用順序</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 継承がもたらす直感に反する挙動</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 まとめ</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第6章　GRANT の付与者選択 select_best_grantor</h1>
+        <p>
+  <code>GRANT SELECT ON t TO alice;</code> を実行したとき、<code>pg_class.relacl</code> の
+  <code>ai_grantor</code> には何が記録されるのだろうか。「実行したロール」と答えたくなるが、
+  実際にはそうとは限らない。本章では
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5511"><code>select_best_grantor()</code></a>
+  を読み、なぜ付与者を選び直す必要があるのかを理解する。
+</p>
+
+<h2 id="sec-6-1">6.1　なぜ付与者を選び直すのか</h2>
+
+<p>
+  ACL は単なる権限の集合ではなく、<strong>権限の由来を辿れる有向グラフ</strong>である。
+  <code>REVOKE ... CASCADE</code> が連鎖的に権限を剥がせるのは、各エントリが
+  <code>ai_grantor</code> を持っていて、依存関係を再構成できるからである。
+  この構造を壊さないための不変条件が、関数ヘッダに明記されている。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5484</span>
+  <pre><code>/*
+ * Select the effective grantor ID for a GRANT or REVOKE operation.
+ *
+ * If the GRANT/REVOKE has an explicit GRANTED BY clause, we always use
+ * exactly that role (which may result in granting/revoking no privileges).
+ * Otherwise, we seek a "best" grantor, starting with the current user.
+ *
+ * The grantor must always be either the object owner or some role that has
+ * been explicitly granted grant options.  This ensures that all granted
+ * privileges appear to flow from the object owner, and there are never
+ * multiple "original sources" of a privilege.  Therefore, if the would-be
+ * grantor is a member of a role that has the needed grant options, we have
+ * to do the grant as that role instead.
+ *
+ * It is possible that the would-be grantor is a member of several roles
+ * that have different subsets of the desired grant options, but no one
+ * role has 'em all.  In this case we pick a role with the largest number
+ * of desired options.  Ties are broken in favor of closer ancestors.
+ */</code></pre>
+</div>
+
+<p>
+  要点は「すべての権限がオブジェクト所有者から流れ出てくるように見えなければならない
+  （<em>all granted privileges appear to flow from the object owner</em>）」という一文である。
+  実行者そのものを付与者として記録してしまうと、権限グラフに複数の「源」ができ、
+  <code>REVOKE</code> の連鎖が正しく働かなくなる。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    OWN["owner_r（オブジェクト所有者）"]
+    GR["grantor_r<br/>SELECT WITH GRANT OPTION 保持"]
+    USR["user_r<br/>grantor_r を継承（INHERIT）"]
+    RCV["recv_r"]
+
+    OWN -->|"GRANT SELECT ... WITH GRANT OPTION"| GR
+    GR -.->|"メンバーシップ"| USR
+    USR -->|"GRANT SELECT を実行"| RCV
+    GR ==>|"ACL に記録される付与者はこちら"| RCV
+  </pre>
+  <figcaption>図 6.1: 実行者は user_r だが、記録される付与者は grantor_r になる</figcaption>
+</figure>
+
+<p>
+  図 6.1 の状況を実際に作ってみる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>CREATE ROLE owner_r;
+CREATE ROLE grantor_r;
+CREATE ROLE user_r LOGIN;
+CREATE ROLE recv_r;
+GRANT grantor_r TO user_r;          -- 既定で INHERIT TRUE
+GRANT CREATE ON SCHEMA public TO owner_r;
+
+SET ROLE owner_r;
+CREATE TABLE gtest (id int);
+GRANT SELECT ON gtest TO grantor_r WITH GRANT OPTION;
+RESET ROLE;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">SQL（user_r で接続して実行）</span>
+  <pre><code>GRANT SELECT ON gtest TO recv_r;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果（記録された付与者を確認）</span>
+  <pre><code>SELECT pg_get_userbyid(grantee) AS grantee,
+       pg_get_userbyid(grantor) AS grantor,
+       privilege_type, is_grantable
+FROM   pg_class, aclexplode(relacl)
+WHERE  relname = 'gtest'
+ORDER  BY 1;
+
+  grantee  |  grantor  | privilege_type | is_grantable
+-----------+-----------+----------------+--------------
+ grantor_r | owner_r   | SELECT         | t
+ owner_r   | owner_r   | SELECT         | f
+ owner_r   | owner_r   | UPDATE         | f
+ ...
+ recv_r    | grantor_r | SELECT         | f
+(10 rows)</code></pre>
+</div>
+
+<p>
+  最終行の付与者は <code>user_r</code> ではなく <code>grantor_r</code> である。
+  結果として、権限は <code>owner_r → grantor_r → recv_r</code> という一本の連鎖になり、
+  <code>owner_r</code> が <code>grantor_r</code> から <code>REVOKE ... CASCADE</code> すれば
+  <code>recv_r</code> の権限も正しく失われる。
+</p>
+
+<h2 id="sec-6-2">6.2　GRANTED BY 指定時の処理</h2>
+
+<p>
+  <code>GRANTED BY</code> 句がある場合、探索は行われず指定されたロールがそのまま使われる。
+  ただし、実行者がそのロールの権限を継承していることは確認される。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5521</span>
+  <pre><code>    /*
+     * If we have GRANTED BY, resolve it and verify current user is allowed to
+     * specify that role.
+     */
+    if (grantedBy)
+    {
+        Oid         grantor = get_rolespec_oid(grantedBy, false);
+
+        if (!has_privs_of_role(roleId, grantor))
+            ereport(ERROR,
+                    (errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+                     errmsg("must inherit privileges of role \"%s\"",
+                            GetUserNameFromId(grantor, false))));
+        /* Use exactly that grantor, whether it has privileges or not */
+        *grantorId = grantor;
+        *grantOptions = aclmask_direct(acl, grantor, ownerId,
+                                       needed_goptions, ACLMASK_ALL);
+        return;
+    }</code></pre>
+</div>
+
+<p>
+  コメントの <code>"whether it has privileges or not"</code> が示すとおり、指定されたロールが
+  必要なグラントオプションを持っていなくてもエラーにはならない。その場合
+  <code>*grantOptions</code> が 0 になり、結果として何も付与されない
+  （ヘッダの <code>"which may result in granting/revoking no privileges"</code>）。
+  これは <code>REVOKE</code> で重要になる。存在しない付与に対する <code>REVOKE</code> は
+  黙って何もしないのが正しい振る舞いだからである。
+</p>
+
+<p>
+  次に、探索を省ける単純なケースが処理される。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5541</span>
+  <pre><code>    /*
+     * The object owner is always treated as having all grant options, so if
+     * roleId is the owner it's easy.  Also, if roleId is a superuser it's
+     * easy: superusers are implicitly members of every role, so they act as
+     * the object owner.
+     */
+    if (roleId == ownerId || superuser_arg(roleId))
+    {
+        *grantorId = ownerId;
+        *grantOptions = needed_goptions;
+        return;
+    }</code></pre>
+</div>
+
+<p>
+  スーパーユーザが <code>GRANT</code> を実行しても、記録される付与者はスーパーユーザ自身ではなく
+  <strong>オブジェクトの所有者</strong>になる。これも「権限は所有者から流れ出る」という不変条件の帰結である。
+  <a href="ch04.html#sec-4-4">4.4</a> で見た <code>select_best_admin()</code> の呼び出し元が
+  スーパーユーザに対して <code>BOOTSTRAP_SUPERUSERID</code> を返すのと、狙いは同じで実現方法が異なる。
+</p>
+
+<h2 id="sec-6-3">6.3　最良候補の探索とスコアリング</h2>
+
+<p>
+  上記のどれにも当てはまらない場合、実行者が権限を継承しているロールを順に調べる。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5554</span>
+  <pre><code>    /*
+     * Otherwise we have to do a careful search to see if roleId has the
+     * privileges of any suitable role.  Note: we can hang onto the result of
+     * roles_is_member_of() throughout this loop, because aclmask_direct()
+     * doesn't query any role memberships.
+     */
+    roles_list = roles_is_member_of(roleId, ROLERECURSE_PRIVS,
+                                    InvalidOid, NULL);
+
+    /* initialize candidate result as default */
+    *grantorId = roleId;
+    *grantOptions = ACL_NO_RIGHTS;
+    nrights = 0;
+
+    foreach(l, roles_list)
+    {
+        Oid         otherrole = lfirst_oid(l);
+        AclMode     otherprivs;
+
+        otherprivs = aclmask_direct(acl, otherrole, ownerId,
+                                    needed_goptions, ACLMASK_ALL);
+        if (otherprivs == needed_goptions)
+        {
+            /* Found a suitable grantor */
+            *grantorId = otherrole;
+            *grantOptions = otherprivs;
+            return;
+        }
+
+        /*
+         * If it has just some of the needed privileges, remember best
+         * candidate.
+         */
+        if (otherprivs != ACL_NO_RIGHTS)
+        {
+            int         nnewrights = pg_popcount64(otherprivs);
+
+            if (nnewrights &gt; nrights)
+            {
+                *grantorId = otherrole;
+                *grantOptions = otherprivs;
+                nrights = nnewrights;
+            }
+        }
+    }</code></pre>
+</div>
+
+<p>
+  探索の性質を 3 点にまとめる。
+</p>
+
+<ol>
+  <li><strong>完全一致で即座に打ち切る。</strong>
+    必要なグラントオプションをすべて持つロールが見つかれば、その場で <code>return</code> する。
+    <code>roles_list</code> の先頭は <code>roleId</code> 自身なので、実行者本人が十分な権限を
+    持っていればループは 1 回で終わる。</li>
+  <li><strong>部分一致は立っているビット数で採点する。</strong>
+    <code>pg_popcount64()</code> でビット数を数え、最大のものを覚えておく。
+    ヘッダにある「複数のロールが必要なオプションの異なる部分集合を持つ」ケースへの対処である。</li>
+  <li><strong>同点は先勝ちで決まる。</strong>
+    比較が <code>nnewrights &gt; nrights</code>（<code>&gt;=</code> ではない）なので、
+    同じスコアなら先に見つかったほうが残る。<code>roles_is_member_of()</code> の結果が
+    幅優先順であることと組み合わさり、ヘッダの
+    <code>"Ties are broken in favor of closer ancestors."</code> が実現される。</li>
+</ol>
+
+<p>
+  つまり <a href="ch02.html#sec-2-2">2.2</a> で見た「幅優先であることは仕様である」という宣言は、
+  ここで消費されている。図 6.2 に判定の流れを示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    ST["select_best_grantor(grantedBy, privileges, acl, ownerId, ...)"]
+    GB{"GRANTED BY 句があるか"}
+    GBOK["has_privs_of_role() で検証し<br/>そのロールをそのまま採用"]
+    OWNSU{"roleId == ownerId<br/>または superuser か"}
+    ASOWN["付与者 = ownerId<br/>必要なオプションをすべて持つとみなす"]
+    EXP["roles_is_member_of(roleId, PRIVS) を展開"]
+    LOOP["各 otherrole に aclmask_direct()"]
+    FULL{"必要なオプションを<br/>すべて持つか"}
+    RET1["即 return"]
+    PART{"一部でも持つか"}
+    SCORE["pg_popcount64() が最大なら<br/>候補を更新"]
+    NEXT["次の候補へ"]
+    END["最良候補を返す（見つからなければ roleId + 権限なし）"]
+
+    ST --> GB
+    GB -->|"はい"| GBOK
+    GB -->|"いいえ"| OWNSU
+    OWNSU -->|"はい"| ASOWN
+    OWNSU -->|"いいえ"| EXP --> LOOP --> FULL
+    FULL -->|"はい"| RET1
+    FULL -->|"いいえ"| PART
+    PART -->|"はい"| SCORE --> NEXT
+    PART -->|"いいえ"| NEXT
+    NEXT --> END
+  </pre>
+  <figcaption>図 6.2: select_best_grantor() の判定フロー</figcaption>
+</figure>
+
+<p>
+  コメント中の <code>"we can hang onto the result of roles_is_member_of() throughout this loop"</code> は、
+  <a href="ch03.html#sec-3-1">3.1</a> で見たキャッシュの制約への明示的な言及である。
+  返された List は次の <code>roles_is_member_of()</code> 呼び出しで無効化されうるため、
+  ループ内で間接的にでもメンバーシップ判定が起きればバグになる。
+  <code>aclmask()</code> ではなく <code>aclmask_direct()</code> を使っているのは、
+  効率のためだけでなく、この安全性のためでもある。
+</p>
+
+<p>
+  <code>select_best_grantor()</code> は
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/catalog/aclchk.c"><code>aclchk.c</code></a>
+  の各 <code>ExecGrant_*()</code> から呼ばれる。列単位の権限（<code>aclchk.c:1705</code>）と
+  オブジェクト単位の権限（<code>aclchk.c:2205</code> ほか）で個別に呼び出されるため、
+  同じ <code>GRANT</code> 文でも対象ごとに異なる付与者が選ばれうる。
+</p>
+
+<h2 id="sec-6-4">6.4　select_best_admin との対比</h2>
+
+<p>
+  <code>select_best_grantor()</code> がオブジェクト権限の付与者を選ぶのに対し、
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5472"><code>select_best_admin()</code></a>
+  はロールメンバーシップの付与者を選ぶ。目的は同じでも、実装の置き場所がまったく違う。
+</p>
+
+<table>
+  <thead>
+    <tr><th></th><th><code>select_best_grantor()</code></th><th><code>select_best_admin()</code></th></tr>
+  </thead>
+  <tbody>
+    <tr><td>対象</td><td>オブジェクト権限（<code>relacl</code> ほか）</td><td>ロールメンバーシップ（<code>pg_auth_members</code>）</td></tr>
+    <tr><td>「権限あり」の根拠</td><td>ACL 配列上のグラントオプションビット</td><td><code>pg_auth_members.admin_option</code></td></tr>
+    <tr><td>探索の実装場所</td><td>この関数自身のループ</td><td><code>roles_is_member_of()</code> の内部</td></tr>
+    <tr><td>部分一致</td><td>ありうる（ビット単位でスコアリング）</td><td>ない（<code>admin_option</code> は真偽値）</td></tr>
+    <tr><td>superuser の扱い</td><td>関数内で処理（付与者 = オーナー）</td><td>呼び出し元で処理（<code>BOOTSTRAP_SUPERUSERID</code>）</td></tr>
+    <tr><td>近さの優先</td><td>スコア同点時に先勝ち</td><td>最初に見つけた 1 件のみ採用</td></tr>
+  </tbody>
+</table>
+
+<p>
+  <code>select_best_admin()</code> で探索を <code>roles_is_member_of()</code> に埋め込めるのは、
+  <code>admin_option</code> が真偽値でスコアリングが不要だからである。
+  一方 <code>select_best_grantor()</code> は権限ビットごとの部分一致を扱う必要があり、
+  ACL 配列を見なければ判断できない。両者の構造の違いは、この一点から説明できる。
+</p>
+
+<div class="info"><strong>関連</strong>最終章では、これまで見てきた判定関数が
+行レベルセキュリティでどう使われるかを追う。</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch05.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第5章 ACL のビットマスク判定 aclmask</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch07.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第7章 行レベルセキュリティへの適用</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — postgres@d4046a48053 のソースコードに基づく</footer>
+</body>
+</html>

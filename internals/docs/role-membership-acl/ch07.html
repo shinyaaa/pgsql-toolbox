@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第7章 行レベルセキュリティへの適用 | PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定</a>
+    <span class="version-badge">PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 ロールとメンバーシップの基礎</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 ロール・メンバーシップ・権限の三層構造</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 pg_auth_members と 3 つのオプション</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 4 種類の判定関数とその使い分け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 メンバーシップ展開の中核 roles_is_member_of</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 RoleRecurseType — 3 つの探索モード</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 自己拡張リストによる幅優先探索</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 pg_database_owner の暗黙メンバーシップ</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ADMIN OPTION 保持者の同時収集</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 メンバーシップキャッシュの仕組み</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 cached_role / cached_roles の構造</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 initialize_acl によるコールバック登録</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 RoleMembershipCacheCallback による無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 roles_list_append とブルームフィルタ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 判定関数の意味論</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 has_privs_of_role — 権限の自動継承</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 member_can_set_role — SET ROLE 可能性</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 is_member_of_role と is_member_of_role_nosuper</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 is_admin_of_role と select_best_admin</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 pg_has_role() との対応関係</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ACL のビットマスク判定 aclmask</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 Acl と AclItem のレイアウト</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 aclmask の三段アルゴリズム</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 aclmask_direct との違い</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 aclmembers と oid_cmp</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 GRANT の付与者選択 select_best_grantor</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 なぜ付与者を選び直すのか</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 GRANTED BY 指定時の処理</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 最良候補の探索とスコアリング</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 select_best_admin との対比</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch07.html">第7章 行レベルセキュリティへの適用</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 get_policies_for_relation — コマンド種別による選別</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 check_role_for_policy — ロール適用判定</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 permissive / restrictive と適用順序</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 継承がもたらす直感に反する挙動</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 まとめ</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第7章　行レベルセキュリティへの適用</h1>
+        <p>
+  行レベルセキュリティ（Row Level Security, RLS）は、テーブルに定義されたポリシーの
+  <code>USING</code>／<code>WITH CHECK</code> 式をクエリに注入する仕組みである。
+  ポリシーには適用対象ロールを指定できるため、ここでもロールメンバーシップの判定が必要になる。
+  本章では、RLS がどの判定関数を選び、その選択が運用上どう効いてくるかを見る。
+</p>
+
+<h2 id="sec-7-1">7.1　get_policies_for_relation — コマンド種別による選別</h2>
+
+<p>
+  クエリ書き換え時、
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/rewrite/rowsecurity.c#L98"><code>get_row_security_policies()</code></a>
+  が RLS の適用を統括する。その最初の仕事が、対象リレーションに定義されたポリシーのうち
+  「このコマンドとこのロールに適用されるもの」を選び出すことであり、これを担うのが
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/rewrite/rowsecurity.c#L556"><code>get_policies_for_relation()</code></a>
+  である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/rewrite/rowsecurity.c:547</span>
+  <pre><code>/*
+ * get_policies_for_relation
+ *
+ * Returns lists of permissive and restrictive policies to be applied to the
+ * specified relation, based on the command type and role.
+ *
+ * This includes any policies added by extensions.
+ */</code></pre>
+</div>
+
+<p>
+  ポリシーは relcache に <code>RowSecurityDesc</code> として保持されており、
+  各要素は <code>RowSecurityPolicy</code> である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/include/rewrite/rowsecurity.h:20</span>
+  <pre><code>typedef struct RowSecurityPolicy
+{
+    char       *policy_name;    /* Name of the policy */
+    char        polcmd;         /* Type of command policy is for */
+    ArrayType  *roles;          /* Array of roles policy is for */
+    bool        permissive;     /* restrictive or permissive policy */
+    Expr       *qual;           /* Expression to filter rows */
+    Expr       *with_check_qual;    /* Expression to limit rows allowed */
+    bool        hassublinks;    /* If either expression has sublinks */
+} RowSecurityPolicy;</code></pre>
+</div>
+
+<p>
+  選別は 2 条件の <code>AND</code> である。ひとつはコマンド種別の一致、もうひとつがロールの一致。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/rewrite/rowsecurity.c:610</span>
+  <pre><code>        /*
+         * Add this policy to the relevant list of policies if it applies to
+         * the specified role.
+         */
+        if (cmd_matches &amp;&amp; check_role_for_policy(policy-&gt;roles, user_id))
+        {
+            if (policy-&gt;permissive)
+                *permissive_policies = lappend(*permissive_policies, policy);
+            else
+                *restrictive_policies = lappend(*restrictive_policies, policy);
+        }</code></pre>
+</div>
+
+<p>
+  <code>polcmd</code> が <code>'*'</code>（<code>FOR ALL</code>）のポリシーは無条件に一致し、
+  それ以外は <code>CmdType</code> との対応表で判定される。<code>MERGE</code> だけは特別扱いで、
+  専用のポリシーを持たない。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/rewrite/rowsecurity.c:595</span>
+  <pre><code>                case CMD_MERGE:
+
+                    /*
+                     * We do not support a separate policy for MERGE command.
+                     * Instead it derives from the policies defined for other
+                     * commands.
+                     */
+                    break;</code></pre>
+</div>
+
+<p>
+  図 7.1 に選別の流れを示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    RD["relation->rd_rsdesc->policies（relcache 内の全ポリシー）"]
+    CMD{"polcmd が '*' か<br/>cmd と一致するか"}
+    ROLE{"check_role_for_policy()<br/>＝user_id に適用されるか"}
+    PERM{"policy->permissive か"}
+    LP["permissive_policies に追加"]
+    LR["restrictive_policies に追加"]
+    SKIP["対象外"]
+    SORT["restrictive のみ名前順にソート"]
+    HOOK["拡張のフックが返すポリシーを<br/>同じ条件で追記"]
+
+    RD --> CMD
+    CMD -->|"いいえ"| SKIP
+    CMD -->|"はい"| ROLE
+    ROLE -->|"いいえ"| SKIP
+    ROLE -->|"はい"| PERM
+    PERM -->|"permissive"| LP
+    PERM -->|"restrictive"| LR
+    LR --> SORT --> HOOK
+    LP --> HOOK
+  </pre>
+  <figcaption>図 7.1: get_policies_for_relation() によるポリシー選別</figcaption>
+</figure>
+
+<h2 id="sec-7-2">7.2　check_role_for_policy — ロール適用判定</h2>
+
+<p>
+  本書の主題からすると、RLS における最重要の 20 行が
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/rewrite/rowsecurity.c#L931"><code>check_role_for_policy()</code></a>
+  である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/rewrite/rowsecurity.c:926</span>
+  <pre><code>/*
+ * check_role_for_policy -
+ *   determines if the policy should be applied for the current role
+ */
+static bool
+check_role_for_policy(ArrayType *policy_roles, Oid user_id)
+{
+    int         i;
+    Oid        *roles = (Oid *) ARR_DATA_PTR(policy_roles);
+
+    /* Quick fall-thru for policies applied to all roles */
+    if (roles[0] == ACL_ID_PUBLIC)
+        return true;
+
+    for (i = 0; i &lt; ARR_DIMS(policy_roles)[0]; i++)
+    {
+        if (has_privs_of_role(user_id, roles[i]))
+            return true;
+    }
+
+    return false;
+}</code></pre>
+</div>
+
+<p>
+  読み取るべき点は 3 つある。
+</p>
+
+<ol>
+  <li><strong>使うのは <code>has_privs_of_role()</code> である。</strong>
+    <code>is_member_of_role()</code> ではない。つまり、ポリシーが適用されるのは
+    「そのロールの権限が自動的に及ぶ」ロールに限られる。単なるメンバーでは適用されない。</li>
+  <li><strong><code>PUBLIC</code> の判定は先頭要素だけを見る。</strong>
+    <code>polroles</code> に他のロールと <code>PUBLIC</code> が混在しないことが保証されているためである。
+    <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/commands/policy.c#L148"><code>policy_role_list_to_array()</code></a>
+    は <code>TO</code> 句の省略時も <code>TO PUBLIC</code> 指定時も配列を <code>{0}</code> の 1 要素にし、
+    <code>TO PUBLIC, alice</code> のような混在指定に対しては
+    <code>"ignoring specified roles other than PUBLIC"</code> という <code>WARNING</code> を出して
+    <code>{0}</code> に切り詰める。</li>
+  <li><strong>複数ロール指定は OR である。</strong>
+    <code>TO a, b</code> と書いたポリシーは、<code>a</code> か <code>b</code> のどちらかの権限が
+    及べば適用される。</li>
+</ol>
+
+<p>
+  1 番目の帰結は、運用上かなり大きな意味を持つ。実験してみよう。
+  <code>sales</code> ロールにポリシーを付け、<code>INHERIT</code> の有無だけが違う 2 人のメンバーを作る。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>CREATE TABLE docs (id int, dept text);
+INSERT INTO docs VALUES (1,'sales'), (2,'hr');
+ALTER TABLE docs ENABLE ROW LEVEL SECURITY;
+
+CREATE ROLE sales;
+CREATE ROLE alice LOGIN;
+CREATE ROLE bob   LOGIN;
+GRANT sales TO alice WITH INHERIT TRUE,  SET TRUE;
+GRANT sales TO bob   WITH INHERIT FALSE, SET TRUE;
+GRANT SELECT ON docs TO alice, bob, sales;
+
+CREATE POLICY p_sales ON docs FOR SELECT TO sales USING (dept = 'sales');</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果（alice で接続）</span>
+  <pre><code>=&gt; SELECT * FROM docs;
+ id | dept
+----+-------
+  1 | sales
+(1 row)</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果（bob で接続）</span>
+  <pre><code>=&gt; SELECT * FROM docs;
+ id | dept
+----+------
+(0 rows)</code></pre>
+</div>
+
+<p>
+  <code>bob</code> は <code>sales</code> のメンバーであり、テーブルへの <code>SELECT</code> 権限も
+  直接持っている。それでも 1 行も見えない。<code>has_privs_of_role(bob, sales)</code> が偽なので
+  <code>p_sales</code> が適用対象から外れ、<code>bob</code> に適用される permissive ポリシーが
+  ひとつも残らなかったからである。<code>SET ROLE</code> すれば見えるようになる。
+</p>
+
+<div class="example">
+  <span class="example-label">実行結果（bob で接続）</span>
+  <pre><code>=&gt; SET ROLE sales;
+SET
+=&gt; SELECT * FROM docs;
+ id | dept
+----+-------
+  1 | sales
+(1 row)</code></pre>
+</div>
+
+<h2 id="sec-7-3">7.3　permissive / restrictive と適用順序</h2>
+
+<p>
+  選別されたポリシーは 2 つのリストに分かれ、
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/rewrite/rowsecurity.c#L715"><code>add_security_quals()</code></a>
+  で結合される。permissive は <code>OR</code>、restrictive は <code>AND</code> である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/rewrite/rowsecurity.c:740</span>
+  <pre><code>    /*
+     * We must have permissive quals, always, or no rows are visible.
+     *
+     * If we do not, then we simply return a single 'false' qual which results
+     * in no rows being visible.
+     */
+    if (permissive_quals != NIL)
+    {</code></pre>
+</div>
+
+<p>
+  前節で <code>bob</code> が 0 行になったのは、この <code>else</code> 側に落ちて
+  恒偽の <code>Const</code> が注入されたためである。図 7.2 に結合の構造を示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    P["permissive_policies の qual 群"]
+    R["restrictive_policies の qual 群"]
+    ORX["OR で 1 本に結合"]
+    EMPTY{"permissive が空か"}
+    DENY["Const(false) を注入<br/>＝default-deny"]
+    ANDX["restrictive を AND で積み増し"]
+    SQ["securityQuals"]
+
+    P --> EMPTY
+    EMPTY -->|"はい"| DENY --> SQ
+    EMPTY -->|"いいえ"| ORX
+    R --> ANDX
+    ORX --> ANDX --> SQ
+  </pre>
+  <figcaption>図 7.2: permissive は OR、restrictive は AND。permissive が空なら default-deny</figcaption>
+</figure>
+
+<p>
+  restrictive ポリシーだけが名前順にソートされるのは、生成される
+  <code>WithCheckOption</code> のエラー報告順を安定させるためである。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/rewrite/rowsecurity.c:623</span>
+  <pre><code>    /*
+     * We sort restrictive policies by name so that any WCOs they generate are
+     * checked in a well-defined order.
+     */
+    sort_policies_by_name(*restrictive_policies);</code></pre>
+</div>
+
+<p>
+  permissive 側はすべて <code>OR</code> で 1 本にまとめられるため、順序に意味がない。
+  拡張が提供するポリシー（<code>row_security_policy_hook_restrictive</code>）についても
+  同様にソートされるが、組み込みポリシーとは別々にソートされ、常に組み込みが先に評価される。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/rewrite/rowsecurity.c:639</span>
+  <pre><code>        /*
+         * As with built-in restrictive policies, we sort any hook-provided
+         * restrictive policies by name also.  Note that we also intentionally
+         * always check all built-in restrictive policies, in name order,
+         * before checking restrictive policies added by hooks, in name order.
+         */</code></pre>
+</div>
+
+<h2 id="sec-7-4">7.4　継承がもたらす直感に反する挙動</h2>
+
+<p>
+  本章の実験が示したのは、RLS の適用範囲が <code>pg_auth_members</code> の
+  <code>inherit_option</code> に左右されるという事実である。これは仕様として一貫しているが、
+  運用上は次のような落とし穴になりうる。
+</p>
+
+<div class="warn"><strong>注意</strong><code>NOINHERIT</code> なロールや <code>WITH INHERIT FALSE</code> の
+グラントを使っている環境では、「グループにポリシーを付けたのにメンバーに適用されない」ことが起きる。
+テーブル権限（<code>GRANT SELECT</code>）も同じ <code>has_privs_of_role()</code> を経由するため
+通常は両方まとめて効かなくなるが、メンバーに直接テーブル権限を与えていると、
+<em>アクセスはできるが 1 行も見えない</em>という状態になる。</div>
+
+<p>
+  逆向きの注意点もある。ポリシーの適用判定に使われるのは <code>user_id</code> であり、
+  これは <code>SET ROLE</code> で切り替わる現在ユーザである。ただし RLS には
+  <code>BYPASSRLS</code> 属性や、テーブル所有者に対する既定の適用除外があり、
+  適用の可否そのものは
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/misc/rls.c#L52"><code>check_enable_rls()</code></a>
+  が先に判定する。本章で見た <code>get_policies_for_relation()</code> は、
+  その判定を通過したあとの処理である。
+</p>
+
+<p>
+  最後に、ロール変更に対するプランキャッシュの扱いに触れておく。
+  <code>get_row_security_policies()</code> は書き換えを行った場合に
+  <code>*hasRowSecurity = true</code> を立てる。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/rewrite/rowsecurity.c:540</span>
+  <pre><code>    /*
+     * Mark this query as having row security, so plancache can invalidate it
+     * when necessary (eg: role changes)
+     */
+    *hasRowSecurity = true;</code></pre>
+</div>
+
+<p>
+  <code>SET ROLE</code> によって適用されるポリシーが変わりうる以上、
+  生成済みのプランをそのまま再利用してはならない。このフラグがその再計画を促す。
+  ロールメンバーシップの判定結果が、権限チェックだけでなくプランの有効性にまで
+  波及していることが分かる。
+</p>
+
+<h2 id="sec-7-5">7.5　まとめ</h2>
+
+<p>
+  本書で読んだ 15 の関数の関係を整理して締めくくる。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    subgraph INIT["初期化"]
+        IA["initialize_acl()"]
+        RMCC["RoleMembershipCacheCallback()"]
+        IA -->|"購読登録"| RMCC
+    end
+    subgraph CORE["メンバーシップ展開（第2・3章）"]
+        RIMO["roles_is_member_of()"]
+        RLA["roles_list_append()"]
+        RIMO --> RLA
+    end
+    subgraph WRAP["判定関数（第4章）"]
+        HP["has_privs_of_role()"]
+        MCSR["member_can_set_role()"]
+        IMOR["is_member_of_role()"]
+        IMORN["is_member_of_role_nosuper()"]
+        IAOR["is_admin_of_role()"]
+        SBA["select_best_admin()"]
+    end
+    subgraph ACLL["ACL 層（第5・6章）"]
+        AM["aclmask()"]
+        SBG["select_best_grantor()"]
+        AMB["aclmembers()"]
+        OC["oid_cmp()"]
+        AMB --> OC
+    end
+    subgraph RLSL["RLS 層（第7章）"]
+        GPFR["get_policies_for_relation()"]
+        CRFP["check_role_for_policy()"]
+        GPFR --> CRFP
+    end
+
+    RMCC -.->|"cached_role[] を無効化"| RIMO
+    HP --> RIMO
+    MCSR --> RIMO
+    IMOR --> RIMO
+    IMORN --> RIMO
+    IAOR --> RIMO
+    SBA --> RIMO
+    AM --> HP
+    SBG --> HP
+    SBG --> RIMO
+    CRFP --> HP
+  </pre>
+  <figcaption>図 7.3: 本書で扱った関数群の呼び出し関係</figcaption>
+</figure>
+
+<p>
+  図 7.3 が示すとおり、権限判定のほぼすべての経路が <code>roles_is_member_of()</code> に収束する。
+  <code>acl.c</code> がモードごとに 1 スロットという小さなキャッシュしか持たないのは、
+  「同じロールについて連続して問い合わせる」というアクセスパターンが支配的だからである。
+  そして、そのキャッシュが「次の呼び出しまでしか有効でない」という制約は、
+  <code>select_best_grantor()</code> が <code>aclmask()</code> ではなく
+  <code>aclmask_direct()</code> を使う理由にまで影響している。
+  小さな設計判断が層をまたいで結びついているのが、この領域のコードの特徴である。
+</p>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch06.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第6章 GRANT の付与者選択 select_best_grantor</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <span class="pager-spacer" aria-hidden="true"></span>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — postgres@d4046a48053 のソースコードに基づく</footer>
+</body>
+</html>

@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第5章 ACL のビットマスク判定 aclmask | PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定</a>
+    <span class="version-badge">PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 ロールとメンバーシップの基礎</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 ロール・メンバーシップ・権限の三層構造</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 pg_auth_members と 3 つのオプション</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 4 種類の判定関数とその使い分け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 メンバーシップ展開の中核 roles_is_member_of</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 RoleRecurseType — 3 つの探索モード</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 自己拡張リストによる幅優先探索</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 pg_database_owner の暗黙メンバーシップ</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ADMIN OPTION 保持者の同時収集</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 メンバーシップキャッシュの仕組み</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 cached_role / cached_roles の構造</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 initialize_acl によるコールバック登録</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 RoleMembershipCacheCallback による無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 roles_list_append とブルームフィルタ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 判定関数の意味論</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 has_privs_of_role — 権限の自動継承</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 member_can_set_role — SET ROLE 可能性</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 is_member_of_role と is_member_of_role_nosuper</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 is_admin_of_role と select_best_admin</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 pg_has_role() との対応関係</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch05.html">第5章 ACL のビットマスク判定 aclmask</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 Acl と AclItem のレイアウト</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 aclmask の三段アルゴリズム</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 aclmask_direct との違い</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 aclmembers と oid_cmp</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 GRANT の付与者選択 select_best_grantor</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 なぜ付与者を選び直すのか</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 GRANTED BY 指定時の処理</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 最良候補の探索とスコアリング</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 select_best_admin との対比</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 行レベルセキュリティへの適用</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 get_policies_for_relation — コマンド種別による選別</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 check_role_for_policy — ロール適用判定</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 permissive / restrictive と適用順序</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 継承がもたらす直感に反する挙動</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 まとめ</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第5章　ACL のビットマスク判定 aclmask</h1>
+        <p>
+  ここまではロール間の関係を扱ってきた。本章では層をひとつ下りて、オブジェクトに紐づく権限そのもの、
+  すなわち ACL のデータ構造と、そこから権限ビットを集約する
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L1419"><code>aclmask()</code></a>
+  を読む。<code>aclmask()</code> こそが、ACL 層とメンバーシップ層をつなぐ接点である。
+</p>
+
+<h2 id="sec-5-1">5.1　Acl と AclItem のレイアウト</h2>
+
+<p>
+  ACL は <code>AclItem</code> の 1 次元配列であり、その実体は通常の PostgreSQL 配列（<code>ArrayType</code>）である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/include/utils/acl.h:54</span>
+  <pre><code>typedef struct AclItem
+{
+    Oid         ai_grantee;     /* ID that this item grants privs to */
+    Oid         ai_grantor;     /* grantor of privs */
+    AclMode     ai_privs;       /* privilege bits */
+} AclItem;</code></pre>
+</div>
+
+<p>
+  <code>AclMode</code> は <code>uint64</code> である。下位 32 ビットが権限そのもの、
+  上位 32 ビットが <strong>グラントオプション</strong>（<code>WITH GRANT OPTION</code>）を表す。
+  同じビット位置が上下で対応しているため、シフトだけで相互変換できる。
+</p>
+
+<div class="example">
+  <span class="example-label">src/include/utils/acl.h:61</span>
+  <pre><code>/*
+ * The upper 32 bits of the ai_privs field of an AclItem are the grant option
+ * bits, and the lower 32 bits are the actual privileges.  We use "rights"
+ * to mean the combined grant option and privilege bits fields.
+ */
+#define ACLITEM_GET_PRIVS(item)    ((item).ai_privs &amp; 0xFFFFFFFF)
+#define ACLITEM_GET_GOPTIONS(item) (((item).ai_privs &gt;&gt; 32) &amp; 0xFFFFFFFF)
+#define ACLITEM_GET_RIGHTS(item)   ((item).ai_privs)
+
+#define ACL_GRANT_OPTION_FOR(privs) (((AclMode) (privs) &amp; 0xFFFFFFFF) &lt;&lt; 32)
+#define ACL_OPTION_TO_PRIVS(privs)  (((AclMode) (privs) &gt;&gt; 32) &amp; 0xFFFFFFFF)</code></pre>
+</div>
+
+<p>
+  図 5.1 にレイアウトを示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    subgraph Acl["Acl (ArrayType, 1次元・NULL なし)"]
+        direction TB
+        HDR["配列ヘッダ (ARR_OVERHEAD_NONULLS)"]
+        I0["AclItem[0]"]
+        I1["AclItem[1]"]
+        I2["AclItem[...]"]
+    end
+    subgraph Item["AclItem (16 バイト)"]
+        direction TB
+        G1["ai_grantee : Oid (4B) — 0 は PUBLIC"]
+        G2["ai_grantor : Oid (4B)"]
+        G3["ai_privs : AclMode = uint64 (8B)"]
+    end
+    subgraph Bits["ai_privs のビット割り当て"]
+        direction TB
+        HI["上位 32bit : グラントオプション"]
+        LO["下位 32bit : 権限 (ACL_SELECT = 1&lt;&lt;1 など)"]
+    end
+    HDR --> I0 --> I1 --> I2
+    I0 -.-> Item
+    G3 -.-> Bits
+  </pre>
+  <figcaption>図 5.1: Acl 配列と AclItem のレイアウト</figcaption>
+</figure>
+
+<p>
+  <code>ai_grantee</code> が 0（<code>ACL_ID_PUBLIC</code>）のエントリは <code>PUBLIC</code> への付与を表す。
+  <code>pg_authid</code> に OID 0 のロールは存在しないため、この値をプレースホルダとして使える。
+</p>
+
+<p>
+  実際の格納内容は <code>aclitem[]</code> のテキスト表現で観察できる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>CREATE TABLE acl_demo (id int);
+GRANT SELECT ON acl_demo TO m_both;
+GRANT INSERT, UPDATE ON acl_demo TO PUBLIC;
+GRANT SELECT ON acl_demo TO target WITH GRANT OPTION;
+
+SELECT relacl FROM pg_class WHERE relname = 'acl_demo';</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果</span>
+  <pre><code>                                     relacl
+--------------------------------------------------------------------------------
+ {postgres=arwdDxtm/postgres,m_both=r/postgres,=aw/postgres,target=r*/postgres}
+(1 row)</code></pre>
+</div>
+
+<p>
+  <code>grantee=privs/grantor</code> という書式である。3 番目の <code>=aw/postgres</code> は
+  grantee 部分が空で、これが <code>PUBLIC</code>（<code>ai_grantee == 0</code>）を意味する。
+  4 番目の <code>r*</code> のアスタリスクが、<code>SELECT</code> のグラントオプション
+  （上位 32 ビット側のビット）が立っていることを示す。
+</p>
+
+<p>
+  <code>aclexplode()</code> を使うと、このビット表現を行に展開できる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>SELECT coalesce(pg_get_userbyid(nullif(grantee, 0)), 'PUBLIC') AS grantee,
+       pg_get_userbyid(grantor) AS grantor,
+       privilege_type, is_grantable
+FROM   pg_class, aclexplode(relacl)
+WHERE  relname = 'acl_demo'
+ORDER  BY 1, 3;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果（抜粋）</span>
+  <pre><code> grantee  | grantor  | privilege_type | is_grantable
+----------+----------+----------------+--------------
+ PUBLIC   | postgres | INSERT         | f
+ PUBLIC   | postgres | UPDATE         | f
+ m_both   | postgres | SELECT         | f
+ postgres | postgres | DELETE         | f
+ ...
+ target   | postgres | SELECT         | t
+(12 rows)</code></pre>
+</div>
+
+<h2 id="sec-5-2">5.2　aclmask の三段アルゴリズム</h2>
+
+<p>
+  <code>aclmask()</code> は「<code>roleid</code> が持つ権限ビットのうち、<code>mask</code> に含まれるもの」を返す。
+  第 5 引数 <code>how</code> は打ち切り条件を指定する。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:1395</span>
+  <pre><code>/*
+ * aclmask --- compute bitmask of all privileges held by roleid.
+ *
+ * When 'how' = ACLMASK_ALL, this simply returns the privilege bits
+ * held by the given roleid according to the given ACL list, ANDed
+ * with 'mask'.  (The point of passing 'mask' is to let the routine
+ * exit early if all privileges of interest have been found.)
+ *
+ * When 'how' = ACLMASK_ANY, returns as soon as any bit in the mask
+ * is known true.  (This lets us exit soonest in cases where the
+ * caller is only going to test for zero or nonzero result.)
+ *
+ * Usage patterns:
+ *
+ * To see if any of a set of privileges are held:
+ *      if (aclmask(acl, roleid, ownerId, privs, ACLMASK_ANY) != 0)
+ *
+ * To see if all of a set of privileges are held:
+ *      if (aclmask(acl, roleid, ownerId, privs, ACLMASK_ALL) == privs)
+ *
+ * To determine exactly which of a set of privileges are held:
+ *      heldprivs = aclmask(acl, roleid, ownerId, privs, ACLMASK_ALL);
+ */</code></pre>
+</div>
+
+<p>
+  本体は 3 つの段階からなる。図 5.2 に流れを示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    S["aclmask(acl, roleid, ownerId, mask, how)"]
+    P0{"mask == 0 か"}
+    P1["段1: オーナー判定<br/>mask にグラントオプションビットを含み<br/>has_privs_of_role(roleid, ownerId) が真"]
+    P2["段2: 直接付与の走査<br/>ai_grantee == roleid または PUBLIC"]
+    P3["段3: 間接付与の走査<br/>残ビットを持つエントリにだけ<br/>has_privs_of_role() を試す"]
+    D1{"打ち切り条件<br/>を満たすか"}
+    D2{"打ち切り条件<br/>を満たすか"}
+    D3{"打ち切り条件<br/>を満たすか"}
+    R["result を返す"]
+
+    S --> P0
+    P0 -->|"はい"| R
+    P0 -->|"いいえ"| P1
+    P1 --> D1
+    D1 -->|"はい"| R
+    D1 -->|"いいえ"| P2
+    P2 --> D2
+    D2 -->|"はい"| R
+    D2 -->|"いいえ"| P3
+    P3 --> D3
+    D3 --> R
+  </pre>
+  <figcaption>図 5.2: aclmask() の三段構成。打ち切り条件は how によって変わる</figcaption>
+</figure>
+
+<p>
+  <strong>段1: オーナーの暗黙グラントオプション。</strong>
+  オブジェクトの所有者はすべての権限にグラントオプションを持つ、とみなされる。
+  ここで <code>has_privs_of_role()</code> が使われるので、所有者ロールを継承しているロールも
+  この恩恵を受ける。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:1443</span>
+  <pre><code>    /* Owner always implicitly has all grant options */
+    if ((mask &amp; ACLITEM_ALL_GOPTION_BITS) &amp;&amp;
+        has_privs_of_role(roleid, ownerId))
+    {
+        result = mask &amp; ACLITEM_ALL_GOPTION_BITS;
+        if ((how == ACLMASK_ALL) ? (result == mask) : (result != 0))
+            return result;
+    }</code></pre>
+</div>
+
+<p>
+  <strong>段2: 直接付与の走査。</strong>
+  <code>ai_grantee</code> が <code>roleid</code> そのもの、または <code>PUBLIC</code> であるエントリを集める。
+  メンバーシップの問い合わせは発生しない。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:1455</span>
+  <pre><code>    /*
+     * Check privileges granted directly to roleid or to public
+     */
+    for (i = 0; i &lt; num; i++)
+    {
+        AclItem    *aidata = &amp;aidat[i];
+
+        if (aidata-&gt;ai_grantee == ACL_ID_PUBLIC ||
+            aidata-&gt;ai_grantee == roleid)
+        {
+            result |= aidata-&gt;ai_privs &amp; mask;
+            if ((how == ACLMASK_ALL) ? (result == mask) : (result != 0))
+                return result;
+        }
+    }</code></pre>
+</div>
+
+<p>
+  <strong>段3: 間接付与の走査。</strong>
+  ここで初めてメンバーシップ層に問い合わせる。段2 と段3 を分けているのは、
+  高価なメンバーシップ判定の回数を減らすための意図的な設計である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:1471</span>
+  <pre><code>    /*
+     * Check privileges granted indirectly via role memberships. We do this in
+     * a separate pass to minimize expensive indirect membership tests.  In
+     * particular, it's worth testing whether a given ACL entry grants any
+     * privileges still of interest before we perform the has_privs_of_role
+     * test.
+     */
+    remaining = mask &amp; ~result;
+    for (i = 0; i &lt; num; i++)
+    {
+        AclItem    *aidata = &amp;aidat[i];
+
+        if (aidata-&gt;ai_grantee == ACL_ID_PUBLIC ||
+            aidata-&gt;ai_grantee == roleid)
+            continue;           /* already checked it */
+
+        if ((aidata-&gt;ai_privs &amp; remaining) &amp;&amp;
+            has_privs_of_role(roleid, aidata-&gt;ai_grantee))
+        {
+            result |= aidata-&gt;ai_privs &amp; mask;
+            if ((how == ACLMASK_ALL) ? (result == mask) : (result != 0))
+                return result;
+            remaining = mask &amp; ~result;
+        }
+    }</code></pre>
+</div>
+
+<p>
+  条件式の順序が本質的である。<code>aidata-&gt;ai_privs &amp; remaining</code> を先に評価し、
+  それが 0 なら <code>has_privs_of_role()</code> を呼ばずに次のエントリへ進む。
+  <code>&amp;&amp;</code> の短絡評価により、まだ必要としている権限を実際に与えうるエントリだけが
+  メンバーシップ判定の対象になる。<code>remaining</code> はビットが埋まるたびに更新され、
+  走査が進むほど残りの候補が減っていく。
+</p>
+
+<p>
+  この段3 の存在によって、「<code>target</code> に付与された権限が、<code>target</code> を継承する
+  ロールにも及ぶ」という挙動が実現される。<a href="ch01.html#sec-1-2">1.2</a> で作った
+  4 つのメンバーで確かめる。
+</p>
+
+<div class="example">
+  <span class="example-label">SQL</span>
+  <pre><code>SELECT has_table_privilege('m_inh','acl_demo','SELECT') AS m_inh_select_via_target,
+       has_table_privilege('m_set','acl_demo','SELECT') AS m_set_select_via_target;</code></pre>
+</div>
+
+<div class="example">
+  <span class="example-label">実行結果</span>
+  <pre><code> m_inh_select_via_target | m_set_select_via_target
+-------------------------+-------------------------
+ t                       | f
+(1 row)</code></pre>
+</div>
+
+<p>
+  <code>acl_demo</code> の ACL に <code>m_inh</code> も <code>m_set</code> も現れないが、
+  <code>target=r*</code> のエントリに対する段3 の判定結果が分かれる。
+  <code>m_inh</code> は <code>inherit_option = true</code> なので
+  <code>has_privs_of_role(m_inh, target)</code> が真になり、<code>SELECT</code> を得る。
+  <code>m_set</code> は偽なので得られない。
+</p>
+
+<h2 id="sec-5-3">5.3　aclmask_direct との違い</h2>
+
+<p>
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L1508"><code>aclmask_direct()</code></a>
+  は、同じ引数を取りながらメンバーシップを一切考慮しない静的関数である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:1501</span>
+  <pre><code>/*
+ * aclmask_direct --- compute bitmask of all privileges held by roleid.
+ *
+ * This is exactly like aclmask() except that we consider only privileges
+ * held *directly* by roleid, not those inherited via role membership.
+ */</code></pre>
+</div>
+
+<p>
+  差分は 2 箇所に集約される。
+</p>
+
+<table>
+  <thead>
+    <tr><th></th><th><code>aclmask()</code></th><th><code>aclmask_direct()</code></th></tr>
+  </thead>
+  <tbody>
+    <tr><td>段1（オーナー判定）</td><td><code>has_privs_of_role(roleid, ownerId)</code></td><td><code>roleid == ownerId</code></td></tr>
+    <tr><td>段2（直接付与）</td><td><code>ai_grantee</code> が <code>roleid</code> または <code>PUBLIC</code></td><td><code>ai_grantee == roleid</code> のみ（<code>PUBLIC</code> を含まない）</td></tr>
+    <tr><td>段3（間接付与）</td><td>あり</td><td>なし</td></tr>
+  </tbody>
+</table>
+
+<p>
+  <code>PUBLIC</code> を除外している点は見落としやすい。この関数の唯一の呼び出し元である
+  <code>select_best_grantor()</code> は「誰が権限の出所たりうるか」を探しており、
+  <code>PUBLIC</code> は付与者になれないため、含めては困るのである。
+</p>
+
+<div class="note"><strong>メモ</strong><code>aclmask_direct()</code> がメンバーシップを問い合わせないという性質は、
+<code>select_best_grantor()</code> が <code>roles_is_member_of()</code> の返す List を
+ループ中ずっと保持できる根拠になっている（<a href="ch06.html#sec-6-3">6.3</a>）。
+キャッシュが「次の呼び出しまでしか有効でない」以上、これは正しさに直結する前提である。</div>
+
+<h2 id="sec-5-4">5.4　aclmembers と oid_cmp</h2>
+
+<p>
+  ACL には、権限判定とは別に「この ACL が言及しているロールをすべて列挙する」という需要がある。
+  依存関係（<code>pg_shdepend</code>）の記録に使うためで、これを担うのが
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L1571"><code>aclmembers()</code></a>
+  である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:1562</span>
+  <pre><code>/*
+ * aclmembers
+ *      Find out all the roleids mentioned in an Acl.
+ *      Note that we do not distinguish grantors from grantees.
+ *
+ * *roleids is set to point to a palloc'd array containing distinct OIDs
+ * in sorted order.  The length of the array is the function result.
+ */</code></pre>
+</div>
+
+<p>
+  実装は「最悪ケースの領域を確保 → grantee と grantor を無差別に詰める → ソート → 重複除去」
+  という素直な流れである。ここで
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/oid.c#L287"><code>oid_cmp()</code></a>
+  が使われる。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:1586</span>
+  <pre><code>    /* Allocate the worst-case space requirement */
+    list = palloc(ACL_NUM(acl) * 2 * sizeof(Oid));
+    acldat = ACL_DAT(acl);
+
+    /*
+     * Walk the ACL collecting mentioned RoleIds.
+     */
+    j = 0;
+    for (i = 0; i &lt; ACL_NUM(acl); i++)
+    {
+        const AclItem *ai = &amp;acldat[i];
+
+        if (ai-&gt;ai_grantee != ACL_ID_PUBLIC)
+            list[j++] = ai-&gt;ai_grantee;
+        /* grantor is currently never PUBLIC, but let's check anyway */
+        if (ai-&gt;ai_grantor != ACL_ID_PUBLIC)
+            list[j++] = ai-&gt;ai_grantor;
+    }
+
+    /* Sort the array */
+    qsort(list, j, sizeof(Oid), oid_cmp);
+
+    /* ... */
+
+    /* Remove duplicates from the array */
+    return qunique(list, j, sizeof(Oid), oid_cmp);</code></pre>
+</div>
+
+<p>
+  <code>oid_cmp()</code> 自体は
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/oid.c"><code>oid.c</code></a>
+  にある汎用の <code>qsort()</code> 比較関数で、ACL 専用ではない。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/oid.c:285</span>
+  <pre><code>/* qsort comparison function for Oids */
+int
+oid_cmp(const void *p1, const void *p2)
+{
+    Oid         v1 = *((const Oid *) p1);
+    Oid         v2 = *((const Oid *) p2);
+
+    return pg_cmp_u32(v1, v2);
+}</code></pre>
+</div>
+
+<p>
+  <code>pg_cmp_u32()</code> を使うのは、単純な <code>v1 - v2</code> が <code>Oid</code>（<code>uint32</code>）
+  では桁あふれしうるためである。<code>qunique()</code> は隣接する等値要素を潰す関数なので、
+  事前のソートが前提になる。<code>qsort()</code> と <code>qunique()</code> が同じ比較関数を
+  共有しているのはそのためである。
+</p>
+
+<div class="info"><strong>関連</strong>次章では、<code>aclmask_direct()</code> を使って
+GRANT の付与者を決める <code>select_best_grantor()</code> を読む。</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch04.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第4章 判定関数の意味論</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch06.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第6章 GRANT の付与者選択 select_best_grantor</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — postgres@d4046a48053 のソースコードに基づく</footer>
+</body>
+</html>

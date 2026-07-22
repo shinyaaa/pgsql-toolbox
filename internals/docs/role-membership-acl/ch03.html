@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>第3章 メンバーシップキャッシュの仕組み | PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#dbeafe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#2b6cb0',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f0f7ff',
+        clusterBorder:     '#93c5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="index.html" class="site-title">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定</a>
+    <span class="version-badge">PostgreSQL 20devel · d4046a48053 · 2026-07-22 13:40</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 ロールとメンバーシップの基礎</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 ロール・メンバーシップ・権限の三層構造</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 pg_auth_members と 3 つのオプション</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 4 種類の判定関数とその使い分け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 メンバーシップ展開の中核 roles_is_member_of</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 RoleRecurseType — 3 つの探索モード</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 自己拡張リストによる幅優先探索</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 pg_database_owner の暗黙メンバーシップ</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 ADMIN OPTION 保持者の同時収集</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch03.html">第3章 メンバーシップキャッシュの仕組み</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 cached_role / cached_roles の構造</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 initialize_acl によるコールバック登録</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 RoleMembershipCacheCallback による無効化</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 roles_list_append とブルームフィルタ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 判定関数の意味論</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 has_privs_of_role — 権限の自動継承</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 member_can_set_role — SET ROLE 可能性</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 is_member_of_role と is_member_of_role_nosuper</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 is_admin_of_role と select_best_admin</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 pg_has_role() との対応関係</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 ACL のビットマスク判定 aclmask</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 Acl と AclItem のレイアウト</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 aclmask の三段アルゴリズム</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 aclmask_direct との違い</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 aclmembers と oid_cmp</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 GRANT の付与者選択 select_best_grantor</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 なぜ付与者を選び直すのか</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 GRANTED BY 指定時の処理</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 最良候補の探索とスコアリング</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 select_best_admin との対比</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 行レベルセキュリティへの適用</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 get_policies_for_relation — コマンド種別による選別</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 check_role_for_policy — ロール適用判定</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 permissive / restrictive と適用順序</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 継承がもたらす直感に反する挙動</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 まとめ</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第3章　メンバーシップキャッシュの仕組み</h1>
+        <p>
+  メンバーシップの展開は syscache 検索を伴う再帰であり、権限チェックのたびに実行するには重い。
+  そのため <code>acl.c</code> はプロセスローカルなキャッシュを持っている。ただしそれは
+  「モードごとに 1 スロット」という極端に小さいもので、有効期間も強く限定されている。
+  本章ではこのキャッシュの構造、無効化の仕組み、そして大規模なロール階層に備えた
+  ブルームフィルタによる高速化を読む。
+</p>
+
+<h2 id="sec-3-1">3.1　cached_role / cached_roles の構造</h2>
+
+<p>
+  キャッシュの実体は 2 本のファイルスコープ配列である。要素数 3 は
+  <code>RoleRecurseType</code> の値と対応している。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:82</span>
+  <pre><code>static Oid  cached_role[] = {InvalidOid, InvalidOid, InvalidOid};
+static List *cached_roles[] = {NIL, NIL, NIL};
+static uint32 cached_db_hash;</code></pre>
+</div>
+
+<p>
+  つまり、探索モードごとに「直前に問い合わせたロール 1 件分」の結果しか保持しない。
+  図 3.1 にその構造を示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph C["プロセスローカルキャッシュ (TopMemoryContext)"]
+        direction TB
+        M0["[0] MEMBERS: cached_role=OID, cached_roles=List"]
+        M1["[1] PRIVS: cached_role=OID, cached_roles=List"]
+        M2["[2] SETROLE: cached_role=OID, cached_roles=List"]
+    end
+    Q["roles_is_member_of(roleid, type, ...)"]
+    Q -->|"type で添字"| C
+    C -->|"cached_role[type] == roleid なら再利用"| HIT["キャッシュヒット"]
+    C -->|"それ以外"| MISS["再展開して上書き"]
+  </pre>
+  <figcaption>図 3.1: モードごとに 1 スロットのメンバーシップキャッシュ</figcaption>
+</figure>
+
+<p>
+  キャッシュ利用の可否は関数冒頭の 1 行で決まる。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5199</span>
+  <pre><code>    /* If cache is valid and ADMIN OPTION not sought, just return the list */
+    if (cached_role[type] == roleid &amp;&amp; !OidIsValid(admin_of) &amp;&amp;
+        OidIsValid(cached_role[type]))
+        return cached_roles[type];</code></pre>
+</div>
+
+<p>
+  <code>admin_of</code> が指定されている場合は、たとえ同じロールの結果が残っていても
+  キャッシュを使わない。<code>*admin_role</code> は展開の副産物としてしか得られず、
+  キャッシュされたリストからは復元できないためである。図 3.1 に示した「再利用」の枝には
+  この条件が加わる。
+</p>
+
+<p>
+  展開結果は <code>TopMemoryContext</code> にコピーされ、プロセスが生きている限り残る。
+  代入順序にも注意が払われている。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5287</span>
+  <pre><code>    /*
+     * Copy the completed list into TopMemoryContext so it will persist.
+     */
+    oldctx = MemoryContextSwitchTo(TopMemoryContext);
+    new_cached_roles = list_copy(roles_list);
+    MemoryContextSwitchTo(oldctx);
+    list_free(roles_list);
+
+    /*
+     * Now safe to assign to state variable
+     */
+    cached_role[type] = InvalidOid; /* just paranoia */
+    list_free(cached_roles[type]);
+    cached_roles[type] = new_cached_roles;
+    cached_role[type] = roleid;</code></pre>
+</div>
+
+<p>
+  <code>cached_role[type]</code> を先に無効化してから古いリストを解放し、最後に有効な OID を書き戻す。
+  途中でエラーが発生してもダングリングポインタを指した状態のキャッシュが残らないようにするための順序である。
+</p>
+
+<div class="warn"><strong>注意</strong>関数ヘッダが明言しているとおり、返される <code>List *</code> は
+<em>次に <code>roles_is_member_of()</code> が呼ばれるまで</em>しか有効でない
+（<code>"the result is only guaranteed good until the next call of roles_is_member_of()!"</code>）。
+呼び出し側はリストを保持してはならない。<code>select_best_grantor()</code> がリストを
+ループ中ずっと保持できるのは、ループ内で呼ぶ <code>aclmask_direct()</code> が
+メンバーシップを一切問い合わせないことを確認したうえでの意図的な設計である
+（<a href="ch06.html#sec-6-3">6.3</a>）。</div>
+
+<h2 id="sec-3-2">3.2　initialize_acl によるコールバック登録</h2>
+
+<p>
+  キャッシュが古くなる契機は 3 つある。<code>pg_auth_members</code> の変更、
+  <code>pg_authid</code> の変更、そして接続中データベースの所有者変更である。
+  これらを捕捉するためのコールバック登録が
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5072"><code>initialize_acl()</code></a>
+  である。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5071</span>
+  <pre><code>void
+initialize_acl(void)
+{
+    if (!IsBootstrapProcessingMode())
+    {
+        cached_db_hash =
+            GetSysCacheHashValue1(DATABASEOID,
+                                  ObjectIdGetDatum(MyDatabaseId));
+
+        /*
+         * In normal mode, set a callback on any syscache invalidation of rows
+         * of pg_auth_members (for roles_is_member_of()) pg_database (for
+         * roles_is_member_of())
+         */
+        CacheRegisterSyscacheCallback(AUTHMEMROLEMEM,
+                                      RoleMembershipCacheCallback,
+                                      (Datum) 0);
+        CacheRegisterSyscacheCallback(AUTHOID,
+                                      RoleMembershipCacheCallback,
+                                      (Datum) 0);
+        CacheRegisterSyscacheCallback(DATABASEOID,
+                                      RoleMembershipCacheCallback,
+                                      (Datum) 0);
+    }
+}</code></pre>
+</div>
+
+<p>
+  ここで <code>cached_db_hash</code> に自データベースの syscache ハッシュ値を保存している点が要である。
+  <code>pg_database</code> は共有カタログなので、他データベースの行が更新されても
+  無効化メッセージが飛んでくる。それを後段で選り分けるための値である。
+</p>
+
+<p>
+  この関数は <code>InitPostgres</code> の中から、リレーションキャッシュの初期化直後に呼ばれる。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/init/postinit.c:1229</span>
+  <pre><code>    /* set up ACL framework (so CheckMyDatabase can check permissions) */
+    initialize_acl();</code></pre>
+</div>
+
+<p>
+  直後に <code>CheckMyDatabase()</code> が接続権限を確認する。つまり、バックエンドが最初の
+  権限チェックを行う直前が、ACL フレームワークの初期化タイミングということになる。
+  図 3.2 にこの順序を示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+sequenceDiagram
+    participant IP as InitPostgres
+    participant RC as relcache
+    participant ACL as acl.c
+    participant INV as 共有無効化キュー
+    IP->>RC: RelationCacheInitializePhase3()
+    IP->>ACL: initialize_acl()
+    ACL->>ACL: cached_db_hash を記録
+    ACL->>INV: AUTHMEMROLEMEM / AUTHOID / DATABASEOID を購読
+    IP->>ACL: CheckMyDatabase() 経由で権限チェック
+    Note over ACL,INV: 以後、他バックエンドの GRANT で<br/>RoleMembershipCacheCallback が発火
+  </pre>
+  <figcaption>図 3.2: initialize_acl() の呼び出し位置とコールバック購読</figcaption>
+</figure>
+
+<h2 id="sec-3-3">3.3　RoleMembershipCacheCallback による無効化</h2>
+
+<p>
+  無効化コールバックの本体はきわめて短い。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5101</span>
+  <pre><code>static void
+RoleMembershipCacheCallback(Datum arg, SysCacheIdentifier cacheid,
+                            uint32 hashvalue)
+{
+    if (cacheid == DATABASEOID &amp;&amp;
+        hashvalue != cached_db_hash &amp;&amp;
+        hashvalue != 0)
+    {
+        return;                 /* ignore pg_database changes for other DBs */
+    }
+
+    /* Force membership caches to be recomputed on next use */
+    cached_role[ROLERECURSE_MEMBERS] = InvalidOid;
+    cached_role[ROLERECURSE_PRIVS] = InvalidOid;
+    cached_role[ROLERECURSE_SETROLE] = InvalidOid;
+}</code></pre>
+</div>
+
+<p>
+  読み取るべき点は 3 つある。
+</p>
+
+<ol>
+  <li><strong>粒度がない</strong>。どのロールが変更されたかにかかわらず、3 モードすべてのキャッシュを
+    一括で捨てる。1 スロットしか持たないキャッシュに対して、選択的な無効化を実装する意味がないからである。</li>
+  <li><strong>リストは解放しない</strong>。<code>cached_role[]</code> に <code>InvalidOid</code> を
+    書くだけで、<code>cached_roles[]</code> の List はそのまま残る。コールバックは無効化メッセージ処理中に
+    呼ばれるため、ここでメモリ解放のような込み入った処理をしない設計になっている。
+    実際の解放は次回の <code>roles_is_member_of()</code> での上書き時に行われる（<a href="#sec-3-1">3.1</a>）。</li>
+  <li><strong><code>hashvalue == 0</code> は無条件に受け入れる</strong>。0 は
+    「このキャッシュ全体を無効化せよ」を意味する特殊値であり、<code>pg_database</code> 由来であっても
+    無視してはならない。</li>
+</ol>
+
+<p>
+  <code>DATABASEOID</code> についてだけ <code>cached_db_hash</code> との比較でフィルタするのは、
+  <code>pg_database</code> が共有カタログであり、無関係なデータベースの
+  <code>ALTER DATABASE ... OWNER TO</code> でも通知が届くためである。
+  <code>pg_authid</code>（<code>AUTHOID</code>）を購読しているのは、
+  <code>rolsuper</code> の変更が <code>superuser_arg()</code> の結果を変え、
+  ひいては全判定関数の早期リターンに影響しうるからである。
+</p>
+
+<h2 id="sec-3-4">3.4　roles_list_append とブルームフィルタ</h2>
+
+<p>
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/utils/adt/acl.c#L5125"><code>roles_list_append()</code></a>
+  は、探索中のリストに重複なく OID を追加するヘルパである。素朴に書けば
+  <code>list_append_unique_oid()</code> で済むが、それは線形探索なので、
+  リストが大きくなると展開全体が O(n²) になる。これを避けるためブルームフィルタを併用する。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5118</span>
+  <pre><code>/*
+ * A helper function for roles_is_member_of() that provides an optimized
+ * implementation of list_append_unique_oid() via a Bloom filter.  The caller
+ * (i.e., roles_is_member_of()) is responsible for freeing bf once it is done
+ * using this function.
+ */</code></pre>
+</div>
+
+<p>
+  判定の核心は次の条件式である。ブルームフィルタの「偽陽性はあるが偽陰性はない」という性質を
+  そのまま利用している。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5137</span>
+  <pre><code>    if ((*bf &amp;&amp; bloom_lacks_element(*bf, roleptr, sizeof(Oid))) ||
+        !list_member_oid(roles_list, role))
+    {</code></pre>
+</div>
+
+<p>
+  <a href="https://github.com/shinyaaa/postgres/blob/d4046a480539056a4f805faf8d0c13beac403ccb/src/backend/lib/bloomfilter.c#L157"><code>bloom_lacks_element()</code></a>
+  が真を返せば「確実に未登録」なので、リスト走査を省いて即座に追加できる。偽を返した場合は
+  偽陽性の可能性があるため、<code>list_member_oid()</code> による線形探索にフォールバックする。
+  C の <code>||</code> は短絡評価なので、フィルタが効いているときは線形探索が実行されない。
+  この流れを図 3.3 に示す。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    START["roles_list_append(list, bf, role)"]
+    HASBF{"bf は作成済みか"}
+    LACKS{"bloom_lacks_element()<br/>＝確実に未登録か"}
+    LINEAR{"list_member_oid()<br/>＝既にリストにあるか"}
+    THRESH{"bf 未作成 かつ<br/>len(list) &gt; 1024 か"}
+    CREATE["bloom_create() し<br/>既存要素を全投入"]
+    APPEND["lappend_oid() し<br/>bf にも追加"]
+    SKIP["何もせず返す"]
+
+    START --> HASBF
+    HASBF -->|"はい"| LACKS
+    HASBF -->|"いいえ"| LINEAR
+    LACKS -->|"はい（確実に未登録）"| THRESH
+    LACKS -->|"いいえ（偽陽性の疑い）"| LINEAR
+    LINEAR -->|"ある"| SKIP
+    LINEAR -->|"ない"| THRESH
+    THRESH -->|"はい"| CREATE
+    THRESH -->|"いいえ"| APPEND
+    CREATE --> APPEND
+  </pre>
+  <figcaption>図 3.3: roles_list_append() の判定フロー</figcaption>
+</figure>
+
+<p>
+  フィルタは最初から作られるわけではない。リスト長がしきい値を超えて初めて作成され、
+  そのとき既存要素がまとめて投入される。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5140</span>
+  <pre><code>        /*
+         * If the list is large, we take on the overhead of creating and
+         * populating a Bloom filter to speed up future calls to this
+         * function.
+         */
+        if (*bf == NULL &amp;&amp;
+            list_length(roles_list) &gt; ROLES_LIST_BLOOM_THRESHOLD)
+        {
+            *bf = bloom_create(ROLES_LIST_BLOOM_THRESHOLD * 10, work_mem, 0);
+            foreach_oid(roleid, roles_list)
+                bloom_add_element(*bf, (unsigned char *) &amp;roleid, sizeof(Oid));
+        }</code></pre>
+</div>
+
+<p>
+  しきい値の値と、その設定理由はソースに明記されている。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:86</span>
+  <pre><code>/*
+ * If the list of roles gathered by roles_is_member_of() grows larger than the
+ * below threshold, a Bloom filter is created to speed up list membership
+ * checks.  This threshold is set arbitrarily high to avoid the overhead of
+ * creating the Bloom filter until it seems likely to provide a net benefit.
+ */
+#define ROLES_LIST_BLOOM_THRESHOLD 1024</code></pre>
+</div>
+
+<p>
+  <code>bloom_create()</code> に渡す想定要素数はしきい値の 10 倍（10240）である。
+  実際のロール数がこれを大きく超えると偽陽性率が上がり、線形探索へのフォールバックが増えるが、
+  正しさは損なわれない。フィルタの寿命は <code>roles_is_member_of()</code> の 1 回の呼び出し内に
+  限られ、展開が終わった時点で解放される。
+</p>
+
+<div class="example">
+  <span class="example-label">src/backend/utils/adt/acl.c:5281</span>
+  <pre><code>    /*
+     * Free the Bloom filter created by roles_list_append(), if there is one.
+     */
+    if (bf)
+        bloom_free(bf);</code></pre>
+</div>
+
+<div class="note"><strong>メモ</strong>1024 という値は、ほとんどの環境ではフィルタが一度も作られないことを
+意味する。この最適化が効くのは、数千ロールが 1 人のユーザに集約されるような大規模なマルチテナント構成である。</div>
+
+<div class="info"><strong>関連</strong>次章では、このキャッシュ機構の上に乗る 4 つの判定関数を
+それぞれ読み、意味論の違いを明確にする。</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch02.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第2章 メンバーシップ展開の中核 roles_is_member_of</span>
+</a>
+        <a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+        <a class="next" href="ch04.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第4章 判定関数の意味論</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">PostgreSQL Internals: ロールメンバーシップと ACL 権限判定 — postgres@d4046a48053 のソースコードに基づく</footer>
+</body>
+</html>
