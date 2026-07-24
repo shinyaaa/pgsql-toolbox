@@ -40,6 +40,22 @@ body {
   color: #fff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
 }
+.site-header .docs-home {
+  margin-right: 16px;
+  padding: 3px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 20px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.8rem;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.site-header .docs-home:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.55);
+  color: #fff;
+}
 .site-header .site-title {
   color: #fff;
   font-weight: 700;

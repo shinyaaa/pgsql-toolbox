@@ -47,17 +47,6 @@ body {
   text-decoration: none;
   letter-spacing: 0.02em;
 }
-.site-header .back-link {
-  color: rgba(255, 255, 255, 0.7);
-  text-decoration: none;
-  font-size: 0.78rem;
-  margin-right: 14px;
-  white-space: nowrap;
-}
-.site-header .back-link:hover {
-  color: #fff;
-}
-
 .version-badge {
   margin-left: 14px;
   padding: 2px 9px;
@@ -291,4 +280,21 @@ th { background: var(--bg-alt); font-weight: 700; }
     gap: 4px;
   }
   .version-badge { font-size: 0.68rem; margin-left: 0; }
+}
+
+.site-header .docs-home {
+  margin-right: 16px;
+  padding: 3px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 20px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.8rem;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.site-header .docs-home:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.55);
+  color: #fff;
 }

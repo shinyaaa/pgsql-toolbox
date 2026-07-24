@@ -55,14 +55,61 @@ def _extract_version(index_path):
         return None
 
 
+def _git_commit_ts(path):
+    """Unix commit time of the most recent commit touching `path`.
+
+    Returns None if git is unavailable or the path is untracked, so the caller
+    can fall back to the directory's mtime.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%ct", "--", str(path)],
+            cwd=str(REPO_DIR),
+            env=_git_env(),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = result.stdout.strip()
+    if result.returncode != 0 or not out:
+        return None
+    try:
+        return int(out)
+    except ValueError:
+        return None
+
+
+def _doc_recency(doc_dir):
+    """Recency key for listing docs newest-first.
+
+    Prefer the last git commit that touched the directory (stable across clones
+    and `git pull`), falling back to filesystem mtime when git can't tell.
+    """
+    ts = _git_commit_ts(doc_dir)
+    if ts is None:
+        try:
+            ts = doc_dir.stat().st_mtime
+        except OSError:
+            ts = 0.0
+    return ts
+
+
 def scan_docs(docs_dir):
-    """Scan a documentation directory for documentation sets."""
+    """Scan a documentation directory for documentation sets, newest first."""
     if not docs_dir.exists():
         return []
+    dirs = [
+        d for d in docs_dir.iterdir()
+        if d.is_dir() and (d / "index.html").exists()
+    ]
+    # Stable sort: name ascending for ties, then most-recent first.
+    dirs.sort(key=lambda d: d.name)
+    dirs.sort(key=_doc_recency, reverse=True)
     return [
         {"name": d.name, "version": _extract_version(d / "index.html")}
-        for d in sorted(docs_dir.iterdir())
-        if d.is_dir() and (d / "index.html").exists()
+        for d in dirs
     ]
 
 
