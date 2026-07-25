@@ -15,6 +15,8 @@
     --accent: #6c8cff;
     --accent-hover: #8da6ff;
     --cyan: #22d3ee;
+    --teal: #2dd4bf;
+    --teal-dim: #14b8a6;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -68,7 +70,24 @@
     transition: border-color 0.15s;
   }
   .topic-link:hover { border-color: var(--accent); }
+  .kind-badge {
+    display: inline-block;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    padding: 2px 7px;
+    border-radius: 4px;
+    margin-bottom: 7px;
+  }
+  .kind-internal .kind-badge { background: rgba(34, 211, 238, 0.14); color: var(--cyan); }
+  .kind-user .kind-badge { background: rgba(45, 212, 191, 0.16); color: var(--teal); }
+  /* ユーザーガイドはティール色＋左端のアクセントで内部構造ドキュメントと区別する */
+  .kind-user { border-left: 3px solid var(--teal-dim); }
+  .kind-user:hover { border-color: var(--teal); }
+  .kind-user .topic-name { color: var(--teal); }
+  .kind-user .open-label { color: var(--teal); }
   .topic-name {
+    display: block;
     font-family: 'SF Mono', 'Cascadia Code', monospace;
     font-size: 0.95rem;
     font-weight: 700;
@@ -197,8 +216,9 @@
   {% else %}
   <div class="topic-grid">
     {% for topic in cat.topics %}
-    <a class="topic-link" href="{{ cat.base }}{{ topic.name }}/">
+    <a class="topic-link kind-{{ topic.kind }}" href="{{ cat.base }}{{ topic.name }}/">
       <div>
+        <span class="kind-badge">{{ 'ユーザーガイド' if topic.kind == 'user' else '内部構造' }}</span>
         <span class="topic-name">{{ topic.name }}</span>
         {% if topic.version %}<div class="topic-version">{{ topic.version }}</div>{% endif %}
       </div>

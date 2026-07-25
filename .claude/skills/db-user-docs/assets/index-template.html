@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<!--
+  トップページ（目次）用テンプレート。ユーザーガイド用。
+  - {{SITE_TITLE}}   : サイト名（例: "論理レプリケーション 実践ガイド"）
+  - {{VERSION_INFO}} : "PostgreSQL <version>"（例: "PostgreSQL 18"）。任意で日付を足してもよい。
+  - {{AUDIENCE}}     : 対象読者の一言（例: "対象: SQL は書けるが論理レプリケーションは未経験の方"）
+  - {{LEAD}}         : リード文（このガイドで何ができるようになるか・前提・所要時間など）
+  - {{SIDEBAR_TOC}}  : サイドバー TOC（章ページと共通）
+  - {{TOC_CARDS}}    : 章カード一覧。各章 <a class="toc-card" href="chNN.html"> … </a>
+  - {{FOOTER}}       : フッター文言
+
+  ★ <meta name="doc-kind" content="user"> は必須。これで一覧ページが「ユーザーガイド」
+    として区別表示する。削除しないこと。
+-->
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>{{SITE_TITLE}} — {{VERSION_INFO}}</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">{{SITE_TITLE}}</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">{{VERSION_INFO}}</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      {{SIDEBAR_TOC}}
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>{{SITE_TITLE}}</h1>
+        <p class="version-hero">{{VERSION_INFO}}</p>
+        <p class="audience">{{AUDIENCE}}</p>
+        <p class="lead">{{LEAD}}</p>
+      </div>
+      <div class="toc-grid">
+        {{TOC_CARDS}}
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer">{{FOOTER}}</footer>
+</body>
+</html>

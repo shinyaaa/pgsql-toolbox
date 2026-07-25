@@ -45,14 +45,29 @@ CATEGORIES = [
 DOC_DIRS = [str((BASE_DIR / cat["dir"]).relative_to(REPO_DIR)) for cat in CATEGORIES]
 
 _VERSION_RE = re.compile(r'<span class="version-badge">(?:PostgreSQL\s+)?([^<]+)</span>')
+_KIND_RE = re.compile(
+    r'<meta\s+name=["\']doc-kind["\']\s+content=["\']([^"\']+)["\']', re.I
+)
+_KNOWN_KINDS = ("internal", "user")
 
 
-def _extract_version(index_path):
+def _doc_meta(index_path):
+    """Version string and doc kind ('internal'/'user') parsed from index.html.
+
+    Docs without a doc-kind meta tag (all the internals docs) default to
+    'internal', so the marker is opt-in for user guides only.
+    """
     try:
-        m = _VERSION_RE.search(index_path.read_text(encoding="utf-8"))
-        return m.group(1).strip() if m else None
+        html = index_path.read_text(encoding="utf-8")
     except OSError:
-        return None
+        return None, "internal"
+    vm = _VERSION_RE.search(html)
+    version = vm.group(1).strip() if vm else None
+    km = _KIND_RE.search(html)
+    kind = km.group(1).strip().lower() if km else "internal"
+    if kind not in _KNOWN_KINDS:
+        kind = "internal"
+    return version, kind
 
 
 def _git_commit_ts(path):
@@ -107,10 +122,11 @@ def scan_docs(docs_dir):
     # Stable sort: name ascending for ties, then most-recent first.
     dirs.sort(key=lambda d: d.name)
     dirs.sort(key=_doc_recency, reverse=True)
-    return [
-        {"name": d.name, "version": _extract_version(d / "index.html")}
-        for d in dirs
-    ]
+    docs = []
+    for d in dirs:
+        version, kind = _doc_meta(d / "index.html")
+        docs.append({"name": d.name, "version": version, "kind": kind})
+    return docs
 
 
 def scan_categories():
