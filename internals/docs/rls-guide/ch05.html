@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第5章 実践：マルチテナントを作る | 行レベルセキュリティ（RLS）実践ガイド — PostgreSQL 18</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">行レベルセキュリティ（RLS）実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 RLS でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 行レベルセキュリティとは</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 GRANT（権限）との違いと関係</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 典型的なユースケース</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 検証用データベースとロールを作る</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルテーブルと権限</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 SET ROLE で別ユーザーを演じる</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 RLS を有効化して最初のポリシーを作る</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ユーザーごとに見える行が変わる</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 設定を確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 ポリシーを正しく書く</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 USING と WITH CHECK</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 コマンド別・ロール別のポリシー</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 PERMISSIVE と RESTRICTIVE</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch05.html">第5章 実践：マルチテナントを作る</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 セッション変数でテナントを切り替える</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 接続プール前提の設計</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 実行計画で確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 所有者・スーパーユーザはバイパスする</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 デフォルト拒否とポリシーの抜け</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 GRANT との二層構造</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パフォーマンスの注意</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 コマンド早見表</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 設計チェックリスト</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第5章　実践：マルチテナントを作る</h1>
+        <div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>接続プールのように「単一の DB ロールで複数テナントを扱う」構成で RLS を効かせられる</li>
+    <li>セッション変数（<code>current_setting</code>）でテナントを切り替えられる</li>
+    <li>ポリシーが実行計画に入っていることを <code>EXPLAIN</code> で確認できる</li>
+  </ul>
+</div>
+<div class="prereq">
+  <strong>📋 前提</strong>
+  同じ <code>rlsguide</code> データベースを使う。ここではテナント分離という別パターンなので、新しいテーブル
+  <code>orders</code> を作る。
+</div>
+
+<h2 id="sec-5-1">5.1　セッション変数でテナントを切り替える</h2>
+<p>実務のアプリは、ユーザーごとに DB ロールを分けず、<strong>アプリ共通の 1 ロール</strong>で接続することが多い
+  （接続プールのため）。その場合 <code>current_user</code> では誰か区別できない。代わりに、リクエストごとに
+  <strong>セッション変数</strong>へテナント ID を入れ、ポリシーからそれを参照する。</p>
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: テナント分離テーブル</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>テナント列を持つ <code>orders</code> を作り、権限を与えて 2 テナント分のデータを入れる。</p>
+<div class="example"><span class="example-label">入力</span><pre><code>CREATE TABLE orders (id int, tenant_id int, item text);
+GRANT SELECT ON orders TO rlsguide_alice;
+INSERT INTO orders VALUES
+  (1,100,'apple'), (2,100,'banana'), (3,200,'cherry');</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>CREATE TABLE
+GRANT
+INSERT 0 3</code></pre></div>
+      </li>
+      <li>
+        <p>RLS を有効化し、「セッション変数 <code>app.tenant_id</code> と一致する行だけ」を許可する。</p>
+<div class="example"><span class="example-label">入力</span><pre><code>ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON orders
+    USING (tenant_id = current_setting('app.tenant_id')::int);</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>ALTER TABLE
+CREATE POLICY</code></pre></div>
+      </li>
+    </ol>
+  </div>
+</div>
+<p><code>app.tenant_id</code> のような「ドット付きの独自変数」は、拡張設定パラメータとして自由に使える。
+  リクエスト処理の冒頭でこの値をセットするのが基本の型になる。</p>
+<div class="example"><span class="example-label">入力（テナント100 として）</span><pre><code>SET ROLE rlsguide_alice;
+SET app.tenant_id = '100';
+SELECT * FROM orders ORDER BY id;</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code> id | tenant_id |  item
+----+-----------+--------
+  1 |       100 | apple
+  2 |       100 | banana
+(2 rows)</code></pre></div><div class="example"><span class="example-label">入力（テナント200 に切り替え）</span><pre><code>SET app.tenant_id = '200';
+SELECT * FROM orders ORDER BY id;</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code> id | tenant_id |  item
+----+-----------+--------
+  3 |       200 | cherry
+(1 row)</code></pre></div>
+<p>同じロール・同じ SQL でも、セッション変数を変えるだけで見える行が切り替わった。</p>
+
+<h2 id="sec-5-2">5.2　接続プール前提の設計</h2>
+<p>接続プールでは接続が使い回されるため、前のリクエストの値が残ると<strong>テナント越境</strong>になる。
+  型として次を守る。</p>
+<ul>
+  <li>リクエストの<strong>最初</strong>にテナント ID をセットし、トランザクション内なら <code>SET LOCAL</code> を使う
+    （トランザクション終了で自動的に元へ戻り、他リクエストへ漏れない）。</li>
+  <li>変数が<strong>未設定</strong>だと <code>current_setting('app.tenant_id')</code> はエラーになる。安全側（何も見せない）に
+    倒すなら第2引数付きの <code>current_setting('app.tenant_id', true)</code> で欠損を <code>NULL</code> にし、
+    <code>NULL</code> は条件を満たさない＝0 行、という設計にできる。</li>
+  <li>アプリ接続ロールに <code>BYPASSRLS</code> やスーパーユーザを<strong>使わない</strong>（第6章）。</li>
+</ul>
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  <code>SET</code>（<code>LOCAL</code> なし）はセッション全体に残る。接続プールでこれを使うと、次に同じ接続を
+  借りたリクエストへ値が漏れる。プール環境では原則 <code>SET LOCAL</code>（トランザクション単位）にする。
+</div>
+
+<h2 id="sec-5-3">5.3　実行計画で確認する</h2>
+<p>ポリシーは「クエリに条件を足す」実装なので、<code>EXPLAIN</code> を見ると <code>Filter</code> として
+  入っているのが分かる。効いているかの確認に使える。</p>
+<div class="example"><span class="example-label">入力</span><pre><code>SET ROLE rlsguide_alice;
+SET app.tenant_id = '100';
+EXPLAIN (COSTS OFF) SELECT * FROM orders;</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>                                QUERY PLAN
+---------------------------------------------------------------------------
+ Seq Scan on orders
+   Filter: (tenant_id = (current_setting('app.tenant_id'::text))::integer)
+(2 rows)</code></pre></div>
+<p><code>Filter:</code> にポリシーの式がそのまま現れている。RLS が「見えているつもりで見えていない」ときは、
+  まずここに条件が入っているかを確認するとよい。</p>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>SET app.tenant_id</code> の値を変えると、同じ SQL の結果が切り替わる</li>
+    <li>接続プールでは <code>SET LOCAL</code> を使う理由を説明できる</li>
+    <li><code>EXPLAIN</code> の <code>Filter</code> にポリシーの式が現れることを確認した</li>
+  </ul>
+</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch04.html"><span class="dir">← 前の章</span><span class="ttl">第4章 ポリシーを正しく書く</span></a>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <a class="next" href="ch06.html"><span class="dir">次の章 →</span><span class="ttl">第6章 つまずきポイントと対処</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">行レベルセキュリティ（RLS）実践ガイド — 実行例はローカルの PostgreSQL ビルドで検証（RLS は 9.5 以降で共通の挙動）</footer>
+</body>
+</html>

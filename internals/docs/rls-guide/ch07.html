@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第7章 まとめとチートシート | 行レベルセキュリティ（RLS）実践ガイド — PostgreSQL 18</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">行レベルセキュリティ（RLS）実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 RLS でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 行レベルセキュリティとは</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 GRANT（権限）との違いと関係</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 典型的なユースケース</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 検証用データベースとロールを作る</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルテーブルと権限</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 SET ROLE で別ユーザーを演じる</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 RLS を有効化して最初のポリシーを作る</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ユーザーごとに見える行が変わる</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 設定を確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 ポリシーを正しく書く</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 USING と WITH CHECK</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 コマンド別・ロール別のポリシー</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 PERMISSIVE と RESTRICTIVE</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 実践：マルチテナントを作る</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 セッション変数でテナントを切り替える</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 接続プール前提の設計</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 実行計画で確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 所有者・スーパーユーザはバイパスする</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 デフォルト拒否とポリシーの抜け</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 GRANT との二層構造</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パフォーマンスの注意</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch07.html">第7章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 コマンド早見表</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 設計チェックリスト</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第7章　まとめとチートシート</h1>
+        <div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>RLS のコマンドを早見表で引けるようにする</li>
+    <li>導入前に確認すべき点をチェックリストで押さえる</li>
+  </ul>
+</div>
+
+<h2 id="sec-7-1">7.1　コマンド早見表</h2>
+<table>
+  <thead><tr><th>やりたいこと</th><th>コマンド</th></tr></thead>
+  <tbody>
+    <tr><td>RLS を有効化</td><td><code>ALTER TABLE t ENABLE ROW LEVEL SECURITY;</code></td></tr>
+    <tr><td>所有者にも適用（バイパス停止）</td><td><code>ALTER TABLE t FORCE ROW LEVEL SECURITY;</code></td></tr>
+    <tr><td>読み取りポリシー</td><td><code>CREATE POLICY p ON t USING (条件);</code></td></tr>
+    <tr><td>読み書きで条件を分ける</td><td><code>CREATE POLICY p ON t USING (読める条件) WITH CHECK (書ける条件);</code></td></tr>
+    <tr><td>コマンド別</td><td><code>CREATE POLICY p ON t FOR SELECT USING (…);</code>（<code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code>/<code>ALL</code>）</td></tr>
+    <tr><td>ロール別</td><td><code>CREATE POLICY p ON t TO some_role USING (…);</code></td></tr>
+    <tr><td>必須条件を足す（AND）</td><td><code>CREATE POLICY p ON t AS RESTRICTIVE USING (…);</code></td></tr>
+    <tr><td>ポリシー変更／削除</td><td><code>ALTER POLICY p ON t USING (…);</code> / <code>DROP POLICY p ON t;</code></td></tr>
+    <tr><td>設定を確認</td><td><code>\d t</code> / <code>SELECT * FROM pg_policies WHERE tablename='t';</code></td></tr>
+    <tr><td>効いているか確認</td><td><code>EXPLAIN (COSTS OFF) SELECT * FROM t;</code>（<code>Filter</code> を見る）</td></tr>
+    <tr><td>一時的に無効化</td><td><code>ALTER TABLE t DISABLE ROW LEVEL SECURITY;</code></td></tr>
+    <tr><td>セッション変数を使う</td><td><code>SET LOCAL app.tenant_id = '100';</code> ＋ <code>current_setting('app.tenant_id', true)</code></td></tr>
+  </tbody>
+</table>
+<div class="note">
+  <strong>可視性の最終式</strong>
+  ある操作で行が通るのは <code>(GRANT がある) AND (PERMISSIVE のどれか) AND (RESTRICTIVE のすべて)</code>。
+  PERMISSIVE が 1 つも無ければ全拒否。
+</div>
+
+<h2 id="sec-7-2">7.2　設計チェックリスト</h2>
+<div class="checkpoint">
+  <strong>✅ 導入前チェック</strong>
+  <ul>
+    <li>絞りたいのは「行」か？（テーブル・列単位なら GRANT で足りる）</li>
+    <li>行の所属をどの列で判定するか決めた（<code>owner</code> / <code>tenant_id</code> など）。その列にインデックスがある</li>
+    <li>操作ごと（SELECT/INSERT/UPDATE/DELETE）に必要なポリシーを洗い出した（デフォルト拒否対策）</li>
+    <li>書き込みに独自条件が要るなら <code>WITH CHECK</code> を明記した</li>
+    <li>アプリの接続ロールは<strong>非スーパーユーザ・<code>BYPASSRLS</code> なし</strong></li>
+    <li>接続ロールが対象表の<strong>所有者</strong>を兼ねるなら <code>FORCE</code> を付けた</li>
+    <li>接続プールなら <code>SET LOCAL</code> でテナントを設定し、未設定時は 0 行に倒す設計にした</li>
+    <li>一般ロールで動作確認した（所有者・スーパーユーザで確認していない）</li>
+  </ul>
+</div>
+<p>ここまで確認できれば、RLS の基本的な設計・実装・切り分けはひととおり自分でできる。あとは対象テーブルに
+  合わせてポリシーを足していくだけである。</p>
+<div class="note">
+  <strong>内部の仕組みを知りたい人へ</strong>
+  ポリシーがどのようにプランへ組み込まれるか等の実装詳細は、同じ一覧にある内部構造ドキュメント
+  （<code>rls</code> / <code>role-membership-acl</code>）を参照するとよい。
+</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch06.html"><span class="dir">← 前の章</span><span class="ttl">第6章 つまずきポイントと対処</span></a>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <span class="pager-spacer" aria-hidden="true"></span>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">行レベルセキュリティ（RLS）実践ガイド — 実行例はローカルの PostgreSQL ビルドで検証（RLS は 9.5 以降で共通の挙動）</footer>
+</body>
+</html>

@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第6章 つまずきポイントと対処 | 行レベルセキュリティ（RLS）実践ガイド — PostgreSQL 18</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">行レベルセキュリティ（RLS）実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 RLS でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 行レベルセキュリティとは</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 GRANT（権限）との違いと関係</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 典型的なユースケース</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 検証用データベースとロールを作る</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルテーブルと権限</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 SET ROLE で別ユーザーを演じる</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 RLS を有効化して最初のポリシーを作る</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ユーザーごとに見える行が変わる</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 設定を確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 ポリシーを正しく書く</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 USING と WITH CHECK</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 コマンド別・ロール別のポリシー</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 PERMISSIVE と RESTRICTIVE</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 実践：マルチテナントを作る</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 セッション変数でテナントを切り替える</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 接続プール前提の設計</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 実行計画で確認する</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch06.html">第6章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 所有者・スーパーユーザはバイパスする</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 デフォルト拒否とポリシーの抜け</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 GRANT との二層構造</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パフォーマンスの注意</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 コマンド早見表</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 設計チェックリスト</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第6章　つまずきポイントと対処</h1>
+        <div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>「RLS を設定したのに絞られない／全部拒否される」の原因を切り分けられる</li>
+    <li>所有者・スーパーユーザのバイパスと <code>FORCE</code> の関係を説明できる</li>
+    <li>GRANT と RLS の二層を意識して設計できる</li>
+  </ul>
+</div>
+<div class="prereq">
+  <strong>📋 前提</strong>
+  同じ <code>rlsguide</code> データベース。6.1 では所有権を確かめるため、新しいテーブル <code>notes</code> を
+  管理者が作り、所有権をアプリ用ロールへ移す。
+</div>
+
+<h2 id="sec-6-1">6.1　所有者・スーパーユーザはバイパスする</h2>
+<p>もっとも多いはまりどころ。<strong>スーパーユーザ</strong>、<strong><code>BYPASSRLS</code> 属性を持つロール</strong>、
+  そして<strong>テーブルの所有者</strong>は、既定で RLS を<strong>素通り</strong>する。第3章で所有者/スーパーユーザが
+  全行見えたのはこのため。</p>
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    Q["行にアクセス"] --> S{"スーパーユーザ か BYPASSRLS か"}
+    S -->|はい| BYPASS["ポリシー無視・全行アクセス"]
+    S -->|いいえ| O{"テーブル所有者 か"}
+    O -->|はい かつ FORCE なし| BYPASS
+    O -->|いいえ または FORCE あり| APPLY["ポリシー適用"]
+  </pre>
+  <figcaption>図 6.1: 誰が RLS をバイパスするか</figcaption>
+</figure>
+<p>図 6.1 のとおり、所有者のバイパスは <code>FORCE ROW LEVEL SECURITY</code> で止められる。アプリの
+  接続ロールが<strong>その表の所有者</strong>を兼ねるとき（よくある）に効いてくる。実演する。</p>
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 所有者バイパスと FORCE</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>管理者がテーブルを作り、所有権をアプリ用ロール <code>rlsguide_app</code> に移す。RLS も有効化する。</p>
+<div class="example"><span class="example-label">入力</span><pre><code>CREATE ROLE rlsguide_app LOGIN;
+CREATE TABLE notes (owner text NOT NULL DEFAULT current_user, body text);
+ALTER TABLE notes OWNER TO rlsguide_app;
+INSERT INTO notes(owner, body)
+    VALUES ('rlsguide_alice','a-note'), ('rlsguide_bob','b-note');
+ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY p ON notes USING (owner = current_user);</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>CREATE ROLE
+CREATE TABLE
+ALTER TABLE
+INSERT 0 2
+ALTER TABLE
+CREATE POLICY</code></pre></div>
+      </li>
+      <li>
+        <p>所有者 <code>rlsguide_app</code> で読むと、RLS 有効なのに全行見える（＝バイパス）。</p>
+<div class="example"><span class="example-label">入力</span><pre><code>SET ROLE rlsguide_app;
+SELECT * FROM notes ORDER BY owner;</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>     owner      |  body
+----------------+--------
+ rlsguide_alice | a-note
+ rlsguide_bob   | b-note
+(2 rows)</code></pre></div>
+      </li>
+      <li>
+        <p><code>FORCE</code> を付けると、所有者にもポリシーが効く（<code>owner = rlsguide_app</code> の行は無いので 0 行）。</p>
+<div class="example"><span class="example-label">入力</span><pre><code>RESET ROLE;
+ALTER TABLE notes FORCE ROW LEVEL SECURITY;
+SET ROLE rlsguide_app;
+SELECT * FROM notes ORDER BY owner;</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code> owner | body
+-------+------
+(0 rows)</code></pre></div>
+      </li>
+    </ol>
+  </div>
+</div>
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  「動作確認は一般ロールで」「アプリ接続ロールは非スーパーユーザ・<code>BYPASSRLS</code> なし」「所有者を兼ねるなら
+  <code>FORCE</code>」を守ると、バイパス由来の事故はほぼ防げる。
+</div>
+
+<h2 id="sec-6-2">6.2　デフォルト拒否とポリシーの抜け</h2>
+<p>逆に「全部見えない／書けない」もよくある。RLS を有効化して<strong>ポリシーを 1 つも作らない</strong>と、
+  一般ロールにとっては<strong>全行拒否</strong>になる（PERMISSIVE が無い＝許可が 0）。</p>
+<div class="example"><span class="example-label">入力</span><pre><code>CREATE TABLE t_denied (id int, memo text);
+GRANT SELECT, INSERT ON t_denied TO rlsguide_alice;
+INSERT INTO t_denied VALUES (1,'x'), (2,'y');
+ALTER TABLE t_denied ENABLE ROW LEVEL SECURITY;   -- ポリシー無し</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>CREATE TABLE
+GRANT
+INSERT 0 2
+ALTER TABLE</code></pre></div><div class="example"><span class="example-label">入力（alice）</span><pre><code>SET ROLE rlsguide_alice;
+SELECT * FROM t_denied;</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code> id | memo
+----+------
+(0 rows)</code></pre></div>
+<p>同様に <code>INSERT</code> も許可が無いので弾かれる。</p>
+<div class="example"><span class="example-label">入力（alice）</span><pre><code>INSERT INTO t_denied VALUES (3,'z');</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>ERROR:  new row violates row-level security policy for table "t_denied"</code></pre></div>
+<p>操作ごとに PERMISSIVE ポリシーが要る、と覚える。<code>SELECT</code> は見えるのに <code>INSERT</code> だけ弾かれる
+  ときは、<code>INSERT</code> 用（<code>WITH CHECK</code>）のポリシー漏れを疑う。</p>
+
+<h2 id="sec-6-3">6.3　GRANT との二層構造</h2>
+<p>RLS は GRANT の<strong>後</strong>に効く（第1章 図 1.1）。よって次の切り分けができる。</p>
+<table>
+  <thead><tr><th>症状</th><th>疑うところ</th></tr></thead>
+  <tbody>
+    <tr><td><code>permission denied for table …</code></td><td>GRANT 不足（RLS 以前の問題）</td></tr>
+    <tr><td>行が 1 つも返らない</td><td>ポリシー無し（デフォルト拒否）／条件が厳しすぎ</td></tr>
+    <tr><td>全行返ってしまう</td><td>所有者・スーパーユーザ・<code>BYPASSRLS</code> でのバイパス</td></tr>
+    <tr><td><code>new row violates row-level security policy</code></td><td><code>WITH CHECK</code>（または流用された <code>USING</code>）に不適合</td></tr>
+  </tbody>
+</table>
+
+<h2 id="sec-6-4">6.4　パフォーマンスの注意</h2>
+<ul>
+  <li>ポリシーの式は<strong>全行に評価される</strong>。<code>USING</code> で参照する列（例 <code>tenant_id</code>、
+    <code>owner</code>）には<strong>インデックス</strong>を張り、式がインデックスを使える形（列 = 定数/変数）に保つ。</li>
+  <li>ポリシー内で<strong>サブクエリ</strong>（別表を引く等）を書くと行ごとに評価されがち。重い場合は
+    <code>current_setting</code> やマッピングの工夫で定数化を検討する。</li>
+  <li><code>EXPLAIN</code>（第5章 5.3）で <code>Filter</code> とインデックス利用を確認する。</li>
+</ul>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li>「全行見える」ときにバイパス（所有者・スーパーユーザ・<code>BYPASSRLS</code>）を疑える</li>
+    <li>所有者を兼ねる接続には <code>FORCE ROW LEVEL SECURITY</code> が要ると分かる</li>
+    <li>「1 行も出ない」ときにポリシー漏れ（デフォルト拒否）を疑える</li>
+    <li>エラーメッセージから GRANT 層と RLS 層を切り分けられる</li>
+  </ul>
+</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch05.html"><span class="dir">← 前の章</span><span class="ttl">第5章 実践：マルチテナントを作る</span></a>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <a class="next" href="ch07.html"><span class="dir">次の章 →</span><span class="ttl">第7章 まとめとチートシート</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">行レベルセキュリティ（RLS）実践ガイド — 実行例はローカルの PostgreSQL ビルドで検証（RLS は 9.5 以降で共通の挙動）</footer>
+</body>
+</html>

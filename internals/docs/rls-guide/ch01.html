@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第1章 RLS でできること | 行レベルセキュリティ（RLS）実践ガイド — PostgreSQL 18</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">行レベルセキュリティ（RLS）実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li class="current">
+    <a class="chap-title" href="ch01.html">第1章 RLS でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 行レベルセキュリティとは</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 GRANT（権限）との違いと関係</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 典型的なユースケース</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 検証用データベースとロールを作る</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルテーブルと権限</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 SET ROLE で別ユーザーを演じる</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 RLS を有効化して最初のポリシーを作る</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ユーザーごとに見える行が変わる</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 設定を確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 ポリシーを正しく書く</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 USING と WITH CHECK</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 コマンド別・ロール別のポリシー</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 PERMISSIVE と RESTRICTIVE</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 実践：マルチテナントを作る</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 セッション変数でテナントを切り替える</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 接続プール前提の設計</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 実行計画で確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 所有者・スーパーユーザはバイパスする</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 デフォルト拒否とポリシーの抜け</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 GRANT との二層構造</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パフォーマンスの注意</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 コマンド早見表</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 設計チェックリスト</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第1章　RLS でできること</h1>
+        <div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>行レベルセキュリティ（RLS）が「何を」守るのかを説明できる</li>
+    <li>GRANT による権限制御との違いと、両者の関係を説明できる</li>
+    <li>自分のケースで RLS が向くかどうかを判断できる</li>
+  </ul>
+</div>
+
+<h2 id="sec-1-1">1.1　行レベルセキュリティとは</h2>
+<p>
+  行レベルセキュリティ（Row Level Security, RLS）は、<strong>同じテーブルの中で、ユーザーごとに
+  「見える行・操作できる行」を自動的に絞り込む</strong>仕組みである。テーブルに
+  <strong>ポリシー</strong>（行を許可する条件式）を付けておくと、以降その表への
+  <code>SELECT</code> / <code>INSERT</code> / <code>UPDATE</code> / <code>DELETE</code> に
+  条件が自動で挿入され、条件に合う行だけが対象になる。
+</p>
+<p>
+  ポイントは<strong>アプリ側で <code>WHERE owner = ...</code> を毎回書かなくてよい</strong>こと。
+  条件の付け忘れがセキュリティ事故に直結する世界で、絞り込みをデータベース側に一元化できる。
+</p>
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    U["ユーザーのクエリ"]
+    G{"テーブル権限 GRANT はあるか"}
+    R{"行ポリシーを満たすか"}
+    OUT["返る行"]
+    DENY["権限エラー"]
+    U --> G
+    G -->|なし| DENY
+    G -->|あり| R
+    R -->|満たす行だけ| OUT
+  </pre>
+  <figcaption>図 1.1: クエリは「テーブル権限（GRANT）」と「行ポリシー（RLS）」の 2 段の関門を通る</figcaption>
+</figure>
+<p>図 1.1 のように、RLS は GRANT の<strong>後段</strong>で効く。まず GRANT でそのテーブルを触れるかが
+  決まり、触れる場合に RLS が「どの行か」を絞る。</p>
+
+<h2 id="sec-1-2">1.2　GRANT（権限）との違いと関係</h2>
+<p>両者はレイヤーが違う。RLS は GRANT を置き換えるものではなく、<strong>上に重ねる</strong>ものである。</p>
+<table>
+  <thead><tr><th></th><th>GRANT（権限）</th><th>RLS（行レベル）</th></tr></thead>
+  <tbody>
+    <tr><td>絞る単位</td><td>テーブル・列（縦）</td><td>行（横）</td></tr>
+    <tr><td>問い</td><td>この表を触ってよいか</td><td>このユーザーにどの行を見せるか</td></tr>
+    <tr><td>書き方</td><td><code>GRANT SELECT ON t TO r;</code></td><td><code>CREATE POLICY … ON t USING (…);</code></td></tr>
+    <tr><td>既定</td><td>付与しなければ触れない</td><td>有効化してポリシーが無ければ全行拒否</td></tr>
+  </tbody>
+</table>
+<div class="note">
+  <strong>関係の要点</strong>
+  RLS で行を見せたくても、そもそも <code>GRANT SELECT</code> が無ければ表自体を読めない。
+  逆に <code>GRANT</code> があっても、RLS が有効なら条件に合う行しか返らない。両方を通った行だけが結果になる。
+</div>
+
+<h2 id="sec-1-3">1.3　典型的なユースケース</h2>
+<ul>
+  <li><strong>所有者ベース</strong>：各行に持ち主がいて、本人（と管理者）だけが見られる。例：文書・タスク・通知。</li>
+  <li><strong>マルチテナント</strong>：1 つのテーブルに複数テナントのデータが同居し、テナントをまたいで見えてはいけない。</li>
+  <li><strong>部門・地域スコープ</strong>：自分の部門／担当地域の行だけを見せる。</li>
+</ul>
+<p>本ガイドでは、まず<strong>所有者ベース</strong>で最短の動作を体験し（第2〜4章）、続いて実務で多い
+  <strong>マルチテナント</strong>を接続プール前提で組む（第5章）。最後にはまりどころを潰す（第6章）。</p>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li>RLS が絞るのは「行」で、GRANT が絞るのは「テーブル・列」だと言える</li>
+    <li>GRANT を通った後に RLS が効く、という順序を説明できる</li>
+    <li>自分が守りたい対象が「所有者ベース」か「マルチテナント」か見当がつく</li>
+  </ul>
+</div>
+      </article>
+      <nav class="pager">
+        <span class="pager-spacer" aria-hidden="true"></span>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <a class="next" href="ch02.html"><span class="dir">次の章 →</span><span class="ttl">第2章 準備</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">行レベルセキュリティ（RLS）実践ガイド — 実行例はローカルの PostgreSQL ビルドで検証（RLS は 9.5 以降で共通の挙動）</footer>
+</body>
+</html>

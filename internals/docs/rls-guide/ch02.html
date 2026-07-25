@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第2章 準備 | 行レベルセキュリティ（RLS）実践ガイド — PostgreSQL 18</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">行レベルセキュリティ（RLS）実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 RLS でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 行レベルセキュリティとは</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 GRANT（権限）との違いと関係</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 典型的なユースケース</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 検証用データベースとロールを作る</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルテーブルと権限</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 SET ROLE で別ユーザーを演じる</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 RLS を有効化して最初のポリシーを作る</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 ユーザーごとに見える行が変わる</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 設定を確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 ポリシーを正しく書く</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 USING と WITH CHECK</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 コマンド別・ロール別のポリシー</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 PERMISSIVE と RESTRICTIVE</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 実践：マルチテナントを作る</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 セッション変数でテナントを切り替える</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 接続プール前提の設計</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 実行計画で確認する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 所有者・スーパーユーザはバイパスする</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 デフォルト拒否とポリシーの抜け</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 GRANT との二層構造</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パフォーマンスの注意</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 コマンド早見表</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 設計チェックリスト</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第2章　準備</h1>
+        <div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>以降の章をそのまま再現できる、検証用のデータベースとロールを用意する</li>
+    <li><code>SET ROLE</code> で「別のユーザーになりきって」動作を確かめられるようになる</li>
+  </ul>
+</div>
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>PostgreSQL に<strong>スーパーユーザ</strong>（または <code>CREATEDB</code> と <code>CREATEROLE</code> 権限を持つロール）で接続できる</li>
+    <li><code>psql</code> が使える（他のクライアントでも SQL は同じ）</li>
+  </ul>
+</div>
+<p>この章で作る環境を第6章まで使い回す。まっさらな状態から始めたいので、専用のデータベースを 1 つ用意する。</p>
+
+<h2 id="sec-2-1">2.1　検証用データベースとロールを作る</h2>
+<p>専用データベース <code>rlsguide</code> と、登場人物となる 3 つのロールを作る。<code>LOGIN</code> を付けるのは、
+  あとで「そのユーザーとして」動作を確かめるためである。</p>
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: データベースとロールを作る</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>スーパーユーザで接続し、専用データベースを作る。</p>
+<div class="example"><span class="example-label">入力（psql）</span><pre><code>CREATE DATABASE rlsguide;</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>CREATE DATABASE</code></pre></div>
+      </li>
+      <li>
+        <p>作った <code>rlsguide</code> に接続し直し、3 つのロールを作る。</p>
+<div class="example"><span class="example-label">入力（psql: rlsguide）</span><pre><code>CREATE ROLE rlsguide_alice   LOGIN;
+CREATE ROLE rlsguide_bob     LOGIN;
+CREATE ROLE rlsguide_manager LOGIN;</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>CREATE ROLE
+CREATE ROLE
+CREATE ROLE</code></pre></div>
+      </li>
+    </ol>
+  </div>
+</div>
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  <code>psql</code> なら <code>\c rlsguide</code> で接続先データベースを切り替えられる。以降のコマンドは
+  すべて <code>rlsguide</code> データベース上で実行する。
+</div>
+
+<h2 id="sec-2-2">2.2　サンプルテーブルと権限</h2>
+<p>所有者ベースの題材として、文書テーブル <code>documents</code> を作る。<code>owner</code> 列には
+  「その行の持ち主のロール名」を入れる。<code>DEFAULT current_user</code> にしておくと、
+  誰かが行を追加したとき自動でその人が持ち主になる。</p>
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: テーブル・権限・初期データ</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>テーブルを作る。</p>
+<div class="example"><span class="example-label">入力</span><pre><code>CREATE TABLE documents (
+    id     int GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    owner  text NOT NULL DEFAULT current_user,
+    title  text NOT NULL
+);</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>CREATE TABLE</code></pre></div>
+      </li>
+      <li>
+        <p>3 つのロールにテーブル操作権限を与える（RLS は権限の<strong>上</strong>に乗るので、まず GRANT が要る）。</p>
+<div class="example"><span class="example-label">入力</span><pre><code>GRANT SELECT, INSERT, UPDATE, DELETE ON documents
+    TO rlsguide_alice, rlsguide_bob, rlsguide_manager;
+GRANT USAGE, SELECT ON SEQUENCE documents_id_seq
+    TO rlsguide_alice, rlsguide_bob, rlsguide_manager;</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>GRANT
+GRANT</code></pre></div>
+      </li>
+      <li>
+        <p>初期データを 3 行入れる（この時点では RLS 未設定なので誰でも全行見える）。</p>
+<div class="example"><span class="example-label">入力</span><pre><code>INSERT INTO documents (owner, title) VALUES
+  ('rlsguide_alice', 'Alice の企画書'),
+  ('rlsguide_alice', 'Alice の日報'),
+  ('rlsguide_bob',   'Bob のメモ');</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>INSERT 0 3</code></pre></div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<h2 id="sec-2-3">2.3　SET ROLE で別ユーザーを演じる</h2>
+<p>RLS の効果は「誰として実行したか」で変わる。ログインし直さなくても、<code>SET ROLE</code> で
+  現在のロールを切り替えれば、そのユーザーとしての見え方を確認できる。元に戻すのは <code>RESET ROLE</code>。</p>
+<div class="example"><span class="example-label">入力</span><pre><code>SET ROLE rlsguide_alice;
+SELECT current_user;</code></pre></div><div class="example"><span class="example-label out">出力</span><pre><code>  current_user
+----------------
+ rlsguide_alice
+(1 row)</code></pre></div>
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  <code>SET ROLE</code> は<strong>そのセッションの間だけ</strong>有効で、接続を切ると元に戻る。また
+  スーパーユーザや<strong>テーブルの所有者</strong>に切り替えて確認すると、RLS を素通りして全行見えてしまう
+  （理由は第6章）。動作確認は必ず <code>rlsguide_alice</code> のような<strong>一般ロール</strong>で行う。
+</div>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>rlsguide</code> データベースに <code>documents</code> テーブルがあり、3 行入っている</li>
+    <li><code>SET ROLE rlsguide_alice;</code> のあと <code>SELECT current_user;</code> が <code>rlsguide_alice</code> を返す</li>
+    <li>ここまで RLS はまだ有効化していない（＝いま alice は 3 行すべて見える）</li>
+  </ul>
+</div>
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch01.html"><span class="dir">← 前の章</span><span class="ttl">第1章 RLS でできること</span></a>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <a class="next" href="ch03.html"><span class="dir">次の章 →</span><span class="ttl">第3章 まず動かす（最短ルート）</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">行レベルセキュリティ（RLS）実践ガイド — 実行例はローカルの PostgreSQL ビルドで検証（RLS は 9.5 以降で共通の挙動）</footer>
+</body>
+</html>
