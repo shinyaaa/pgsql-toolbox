@@ -22,6 +22,22 @@
 - **ノート** - 自由記述のメモ欄
 - **アーカイブ** - ダッシュボードからワンクリックでアーカイブ
 
+### ドキュメントサーバー (`internals/`)
+
+生成した HTML ドキュメントを一覧・配信するサーバー (port 30002)。
+一覧ページは以下の 3 つのタブに分かれており、各タブは対応するディレクトリを配信する。
+
+| タブ | ディレクトリ | URL |
+|------|--------------|-----|
+| インターナルドキュメント | `internals/docs/<topic>/` | `/<topic>/` |
+| ユーザドキュメント | `internals/user_docs/<topic>/` | `/user/<topic>/` |
+| パッチ解説ドキュメント | `internals/patch_docs/<topic>/` | `/patch/<topic>/` |
+
+`index.html` を持つサブディレクトリが自動的にタブ内のカードとして並ぶ。
+選択したタブは URL のハッシュ (`#user` 等) と localStorage に保存される。
+`user` と `patch` は URL プレフィックスとして予約されているため、
+インターナルドキュメントのトピック名には使えない。
+
 ## 前提
 
 - Python 3.10+
@@ -230,10 +246,13 @@ pgsql-toolbox/
     pg_mcp              # CLI: MCP サーバー管理
   templates/
     index.html          # シングルページフロントエンド (Dashboard)
-  internals/            # PostgreSQL 内部構造ドキュメントサーバー (port 30002)
-    app.py              # Flask サーバー – ~/pgsql/*/postgres/docs/ を配信
+  internals/            # PostgreSQL ドキュメントサーバー (port 30002)
+    app.py              # Flask サーバー – 各カテゴリのドキュメントを配信
+    docs/               # インターナルドキュメント (URL: /<topic>/)
+    user_docs/          # ユーザドキュメント (URL: /user/<topic>/)
+    patch_docs/         # パッチ解説ドキュメント (URL: /patch/<topic>/)
     templates/
-      index.html        # ドキュメント一覧ページ
+      index.html        # ドキュメント一覧ページ (3 カテゴリのタブ)
   mcp/                  # メーリングリスト検索 MCP サーバー
     docker-compose.yml  # Docker Compose 定義
     db/                 # PostgreSQL スキーマ・Dockerfile
