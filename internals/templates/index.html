@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PostgreSQL Internals Docs</title>
+<title>PostgreSQL Docs</title>
 <style>
   :root {
     --bg: #0f1117;
@@ -125,16 +125,51 @@
   }
   .pull-status.ok { color: #4ade80; }
   .pull-status.err { color: #f87171; }
+  /* Tabs */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+    user-select: none;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-count {
+    font-family: 'SF Mono', 'Cascadia Code', monospace;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 1px 7px;
+  }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
   @media (max-width: 700px) {
     body { padding: 12px; }
     .topic-grid { grid-template-columns: 1fr; }
+    .tabs { overflow-x: auto; }
+    .tab { padding: 10px 12px; white-space: nowrap; }
   }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>PostgreSQL Internals <span>{{ topics|length }} topic{{ 's' if topics|length != 1 else '' }}</span></h1>
+  <h1 id="page-title">PostgreSQL Docs</h1>
   <div class="pull-area">
     <span id="pull-status" class="pull-status"></span>
     <button id="pull-btn" class="pull-btn" onclick="pullDocs()" title="origin から git pull してドキュメントを最新化">
@@ -143,27 +178,57 @@
   </div>
 </div>
 
-{% if not topics %}
-<div class="empty">
-  <div>ドキュメントがまだありません。</div>
-  <div>db-internals-docs スキルを使って生成してください。</div>
-  <code>internals/docs/&lt;topic&gt;/index.html</code>
-</div>
-{% else %}
-<div class="topic-grid">
-  {% for topic in topics %}
-  <a class="topic-link" href="/{{ topic.name }}/">
-    <div>
-      <span class="topic-name">{{ topic.name }}</span>
-      {% if topic.version %}<div class="topic-version">{{ topic.version }}</div>{% endif %}
-    </div>
-    <span class="open-label">Open →</span>
-  </a>
+<div class="tabs">
+  {% for cat in categories %}
+  <div class="tab{{ ' active' if loop.first }}" data-tab="{{ cat.key }}" onclick="switchTab('{{ cat.key }}')">
+    {{ cat.label }}<span class="tab-count">{{ cat.topics|length }}</span>
+  </div>
   {% endfor %}
 </div>
-{% endif %}
+
+{% for cat in categories %}
+<div class="tab-panel{{ ' active' if loop.first }}" id="tab-{{ cat.key }}">
+  {% if not cat.topics %}
+  <div class="empty">
+    <div>ドキュメントがまだありません。</div>
+    <div>{{ cat.hint }}</div>
+    <code>{{ cat.path }}</code>
+  </div>
+  {% else %}
+  <div class="topic-grid">
+    {% for topic in cat.topics %}
+    <a class="topic-link" href="{{ cat.base }}{{ topic.name }}/">
+      <div>
+        <span class="topic-name">{{ topic.name }}</span>
+        {% if topic.version %}<div class="topic-version">{{ topic.version }}</div>{% endif %}
+      </div>
+      <span class="open-label">Open →</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
 
 <script>
+const TABS = [{% for cat in categories %}'{{ cat.key }}'{{ ',' if not loop.last }}{% endfor %}];
+
+function switchTab(name) {
+  if (!TABS.includes(name)) return;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  localStorage.setItem('docsTab', name);
+  history.replaceState(null, '', '#' + name);
+}
+
+// Restore the tab from the URL hash, falling back to the last one used.
+(function () {
+  const fromHash = location.hash.slice(1);
+  const saved = localStorage.getItem('docsTab');
+  const initial = TABS.includes(fromHash) ? fromHash : (TABS.includes(saved) ? saved : TABS[0]);
+  switchTab(initial);
+})();
+
 async function pullDocs() {
   const btn = document.getElementById('pull-btn');
   const status = document.getElementById('pull-status');
