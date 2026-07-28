@@ -172,7 +172,7 @@
   <h1 id="page-title">PostgreSQL Docs</h1>
   <div class="pull-area">
     <span id="pull-status" class="pull-status"></span>
-    <button id="pull-btn" class="pull-btn" autocomplete="off" onclick="pullDocs()" title="origin から git pull してドキュメントを最新化">
+    <button id="pull-btn" class="pull-btn" onclick="pullDocs()" title="origin から git pull してドキュメントを最新化">
       <span class="icon">&#x21bb;</span> 更新
     </button>
   </div>
@@ -229,30 +229,16 @@ function switchTab(name) {
   switchTab(initial);
 })();
 
-// Firefox restores the dynamically set `disabled` state of form controls on a
-// soft reload, and serves the page from bfcache when coming Back from a doc.
-// Both leave the button stuck greyed out, so reset it whenever the page shows.
-window.addEventListener('pageshow', () => {
-  const btn = document.getElementById('pull-btn');
-  const status = document.getElementById('pull-status');
-  btn.disabled = false;
-  btn.classList.remove('loading');
-  status.className = 'pull-status';
-  status.textContent = '';
-  status.title = '';
-});
-
 async function pullDocs() {
   const btn = document.getElementById('pull-btn');
   const status = document.getElementById('pull-status');
-  if (btn.disabled) return;
   btn.disabled = true;
   btn.classList.add('loading');
   status.className = 'pull-status';
   status.textContent = '更新中…';
   status.title = '';
   try {
-    const res = await fetch('/api/pull', { method: 'POST', cache: 'no-store' });
+    const res = await fetch('/api/pull', { method: 'POST' });
     const data = await res.json();
     const out = (data.output || '').trim();
     if (data.ok) {

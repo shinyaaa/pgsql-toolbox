@@ -6,7 +6,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, make_response, render_template, send_from_directory
+from flask import Flask, abort, jsonify, render_template, send_from_directory
 
 app = Flask(__name__, template_folder="templates")
 
@@ -92,20 +92,10 @@ def _git_env():
     return env
 
 
-def _no_store(response):
-    """Keep the browser from reusing a cached copy.
-
-    Firefox otherwise serves the index from bfcache when coming Back from a
-    doc, so the topic list can be stale right after a successful update.
-    """
-    response.headers["Cache-Control"] = "no-store, max-age=0"
-    return response
-
-
 @app.route("/")
 def index():
     categories = scan_categories()
-    return _no_store(make_response(render_template("index.html", categories=categories)))
+    return render_template("index.html", categories=categories)
 
 
 @app.route("/api/pull", methods=["POST"])
