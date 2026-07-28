@@ -29,9 +29,9 @@
 
 | タブ | ディレクトリ | URL |
 |------|--------------|-----|
-| インターナルドキュメント | `internals/docs/<topic>/` | `/<topic>/` |
-| ユーザドキュメント | `internals/user_docs/<topic>/` | `/user/<topic>/` |
-| パッチ解説ドキュメント | `internals/patch_docs/<topic>/` | `/patch/<topic>/` |
+| Internal (インターナルドキュメント) | `internals/docs/<topic>/` | `/<topic>/` |
+| User (ユーザドキュメント) | `internals/user_docs/<topic>/` | `/user/<topic>/` |
+| Patch (パッチ解説ドキュメント) | `internals/patch_docs/<topic>/` | `/patch/<topic>/` |
 
 `index.html` を持つサブディレクトリが自動的にタブ内のカードとして並ぶ。
 選択したタブは URL のハッシュ (`#user` 等) と localStorage に保存される。

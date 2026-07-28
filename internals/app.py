@@ -20,21 +20,21 @@ REPO_DIR = BASE_DIR.parent
 CATEGORIES = [
     {
         "key": "internals",
-        "label": "インターナルドキュメント",
+        "label": "Internal",
         "dir": "docs",
         "prefix": "",
         "hint": "db-internals-docs スキルを使って生成してください。",
     },
     {
         "key": "user",
-        "label": "ユーザドキュメント",
+        "label": "User",
         "dir": "user_docs",
         "prefix": "user",
         "hint": "ユーザ向けドキュメントを生成してください。",
     },
     {
         "key": "patch",
-        "label": "パッチ解説ドキュメント",
+        "label": "Patch",
         "dir": "patch_docs",
         "prefix": "patch",
         "hint": "パッチ解説ドキュメントを生成してください。",
