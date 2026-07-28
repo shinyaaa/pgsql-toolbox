@@ -16,15 +16,18 @@ PostgreSQL をはじめとするソフトウェアの**機能の使い方**を�
 
 内部実装を解き明かす [db-internals-docs] の姉妹スキル。あちらが「ソースコードで裏づける内部構造」
 なら、こちらは「**実際に動かして裏づける使い方**」を扱う。両者は同じサーバ（ポート 30002）の
-ドキュメント一覧に並び、**ユーザーガイドはティール色の見た目と「ユーザーガイド」バッジで区別**される。
+ドキュメント一覧に載るが、**タブが別**（こちらは「ユーザドキュメント」タブ）で、
+**ティール色の見た目と「ユーザーガイド」バッジ**でも区別される。
 
 ## 成果物の形
 
-`pgsql-toolbox/internals/docs/<スラッグ>/` 以下に生成する。内部構造ドキュメントと同じ場所に置くことで、
-同一の一覧ページ（`http://127.0.0.1:30002/`）に自動で並ぶ。
+`pgsql-toolbox/internals/user_docs/<スラッグ>/` 以下に生成する。一覧ページ（`http://127.0.0.1:30002/`）は
+ディレクトリでタブを分けており、`user_docs/` に置いたものが「**ユーザドキュメント**」タブに並ぶ
+（`docs/` に置くと内部構造ドキュメントのタブに混ざってしまうので注意）。公開 URL は
+`http://127.0.0.1:30002/user/<slug>/` になる。
 
 ```
-internals/docs/<slug>/
+internals/user_docs/<slug>/
 ├── index.html        ← トップページ（リード文＋章カード目次）
 ├── ch01.html         ← 第1章
 ├── ch02.html         ← 第2章
@@ -102,7 +105,7 @@ date '+%Y-%m-%d'
 - **対象バージョン**（例: PostgreSQL 18）。明示なければ最新安定版を仮定し冒頭に明記。
 - **想定読者**（例: 「SQL は書けるがこの機能は未経験」）。`{{AUDIENCE}}` に反映する。
 - **章数の目安**（既定: 5〜7 章）。
-- **出力先スラッグ**（既定: `internals/docs/<slug>/`）。内部構造ドキュメントとスラッグが衝突しないようにする。
+- **出力先スラッグ**（既定: `internals/user_docs/<slug>/`）。内部構造ドキュメントとスラッグが衝突しないようにする。
 
 ### 2. 機能調査＋実際に動かす
 公式ドキュメントで機能仕様・構文・オプションを把握し、**代表的な操作を実際に実行して出力を採取**する。
@@ -168,16 +171,17 @@ date '+%Y-%m-%d'
 - 簡易チェック例:
   ```sh
   # 章ファイルの一覧と index からの参照漏れ確認
-  ls internals/docs/<slug>/ch*.html
-  grep -o 'href="ch[0-9]*\.html' internals/docs/<slug>/index.html | sort -u
+  ls internals/user_docs/<slug>/ch*.html
+  grep -o 'href="ch[0-9]*\.html' internals/user_docs/<slug>/index.html | sort -u
 
   # doc-kind メタの確認（user が返れば OK）
-  grep -o 'doc-kind" content="[a-z]*"' internals/docs/<slug>/index.html
+  grep -o 'doc-kind" content="[a-z]*"' internals/user_docs/<slug>/index.html
 
   # 全章の Mermaid ブロック数を確認
-  grep -c 'class="mermaid"' internals/docs/<slug>/ch*.html
+  grep -c 'class="mermaid"' internals/user_docs/<slug>/ch*.html
   ```
-- 可能なら `http://127.0.0.1:30002/<slug>/` を開いて、ユーザーガイドとして区別表示されるか確認する。
+- 可能なら `http://127.0.0.1:30002/user/<slug>/` を開いて、「ユーザドキュメント」タブに
+  ユーザーガイドとして並ぶか確認する。
 
 ## 重要な原則
 
