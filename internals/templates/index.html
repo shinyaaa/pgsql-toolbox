@@ -241,16 +241,20 @@ async function pullDocs() {
     const res = await fetch('/api/pull', { method: 'POST' });
     const data = await res.json();
     const out = (data.output || '').trim();
+    // `changed` tells whether anything actually arrived; older replies without
+    // the field fall back to sniffing git's own wording.
+    const changed = 'changed' in data ? data.changed : !/already up( |-)to( |-)date/i.test(out);
     if (data.ok) {
-      if (/already up( |-)to( |-)date/i.test(out)) {
-        status.textContent = '最新です';
-        status.classList.add('ok');
-        btn.disabled = false;
-        btn.classList.remove('loading');
-      } else {
+      status.title = out;
+      if (changed) {
         status.textContent = '更新しました。再読み込み中…';
         status.classList.add('ok');
         setTimeout(() => location.reload(), 700);
+      } else {
+        status.textContent = out.startsWith('Already up to date') ? '最新です' : (out.split('\n')[0] || '最新です');
+        status.classList.add('ok');
+        btn.disabled = false;
+        btn.classList.remove('loading');
       }
     } else {
       status.textContent = (out.split('\n')[0]) || '更新に失敗しました';
