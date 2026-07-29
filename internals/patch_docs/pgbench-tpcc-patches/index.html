@@ -1,0 +1,1323 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="patch">
+  <title>pgbench 5パッチ精読ノート — PostgreSQL 20devel · e395fbd32a0 · 2026-07-28</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ede9fe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#7c3aed',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#faf8ff',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f5f3ff',
+        clusterBorder:     '#c4b5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgbench 5パッチ精読ノート</a>
+    <span class="doc-kind-badge">パッチ解説</span>
+    <span class="version-badge">PostgreSQL 20devel · e395fbd32a0 · 2026-07-28</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li>
+          <a class="chap-title" href="#p-gset-null">0001 \gset の NULL</a>
+          <ol class="sect">
+            <li><a href="#p-gset-null-problem">問題</a></li>
+            <li><a href="#p-gset-null-design">設計</a></li>
+            <li><a href="#p-gset-null-code">仕組み</a></li>
+            <li><a href="#p-gset-null-gotchas">注意</a></li>
+            <li><a href="#p-gset-null-tests">検証</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="#p-sleep-expr">0002 \sleep の式</a>
+          <ol class="sect">
+            <li><a href="#p-sleep-expr-problem">問題</a></li>
+            <li><a href="#p-sleep-expr-design">設計</a></li>
+            <li><a href="#p-sleep-expr-code">仕組み</a></li>
+            <li><a href="#p-sleep-expr-gotchas">注意</a></li>
+            <li><a href="#p-sleep-expr-tests">検証</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="#p-while">0003 \while ループ</a>
+          <ol class="sect">
+            <li><a href="#p-while-problem">問題</a></li>
+            <li><a href="#p-while-design">設計</a></li>
+            <li><a href="#p-while-code">仕組み</a></li>
+            <li><a href="#p-while-gotchas">注意</a></li>
+            <li><a href="#p-while-tests">検証</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="#p-percentiles">0004 パーセンタイル</a>
+          <ol class="sect">
+            <li><a href="#p-percentiles-problem">問題</a></li>
+            <li><a href="#p-percentiles-design">設計</a></li>
+            <li><a href="#p-percentiles-code">仕組み</a></li>
+            <li><a href="#p-percentiles-gotchas">注意</a></li>
+            <li><a href="#p-percentiles-tests">検証</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="#p-warmup">0005 ウォームアップ</a>
+          <ol class="sect">
+            <li><a href="#p-warmup-problem">問題</a></li>
+            <li><a href="#p-warmup-design">設計</a></li>
+            <li><a href="#p-warmup-code">仕組み</a></li>
+            <li><a href="#p-warmup-gotchas">注意</a></li>
+            <li><a href="#p-warmup-tests">検証</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="#quiz">理解度チェック</a>
+        </li>
+
+      </ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>pgbench 5パッチ精読ノート</h1>
+        <p class="version-hero">postgres / src/bin/pgbench — patch series 0001–0005</p>
+        <p class="lead">TPC-C ライクなワークロードを pgbench のカスタムスクリプトで書こうとして足りなかった機能を、5 本のパッチとして実装した。このノートは各コミットを「問題 → 設計 → コード → 落とし穴 → テスト」の順に読み解き、最後に 20 問の理解度チェックで確認する。</p>
+      </div>
+
+      <h2>このドキュメントの読み方</h2>
+      <p>5 本は独立したパッチで、順に積んである。0001 と 0002 はスクリプト言語の穴を塞ぐ小さな修正、0003 が本命のループ構文、0004 と 0005 は測定側の機能である。各章の「設計」では採用した案と捨てた案を並べている。pgbench のようにコードが小さいツールでは、なぜその実装でないと壊れるのかが分かって初めてパッチを理解したと言える。読み進めるときは、クライアントの状態機械 advanceConnectionState() が CSTATE_START_COMMAND → executeMetaCommand() → CSTATE_END_COMMAND と回っていること、統計は processXactStats() に集約されることの 2 点を頭に置くと迷わない。</p>
+      <table><tr><th>ベースコミット</th><td>e395fbd32a0</td></tr><tr><th>パッチ本数</th><td>5 本 (0001 … 0005)</td></tr><tr><th>総差分</th><td>7 ファイル, 1,466 行追加, 199 行削除</td></tr><tr><th>TAP テスト</th><td>871 passed, 0 failed (001 + 002)</td></tr><tr><th>検証</th><td>クリーンなベースへの git am、W=2 の TPC-C ライク実行、整合性チェック 7/7</td></tr></table>
+
+
+      <section class="patch" id="p-gset-null">
+        <p class="eyebrow"><span class="seq">0001</span><span class="sep">/</span><span>\gset の NULL</span></p>
+        <h2>pgbench の \gset / \aset が SQL NULL を null 値として保存する</h2>
+        <p class="lead">readCommandResponse() が結果列を常に PQgetvalue() で取得していたため、SQL NULL は空文字列として変数に入り、その変数を式で使った瞬間にクライアントが abort していた。PQgetisnull() で分岐し、NULL の列だけ setNullValue()+putVariableValue() で格納することで、`\set varname NULL` と完全に同じ null 値になる。</p>
+        <dl class="facts"><div><dt>コミット</dt><dd>cb24dfdf151</dd></div><div><dt>件名</dt><dd>Make pgbench \gset and \aset store SQL NULL as the null value</dd></div><div><dt>差分</dt><dd>3 files <span class="plus">+117</span> <span class="minus">&minus;3</span></dd></div></dl>
+
+<h3 class="step" id="p-gset-null-problem"><span class="step-mark">問題</span>何が足りなかったか</h3>
+        <p>readCommandResponse() の \gset / \aset 格納ループは、全列を PQgetvalue() で取り出して putVariable() に渡していた。PQgetvalue() は SQL NULL に対して空文字列を返すが、pgbench の式言語では空文字列は値として不正である (makeVariableValue() は slen==0 で無条件に false を返す)。そのため NULL を捕まえた変数を最初に式で使った時点で「evaluation of meta-command failed」となり、これは ESTATUS_META_COMMAND_ERROR、つまり canRetryError() が偽を返す非リトライ系エラーなのでクライアントがそこで恒久的に停止する。TPC-C の Delivery のように空の district から min(no_o_id) を取るスクリプトでは、負荷試験の途中でクライアントが1本ずつ静かに死んでいく。式言語自体は PGBT_NULL・IS NULL・三値論理を最初から持ち `\set var NULL` も書けるのに、\gset だけが null 値を生成できない producer だった。</p>
+<figure class="term">
+<figcaption>実行例</figcaption>
+<pre><code>$ cat null.sql
+SELECT NULL AS nv \gset
+\set i debug(:nv)
+
+$ pgbench -n -t 1 -f null.sql
+pgbench (20devel)
+pgbench: error: client 0 aborted in command 1 (set) of script 0; evaluation of meta-command failed
+... (集計出力) ...
+number of transactions actually processed: 0/1
+pgbench: error: Run was aborted; the above results are incomplete.</code></pre>
+</figure>
+<p class="code-note">makeVariableValue() は空文字列について何もログを出さないので、メッセージだけからは「NULL が原因」と分からない。パッチ後は同じスクリプトが debug(script=0,command=2): null を出して正常終了する (processed: 1/1)。</p>
+
+<h3 class="step" id="p-gset-null-design"><span class="step-mark">設計</span>採った道と捨てた道</h3>
+        <div class="choices"><div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>NULL の列は setNullValue() で PgBenchValue を作り putVariableValue() で格納する。非 NULL の列は従来どおり putVariable(PQgetvalue(...))。</p>
+<p>putVariableValue() は svalue を free して NULL にし value をそのまま代入するので、結果の内部表現は `\set var NULL` が作るもの (svalue=NULL, value.type=PGBT_NULL) と1バイトも違わない。遅延パース (makeVariableValue) を一切経由せず、格納時点で null 値が確定する。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>putVariable(&amp;st-&gt;variables, ..., "NULL") と文字列 "NULL" を格納する案。makeVariableValue() が pg_strcasecmp(svalue, "null") で null 値に変換するので式の上では動いてしまうが、svalue には4文字の "NULL" が残り value.type は PGBT_NO_VALUE のままで、`\set var NULL` の表現と一致しない。目標が「\set var NULL と等価にする」ことなので、たまたま動く表現を選ぶ理由がない。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>拡張/prepared モードのパラメータバインドには一切手を入れず、ドキュメントに制限として明記するだけにする。</p>
+<p>getQueryParams() は getVariable() の戻り値をそのまま libpq に渡すだけで、getVariable() は PGBT_NULL を "NULL" という文字列にレンダリングして svalue にキャッシュする。したがって -M prepared では :nv は4文字の文字列 "NULL" としてバインドされる (実機確認: INSERT INTO t VALUES (:nv) の結果は t = 'NULL')。これは \gset 起因ではなく `\set v NULL` の既存挙動そのもので、\gset 経由の PGBT_NULL は表現が同一なので新たな乖離は生じない。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>getQueryParams() で PGBT_NULL のとき libpq に NULL ポインタを渡し、本物の SQL null をバインドする案。これは既存の `\set v NULL` の挙動 (現在は invalid input syntax for type integer: "NULL" で失敗する) を変えてしまい、互換性議論を伴うので独立したパッチ・スレッドに属する。なお未定義変数は既に NULL ポインタ経由で本物の SQL NULL がバインドされるという非対称が存在しており、それも含めて別途整理すべき話題。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>NULL 判定は PQgetisnull(res, ntuples - 1, fld)。既存の PQgetvalue(res, ntuples - 1, fld) と同じセルを見る。</p>
+<p>この格納ループは \gset と \aset で共有されている。\aset は行数を制限せず「最後の行を残す」仕様なので、判定セルと格納セルがずれると変数の値と NULL 判定が食い違う。\gset は ntuples==1 が保証されているので結果的に同じセルになる。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>0 行目を見る案、あるいは「結果セット内に1つでも NULL があれば null」とする案。前者は \aset で最終行以外を見てしまい、ORDER BY ... NULLS LAST/FIRST を切り替えるだけで値と NULL フラグが矛盾する。後者は \aset の「最後の行を残す」仕様そのものと矛盾する。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>サーバが返した空文字列は空文字列のまま格納する。SQL NULL だけを null 値に写す。</p>
+<p>'' と NULL は別の値であり、両者を区別できるようにすること自体がこのパッチの目的の一つ。TAP テストでも :es を引用符の中に埋めて '[]' が入ることを確認している。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>makeVariableValue() の slen==0 のケースも null 値にマップして「式で使えない値」を一掃する案。空文字列を捕まえたスクリプトが黙って NULL 扱いになるうえ、\gset が復元したばかりの区別を再び潰す。空文字列を式で使うと今も abort するが、それは makeVariableValue() 側の別問題として残す。</p>
+</div>
+</div>
+
+<h3 class="step" id="p-gset-null-code"><span class="step-mark">仕組み</span>コードを読む</h3>
+<figure>
+<pre class="mermaid">flowchart TD
+  A["gset/aset が受け取った結果セット"] --> B{"PQgetisnull(res, ntuples-1, fld)"}
+  B -- "真" --> C["setNullValue + putVariableValue&lt;br/>svalue=NULL, type=PGBT_NULL"]
+  B -- "偽" --> D["putVariable(PQgetvalue)&lt;br/>svalue=文字列, type=PGBT_NO_VALUE"]
+  C --> E["式評価: 値をそのまま使用&lt;br/>IS NULL が真になる"]
+  C --> F["getVariable: 引用符なしの NULL を生成"]
+  D --> G["式評価: makeVariableValue&lt;br/>空文字列なら false で abort"]
+  D --> H["getVariable: 文字列をそのまま返す"]
+  F --> I["simple: SQL の NULL リテラル&lt;br/>extended/prepared: 4文字の文字列 NULL"]</pre>
+</figure>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / readCommandResponse() — 格納ループの本体 (パッチの唯一の機能変更点)</figcaption>
+<pre><code>						/*
+						 * Store the last row&#x27;s value, mapping SQL NULL to the
+						 * null value and anything else to a string.
+						 */
+						if (PQgetisnull(res, ntuples - 1, fld))
+						{
+							PgBenchValue nullval;
+
+							setNullValue(&amp;nullval);
+							ok = putVariableValue(&amp;st-&gt;variables,
+												  meta == META_ASET ? &quot;aset&quot; : &quot;gset&quot;,
+												  varname, &amp;nullval);
+						}
+						else
+							ok = putVariable(&amp;st-&gt;variables,
+											 meta == META_ASET ? &quot;aset&quot; : &quot;gset&quot;,
+											 varname,
+											 PQgetvalue(res, ntuples - 1, fld));</code></pre>
+</figure>
+<p class="code-note">PQgetisnull() と PQgetvalue() が同じ (ntuples - 1, fld) を指しているのが要点。\aset は各結果セットの最終行を残すので、この一致が崩れると値と NULL 判定がずれる。パッチは戻り値を bool ok にまとめ、既存の「error storing into variable」エラー分岐 (ESTATUS_META_COMMAND_ERROR → goto error) を両パスで共有している。ループの外側は PGRES_TUPLES_OK かつ (is_last &amp;&amp; META_GSET) または META_ASET のときだけ入る点、\aset で 0 行の結果は手前で break される点は変わっていない。</p>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / putVariableValue()</figcaption>
+<pre><code>/* Assign a value to a variable, creating it if need be */
+/* Returns false on failure (bad name) */
+static bool
+putVariableValue(Variables *variables, const char *context, char *name,
+				 const PgBenchValue *value)
+{
+	Variable   *var;
+
+	var = lookupCreateVariable(variables, context, name);
+	if (!var)
+		return false;
+
+	free(var-&gt;svalue);
+	var-&gt;svalue = NULL;
+	var-&gt;value = *value;
+
+	return true;
+}</code></pre>
+</figure>
+<p class="code-note">putVariable() が svalue に文字列を入れて value.type = PGBT_NO_VALUE にする (= 遅延パース待ち) のに対し、putVariableValue() は svalue を捨てて NULL にし、値を直接確定させる。だから \gset 由来の null 変数は svalue=NULL / value.type=PGBT_NULL となり、`\set v NULL` (executeMetaCommand の META_SET も evaluateExpr の結果を putVariableValue で入れる) と同一表現になる。context 引数は "gset" / "aset" で、不正な変数名のときのエラーメッセージにだけ使われる。</p>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / makeVariableValue() — 旧挙動が abort していた理由</figcaption>
+<pre><code>makeVariableValue(Variable *var)
+{
+	size_t		slen;
+
+	if (var-&gt;value.type != PGBT_NO_VALUE)
+		return true;			/* no work */
+
+	slen = strlen(var-&gt;svalue);
+
+	if (slen == 0)
+		/* what should it do on &quot;&quot;? */
+		return false;
+
+	if (pg_strcasecmp(var-&gt;svalue, &quot;null&quot;) == 0)
+	{
+		setNullValue(&amp;var-&gt;value);
+	}</code></pre>
+</figure>
+<p class="code-note">evaluateExpr() の ENODE_VARIABLE はここを通る。旧コードでは NULL が "" で入っていたので slen==0 の枝でメッセージも出さずに false を返し、呼び出し元の executeMetaCommand() が commandFailed("evaluation of meta-command failed") → CSTATE_ABORTED → ESTATUS_META_COMMAND_ERROR に落ちていた。冒頭の value.type != PGBT_NO_VALUE の早期 return により、putVariableValue() で入れた PGBT_NULL はここを素通りする。なお pg_strcasecmp(svalue, "null") の枝があるため、サーバが返した文字列 'null' も式の上では null になる (この副作用は本パッチでは変わらない)。</p>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / getVariable() — SQL テキストへの埋め込みとパラメータバインド</figcaption>
+<pre><code>	if (var-&gt;svalue)
+		return var-&gt;svalue;		/* we have it in string form */
+
+	/* We need to produce a string equivalent of the value */
+	Assert(var-&gt;value.type != PGBT_NO_VALUE);
+	if (var-&gt;value.type == PGBT_NULL)
+		snprintf(stringform, sizeof(stringform), &quot;NULL&quot;);
+	else if (var-&gt;value.type == PGBT_BOOLEAN)
+		snprintf(stringform, sizeof(stringform),
+				 &quot;%s&quot;, var-&gt;value.u.bval ? &quot;true&quot; : &quot;false&quot;);
+	else if (var-&gt;value.type == PGBT_INT)
+		snprintf(stringform, sizeof(stringform),
+				 INT64_FORMAT, var-&gt;value.u.ival);
+	else if (var-&gt;value.type == PGBT_DOUBLE)
+		snprintf(stringform, sizeof(stringform),
+				 &quot;%.*g&quot;, DBL_DIG, var-&gt;value.u.dval);
+	else						/* internal error, unexpected type */
+		Assert(0);
+	var-&gt;svalue = pg_strdup(stringform);
+	return var-&gt;svalue;</code></pre>
+</figure>
+<p class="code-note">simple モードの変数展開 (assignVariables) も、拡張/prepared モードの getQueryParams() も、どちらもこの関数を通る。PGBT_NULL は引用符なしの NULL という4文字にレンダリングされ、svalue にキャッシュされる。simple モードでは INSERT INTO t VALUES (:nv) がそのまま SQL の NULL リテラルになるので本物の SQL NULL が入るが、getQueryParams() は params[i] にこの4文字文字列を渡すだけなので、prepared モードでは text 列に 'NULL' という文字列が入る。パッチが getQueryParams() に触れていないのはこの差を意図的に据え置いたため。</p>
+
+<h3 class="step" id="p-gset-null-gotchas"><span class="step-mark">注意</span>落とし穴</h3>
+        <ul class="notes warn-list"><li><h4>-M extended / prepared では本物の SQL NULL にならない</h4><p>getQueryParams() は getVariable() の戻り値をそのまま渡すので、PGBT_NULL 変数は4文字の文字列 "NULL" としてバインドされる。実機確認: SELECT NULL AS nv \gset の後に -M prepared で INSERT INTO t VALUES (:nv) すると t = 'NULL' (IS NULL は偽)。int 列なら invalid input syntax for type integer: "NULL" になる。これは `\set v NULL` の既存挙動と同じで本パッチが悪化させたわけではないが、simple モード (引用符なし NULL リテラル → 本物の SQL NULL) とモードで結果が変わる点は罠。ドキュメントに明記されている。</p></li>
+<li><h4>未定義変数だけが本物の SQL NULL をバインドするという非対称</h4><p>getQueryParams() は getVariable() が NULL ポインタを返したとき (= 変数が存在しない) それをそのまま PQsendQueryParams に渡すため、-M prepared で :undefvar を使うと libpq が SQL NULL としてバインドする (実機確認: 行の x IS NULL が真)。つまり「定義された NULL 値」は文字列 "NULL"、「未定義」は本物の NULL、という逆転が既存で存在する。この整理は別パッチ案件。</p></li>
+<li><h4>simple モードの補間は引用符なしなので、引用符の中に置くと4文字の文字列になる</h4><p>NULL 変数は SQL テキストに NULL という裸の語として埋め込まれる。VALUES (:nv) なら SQL NULL だが、VALUES ('[:nv]') と書くと '[NULL]' という文字列になる。TAP テストは空文字列側を '[:es]' で確認していて、引用符文脈では NULL / '' の扱いが根本的に違うことを示している。</p></li>
+<li><h4>\aset で結果が 0 行のときは変数が NULL にならず、そもそも設定されない</h4><p>格納ループの手前に `else if (meta == META_ASET &amp;&amp; ntuples &lt;= 0) break;` (coldly skip empty result) があるため、0 行の結果では変数が作られない。実機確認: SELECT 1 AS z WHERE false \aset の後に debug(:z) すると undefined variable "z" で abort する。「行が無い」と「行はあるが NULL」は別物であり、このパッチは後者しか救わない。</p></li>
+<li><h4>サーバが返した文字列 'null' は式の上で null と区別できない</h4><p>makeVariableValue() が pg_strcasecmp(svalue, "null") で null 値へ変換するため、SELECT 'null'::text AS v, 'NuLl'::text AS w \gset の後 debug(:v) も debug(:w) も null を出す (実機確認)。区別が完全に戻ったのは NULL と '' の間だけで、NULL と文字列 'null' の間ではない。ただし SQL テキストへ補間する経路は svalue をそのまま使うので、そちらでは 'null' のまま残る。</p></li>
+<li><h4>旧挙動は --max-tries でも --continue-on-error でも救えなかった</h4><p>空文字列変数の式評価失敗は ESTATUS_META_COMMAND_ERROR になる。canRetryError() が真を返すのは ESTATUS_SERIALIZATION_ERROR と ESTATUS_DEADLOCK_ERROR だけ、canContinueOnError() が扱うのは ESTATUS_OTHER_SQL_ERROR だけなので、どちらのオプションも効かずクライアントが落ちて「Run was aborted」になる。だからこれは単なる不便ではなく、長時間ベンチを静かに壊す罠だった。</p></li>
+<li><h4>互換性: 以前 NULL を補間していたスクリプトの結果が変わる</h4><p>旧挙動では NULL 列は "" になり、SQL テキストに補間すると VALUES () のような構文エラーを起こすのが普通だった。パッチ後は NULL が埋まるので構文エラーが消え、SQL としては通る。式で使わず補間だけしていた稀なスクリプトは挙動が変わりうるので、コミットメッセージにも behavior change として明記されている。</p></li>
+<li><h4>パイプラインモードとの相互作用は無い</h4><p>\gset / \aset はパイプラインモードで禁止されている (実行時にエラー) ため、この変更がパイプライン中の結果処理に絡むことはない。readCommandResponse() の PGRES_PIPELINE_SYNC 分岐は varprefix == NULL の経路であり、格納ループには到達しない。</p></li>
+</ul>
+
+<h3 class="step" id="p-gset-null-tests"><span class="step-mark">検証</span>テストが固定していること</h3>
+        <ul class="notes ok-list"><li><h4>NULL を捕まえた変数が式で使えること、および IS NULL が真になること (simple と prepared の両モード)</h4><p>src/bin/pgbench/t/001_pgbench_with_server.pl の "pgbench gset command with NULL ($mode)" ケース。スクリプト 001_pgbench_gset_null_$mode で SELECT NULL AS nv \gset → \set i debug(:nv) → \if :nv IS NULL → \set i debug(:nv IS NULL) → \endif を実行し、終了コード 0、stdout に processed: 1/1、stderr に command=2.: null と command=4.: boolean true を要求する。command=4 の debug が出ること自体が \if の枝が取られた証拠になっている (旧コードならそもそも command=2 で abort する)。</p></li>
+<li><h4>NULL と空文字列が補間先で別物のまま残ること</h4><p>同ファイルの "pgbench gset NULL interpolation" ケース。UNLOGGED TABLE gset_null_tab を作り、SELECT NULL AS nv, ''::text AS es \gset の後 INSERT ... VALUES (1, :nv) と VALUES (2, '[:es]') を実行。その後 safe_psql で t IS NULL (id=1) が 't'、t = '[]' (id=2) が 't' であることを検証する。引用符の外の NULL は SQL NULL に、引用符の中の空文字列は空文字列になる。</p></li>
+<li><h4>拡張/prepared モードでは NULL 変数が文字列 "NULL" としてバインドされるという文書化済みの制限</h4><p>同ファイルの "pgbench gset NULL as query parameter" ケース。-M prepared で SELECT NULL AS nv \gset → INSERT INTO gset_null_tab VALUES (3, :nv) を実行し、safe_psql で t = 'NULL' が 't' であることを確認する。制限を明示的に固定しているので、将来 getQueryParams() を変える場合は意図的な変更としてこのテストを直すことになる。</p></li>
+<li><h4>\aset が判定するのは各結果セットの最終行であること</h4><p>同ファイルの "pgbench aset command with NULL" ケース。SELECT * FROM (VALUES (1), (NULL)) AS v(n) ORDER BY 1 NULLS LAST \aset の後は debug が null、NULLS FIRST に変えた後は int 1 になることを stderr の command=2.: null / command=4.: int 1 で確認する。PQgetisnull の行指定を 0 などに変えると、この2ケースが同時には通らない。</p></li>
+</ul>
+      </section>
+      <section class="patch" id="p-sleep-expr">
+        <p class="eyebrow"><span class="seq">0002</span><span class="sep">/</span><span>\sleep の式</span></p>
+        <h2>pgbench: \sleep の引数に式を書けるようにする</h2>
+        <p class="lead">\sleep が受け付けるのを整数定数か :変数 だけから \set と同じ式全体に広げ、末尾の us/ms/s も従来どおり書けるようにした。字句解析器が式の先頭に MODE_SLEEP_EXPR 疑似トークンを注入し、文法側の別 production が単位を読んで倍率を式に畳み込むので、実行時は cmd-&gt;expr を評価して整数化するだけになる。</p>
+        <dl class="facts"><div><dt>コミット</dt><dd>3678dd6430f</dd></div><div><dt>件名</dt><dd>pgbench: Accept a full expression as the argument of \sleep</dd></div><div><dt>差分</dt><dd>7 files <span class="plus">+116</span> <span class="minus">&minus;120</span></dd></div></dl>
+
+<h3 class="step" id="p-sleep-expr-problem"><span class="step-mark">問題</span>何が足りなかったか</h3>
+        <p>TPC-C の think time は指数分布 (仕様 5.2.5.4) なので、待ち時間は実行のたびに計算する必要がある。ところが \sleep の引数は整数定数か単一の :変数 参照しか許されず、パーサが自前で argv を切って atoi する専用コードになっていた。そのため計算した待ち時間を使うには一度 \set でスクラッチ変数に入れる二行のイディオムが必須で、スクリプトごとに変数名前空間を汚す。式を評価するほかのメタコマンド (\set/\if/\elif) との一貫性もなかった。</p>
+<figure class="term">
+<figcaption>実行例</figcaption>
+<pre><code>$ cat think.sql
+\sleep least(int(-12000.0 * ln(double(random(1,1000000)) / 1000000.0)), 120000) ms
+$ pgbench -f think.sql ...
+pgbench: error: think.sql:1: too many arguments in command &quot;sleep&quot;</code></pre>
+</figure>
+<p class="code-note">単語で argv に分割していたため。1 単語に詰めた \sleep (1+1) でも "invalid sleep time, must be an integer" で読み込み時に落ちる。したがって従来は \set think_ms least(int(-12000.0 * ln(double(random(1,1000000)) / 1000000.0)), 120000) \sleep :think_ms ms と二行書くしかなかった。</p>
+
+<h3 class="step" id="p-sleep-expr-design"><span class="step-mark">設計</span>採った道と捨てた道</h3>
+        <div class="choices"><div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>単位は「式の後から読む」のではなく、字句解析器が式の先頭に MODE_SLEEP_EXPR 疑似トークンを注入し、文法に result: MODE_SLEEP_EXPR expr opt_unit という別 production を持たせて解決する。expr_scanner_init() に sleep_expr フラグを追加し、process_backslash_command() は META_SLEEP を \set/\if/\elif と同じ式パースの枝で処理する。</p>
+<p>bison の LALR パーサは式を還元し終えるために必ず 1 トークン先読みする。したがって expr_yyparse() を呼んだ時点で末尾の単位トークンはパーサに食われており、「パースが終わってから残りの単語を単位として見る」ことは原理的にできない。先頭にモード選択トークンを入れれば、パーサはどの production にいるかを最初から知っているので、単位を文法の一部として自然に扱える。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>元スペックの本命案「行の最後の単語が us/ms/s かを先に単語走査で調べ、その手前までの範囲を式スキャナで再パースする」。exprscan.l は部分バッファのスキャンをサポートしないと明記しており (expr_scanner_get_substring 付近のコメント)、expr_scanner_init は進行中のスキャン状態を差し替えるだけである。仮に別の PsqlScanState を作ると、syntax_error のオフセットはスクリプト全体のバッファ基準なので行番号とキャレット表示が壊れる。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>単位を曖昧さなく区切るための「\sleep ( expression ) [unit]」という括弧付き構文も採らない。単位サポートは文法側に置く以外に道はない、と結論した。</p>
+<p>opt_unit を FUNCTION トークンで受ける形にすれば、既存文法では完全な expr の直後に裸の FUNCTION が来ることはあり得ない (FUNCTION は必ず '(' を伴うプライマリの先頭にしか現れない) ため衝突が生じない。exprparse.y には %expect 0 があるので、もし競合を作ってしまえばビルドが失敗して即座に気づける。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>括弧付きフォールバック。'(' expr ')' 自体が expr の production なので、')' を読んだ後もパーサは「式が続くのか」を判断するために次のトークンを先読みする (例: ( 1 ) + 1)。実際 \set x 1 ms も \set x 1 2 も末尾トークンにキャレットが立って syntax error になる。つまり括弧では先読み問題を回避できない。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>単位の倍率は Command に保持せず、パース時に make_op(yyscanner, "*", $2, make_integer_constant($3)) で式木に畳み込む。実行時の evaluateSleep() は evaluateExpr() + coerceToInt() だけになり、usec の型は int から int64 に広げる。</p>
+<p>既存の "*" 関数がオーバーフロー検査 (bigint mul out of range) と int/double の型昇格を持っているので、掛け算のためのコードを新しく書かずに済む。畳み込みは式木の根に対して行われるため、単位は式全体に掛かる: \sleep 1 + 1 ms は 2 ミリ秒であり、テキスト的に最後の項だけに掛かることはない。Command 構造体に新フィールドも要らない。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>ベーススペックの「cmd-&gt;expr を再利用しつつ単位は argv に残し、実行時に evaluateSleep で掛ける」案。Command に単位を保持する必要が生じるうえ、int64 のオーバーフロー検査を手書きすることになり、既存の演算子実装と重複する。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>負の値はエラーにせず 0 にクランプし、その旨をドキュメントに書く。エラーメッセージの完全互換は諦め、「失敗する段階 (読み込み時か実行時か)」の互換だけを保証する。ただし "unrecognized time unit, must be us, ms or s" は一字一句維持する。</p>
+<p>\sleep -1 s は現状も受理され (旧コードは符号をスキップしていた)、sleep_until が過去になるだけの no-op だった。エラー化は受理されていた書式の非互換になる。一方メッセージ本文は bison が出す診断に変わるため維持不可能で、missing argument / too many arguments / sleep: undefined variable の 3 つは文言が変わる。これらは t/001 の正規表現でしか固定されておらず API ではない。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>スペック原文の「ゴミ入力に対する現在のエラー挙動を含めた完全な後方互換は必須」。パース診断が bison 由来になった時点で文言一致は達成不能なので、段階パリティ (壊れた引数・引数なし・余分なトークン・不正な単位は読み込み時、未定義変数や型不正は実行時) に要件を弱めた。</p>
+</div>
+</div>
+
+<h3 class="step" id="p-sleep-expr-code"><span class="step-mark">仕組み</span>コードを読む</h3>
+<figure>
+<pre class="mermaid">flowchart TD
+    A["スクリプト読み込み: process_backslash_command"] --> B["expr_scanner_init に sleep_expr=true を渡す"]
+    B --> C["yylex 冒頭で MODE_SLEEP_EXPR を1回だけ注入"]
+    C --> D["文法 result: MODE_SLEEP_EXPR expr opt_unit"]
+    D --> E["opt_unit が us/ms/s を倍率へ変換、未知の単位は読み込み時エラー"]
+    E --> F["式木の根に 掛け算ノード を被せて cmd の expr に格納"]
+    F --> G["実行時: executeMetaCommand の META_SLEEP 分岐"]
+    G --> H["evaluateSleep: evaluateExpr と coerceToInt、負値は0にクランプ"]
+    H --> I["sleep_until = now + usec、桁あふれは INT64_MAX に飽和"]
+    I --> J["CSTATE_SLEEP で待機し、満了後 CSTATE_END_COMMAND へ"]</pre>
+</figure>
+<figure class="code">
+<figcaption>exprscan.l / yylex() 冒頭の共通アクション</figcaption>
+<pre><code>		/* Reset was-newline flag */
+		last_was_newline = false;
+
+		/*
+		 * On the first call for a \sleep argument, emit the mode-selection
+		 * token that makes the grammar accept a time unit after the
+		 * expression.
+		 */
+		if (sleep_expr_pending)
+		{
+			sleep_expr_pending = false;
+			return MODE_SLEEP_EXPR;
+		}</code></pre>
+</figure>
+<p class="code-note">flex 規則にマッチする前に走る yylex() の先頭コード。expr_scanner_init(..., sleep_expr) が立てたファイルスコープの sleep_expr_pending が真なら、入力を一切消費せずに MODE_SLEEP_EXPR を 1 回だけ返し、フラグを下ろす。expr_source / expr_command といった既存の静的変数と同じ流儀で、スキャナの状態機械には手を入れていない。フラグは expr_scanner_init が毎回 true/false どちらかを代入するので、次のコマンドに持ち越されることはない。\sleep は \set と違って引数語を先に単語レキシングしないので、この注入が引数の最初のトークンより前に来ることが保証される。</p>
+<figure class="code">
+<figcaption>exprparse.y / result production</figcaption>
+<pre><code>result: expr				{
+								*expr_parse_result_p = $1;
+								(void) yynerrs; /* suppress compiler warning */
+							}
+	| MODE_SLEEP_EXPR expr opt_unit
+							{
+								/* scale the \sleep duration to microseconds */
+								*expr_parse_result_p =
+									make_op(yyscanner, &quot;*&quot;, $2,
+											make_integer_constant($3));
+							}
+	;</code></pre>
+</figure>
+<p class="code-note">開始記号が 2 本立てになった。先頭に MODE_SLEEP_EXPR が来た場合だけ、式のあとに opt_unit を許す。アクションでは式木の根に "*" 演算子ノードを被せ、右辺に単位倍率 (マイクロ秒) の整数定数を置く。以後 \sleep の引数は「マイクロ秒を返す普通の式」でしかなく、Command 側に単位を覚える場所は要らない。畳み込みは構文木レベルなので演算子優先順位の影響を受けず、\sleep 1 + 1 ms は (1 + 1) * 1000 = 2 ミリ秒になる。</p>
+<figure class="code">
+<figcaption>exprparse.y / opt_unit production</figcaption>
+<pre><code>/*
+ * The optional time unit of a \sleep duration reaches us as a FUNCTION
+ * token, being just an identifier; translate it to the corresponding
+ * microsecond multiplier.  A bare FUNCTION can never follow a complete
+ * expression otherwise, so this introduces no grammar conflicts.
+ */
+opt_unit: /* EMPTY, defaults to seconds */
+							{ $$ = INT64CONST(1000000); }
+	| FUNCTION				{
+								if (pg_strcasecmp($1, &quot;us&quot;) == 0)
+									$$ = INT64CONST(1);
+								else if (pg_strcasecmp($1, &quot;ms&quot;) == 0)
+									$$ = INT64CONST(1000);
+								else if (pg_strcasecmp($1, &quot;s&quot;) == 0)
+									$$ = INT64CONST(1000000);
+								else
+									expr_yyerror_more(yyscanner, &quot;unrecognized time unit, must be us, ms or s&quot;,
+													  $1);
+								pg_free($1);
+							}
+	;</code></pre>
+</figure>
+<p class="code-note">単位は識別子なので字句解析器からは FUNCTION トークンとして届く。ここでは find_func() を通さず、pg_strcasecmp で us/ms/s を判定して倍率に変換する (旧実装と同じく大文字小文字は区別しない: \sleep 1 US も通る)。未知の単位は expr_yyerror_more で読み込み時に落ち、メッセージは旧実装から一字一句そのまま。expr_yyerror_more は行末までレキシングして行全体とキャレットを表示してから exit(1) する。FUNCTION を単位として shift するのは「完全な expr の直後」という状態だけで、そこで FUNCTION を function に還元する経路は存在しないため競合は生じない (%expect 0 が番人になる)。</p>
+<figure class="code">
+<figcaption>pgbench.c / evaluateSleep()</figcaption>
+<pre><code>/*
+ * Evaluate the delay expression of a \sleep command, and return the
+ * requested amount of delay, in microseconds.  Returns true on success,
+ * false on error.
+ */
+static bool
+evaluateSleep(CState *st, Command *command, int64 *usecs)
+{
+	PgBenchValue result;
+	int64		usec;
+
+	if (!evaluateExpr(st, command-&gt;expr, &amp;result) ||
+		!coerceToInt(&amp;result, &amp;usec))
+		return false;
+
+	/* historically, a negative duration just means no sleep */
+	if (usec &lt; 0)
+		usec = 0;
+
+	*usecs = usec;
+	return true;
+}</code></pre>
+</figure>
+<p class="code-note">旧版は Variables* と argc/argv を受け取り、getVariable + atoi + 単位の掛け算を自前でやる 40 行弱だった。新版は式を評価して整数に落とすだけ。coerceToInt は double を rint() で丸め、NULL と boolean は "cannot coerce %s to int" で失敗させる (これが \sleep null / \sleep true の実行時エラーの正体)。倍率は式に畳み込み済みなので、丸めが起きるのはマイクロ秒に換算した後である点に注意 (\sleep 0.4 s は 400000us であって 0 ではない)。負値は歴史的挙動に合わせて 0 にクランプする。出力は int64 で、旧版の int は 2148 秒付近で溢れていた。</p>
+<figure class="code">
+<figcaption>pgbench.c / executeMetaCommand() の META_SLEEP 分岐</figcaption>
+<pre><code>	if (command-&gt;meta == META_SLEEP)
+	{
+		int64		usec;
+
+		/*
+		 * A \sleep doesn&#x27;t execute anything, we just get the delay from the
+		 * argument, and enter the CSTATE_SLEEP state.  (The per-command
+		 * latency will be recorded in CSTATE_SLEEP state, not here, after the
+		 * delay has elapsed.)
+		 */
+		if (!evaluateSleep(st, command, &amp;usec))
+		{
+			commandFailed(st, &quot;sleep&quot;, &quot;execution of meta-command failed&quot;);
+			return CSTATE_ABORTED;
+		}
+
+		pg_time_now_lazy(now);
+		/* an absurd duration saturates rather than wrapping to the past */
+		if (pg_add_s64_overflow(*now, usec, &amp;st-&gt;sleep_until))
+			st-&gt;sleep_until = PG_INT64_MAX;
+		return CSTATE_SLEEP;
+	}</code></pre>
+</figure>
+<p class="code-note">式の評価は実行のたびに行われるので、ランダムな think time が毎トランザクション変わる。評価に失敗すれば commandFailed して CSTATE_ABORTED (クライアント異常終了、終了コード 2)。成功すれば絶対時刻 sleep_until を置いて CSTATE_SLEEP を返し、advanceConnectionState() は now &lt; sleep_until の間 return するだけでスレッドループに制御を戻す (スレッドは threadRun() 側で sleep_until - now を select のタイムアウトに使う)。usec が int64 になったため now + usec が int64 を超え得るようになり、pg_add_s64_overflow で INT64_MAX に飽和させている。飽和させないと sleep_until が過去に回り込み、巨大な待ち時間が「即座に起床」に化ける。</p>
+
+<h3 class="step" id="p-sleep-expr-gotchas"><span class="step-mark">注意</span>落とし穴</h3>
+        <ul class="notes warn-list"><li><h4>単位を後から読むことは原理的にできない</h4><p>bison のパーサは expr を還元するのに常に 1 トークン先読みするため、expr_yyparse() から戻った時点で単位トークンは既に消費 (あるいはエラー扱い) されている。\set x 1 ms が "syntax error in command \"set\"" になりキャレットが ms に立つのがその証拠。括弧で囲む案も '(' expr ')' 自体が expr なので同じ先読みが起き、回避にならない。</p></li>
+<li><h4>単位は FUNCTION トークンなので、識別子でない単位は別のエラーになる</h4><p>\sleep 1 week と \sleep 1 abs はどちらも "unrecognized time unit, must be us, ms or s (week|abs)" になる (opt_unit の中では find_func を呼ばないので、既存関数名でも単位として扱われて弾かれる)。一方 \sleep 1 END や \sleep 1 5 は END_KW / INTEGER_CONST であって FUNCTION ではないため、単位エラーではなく素の "syntax error in command \"sleep\"" になる。\sleep 1 s s も 2 個目の s は文法上どこにも置けず syntax error。</p></li>
+<li><h4>丸めは単位換算の後に起きる</h4><p>倍率が式木に畳み込まれているので、実行時の計算順序は「式の値 × 倍率 → coerceToInt」である。\sleep 0.4 s は 0.4*1000000 = 400000us となり、0.4 を先に丸めて 0 にはならない。旧実装は atoi なので小数を扱えず、\sleep :v で v=1.7 は 1 に切り捨てられていたが、今は rint されて 1.7ms 相当になる。文字列変数の扱いも変わり、v="150abc" は atoi による黙った切り捨てではなく "malformed variable \"v\" value: \"150abc\"" という実行時エラーになる。</p></li>
+<li><h4>sleep_until のオーバーフロー</h4><p>usec が int から int64 になったことで、now + usec が int64 の範囲を超え得る。\sleep 9223372036854775807 us が典型で、無防備だと sleep_until が負に回り込み「一瞬で起床」になる (これは旧実装が int の桁あふれで 2148 秒以上のスリープを事実上無効化していたのと同じ壊れ方)。pg_add_s64_overflow で検出して PG_INT64_MAX に飽和させ、threadRun() が計算する sleep_until - now が正のままになるようにしている。なお \sleep 9223372036854775807 s は掛け算の段階で "bigint mul out of range" になり、飽和ではなくコマンド失敗になる。</p></li>
+<li><h4>エラーが起きる「段階」が一部変わる</h4><p>文法的に正しいが数値でない引数 (\sleep true, \sleep null) は、旧実装では読み込み時に落ちたが、今はパーサを通ってしまい coerceToInt で実行時に落ちる (終了コード 1 ではなく 2)。逆に 64 ビットに収まらない整数定数 (\sleep 99999999999999999999) は旧実装では atoi 任せで受理されていたが、今は字句解析器が "bigint constant overflow" で読み込み時に落とす。なお 1e20 は DOUBLE_CONST なので読み込みは通り、実行時に "double to int overflow" になる。</p></li>
+<li><h4>process_backslash_command() の枝が変わり argv 検査が効かなくなる</h4><p>META_SLEEP は \set/\if/\elif と同じ式パースの枝に移り、その枝は expr_scanner_init → expr_yyparse → return で早期に戻る。したがって残りの単語を argv に集めるループも MAX_ARGS チェックも \sleep には走らない (\sleep too many args が "too many arguments" ではなく "unexpected function name (too)" になるのはこのため)。旧 \sleep ブロックだけが使っていたローカル配列 offsets[MAX_ARGS] は未使用になるので同時に削除している。</p></li>
+</ul>
+
+<h3 class="step" id="p-sleep-expr-tests"><span class="step-mark">検証</span>テストが固定していること</h3>
+        <ul class="notes ok-list"><li><h4>従来書式と新しい式書式が同一スクリプトで動くこと (受理側の回帰)</h4><p>t/001_pgbench_with_server.pl の 'pgbench backslash commands' ケースのスクリプトに "-- sleep expressions" ブロックを追加。\sleep (:one + 1) us (括弧付きの式)、\sleep 1ms (空白なしの単位)、\sleep least(0, :zero - 1) s (関数呼び出しで負値 → 0 クランプ) を並べ、既存の \sleep :one ms / \sleep 100 us / \sleep 0 s / \sleep :zero と一緒に exit 0 と processed: 1/1 を確認する。:one は \set one 1.0 で double なので、double 引数が通ることも同時に押さえている。</p></li>
+<li><h4>失敗が起きる段階と終了コード</h4><p>t/001_pgbench_with_server.pl の @errors 表。読み込み時 (status 1): 'sleep too many args' が /unexpected function name \(too\)/、'sleep missing arg' が /syntax error in command "sleep"/、'sleep unknown unit' が /unrecognized time unit/。実行時 (status 2): 'sleep undefined variable' が /undefined variable "nosuchvariable"/、新規追加の 'sleep null' が /cannot coerce null to int/、'sleep not an int' (\sleep true ms) が /cannot coerce boolean to int/。段階パリティという設計判断をそのままテストに落としたもの。</p></li>
+<li><h4>サーバ不要のスクリプト構文チェックと、維持すると決めたメッセージ</h4><p>t/002_pgbench_no_server.pl の @script_tests に 3 件追加。'sleep bad expression' (\sleep 1 +) は /syntax error in command "sleep"/ と /\^ error found here/ の両方を要求し、式パーサ由来の診断でもキャレット付きの行表示が壊れていないことを固定する。'sleep missing argument' (\sleep のみ) も同じ構文エラー。'sleep bad unit' (\sleep 1 week) は /unrecognized time unit, must be us, ms or s \(week\)/ で、一字一句維持すると決めたメッセージを固定する。</p></li>
+</ul>
+      </section>
+      <section class="patch" id="p-while">
+        <p class="eyebrow"><span class="seq">0003</span><span class="sep">/</span><span>\while ループ</span></p>
+        <h2>pgbench に \while / \endwhile ループを追加する</h2>
+        <p class="lead">pgbench のスクリプトに \while &lt;式&gt; ... \endwhile を追加し、TPC-C の New-Order や Delivery のような可変長の反復をクライアント側のラウンドトリップを保ったまま書けるようにする。ジャンプ先はパース時に静的に解決し、実行時のジャンプは CSTATE_END_COMMAND まで遅延させる。</p>
+        <dl class="facts"><div><dt>コミット</dt><dd>9220d57de48</dd></div><div><dt>件名</dt><dd>pgbench: Add \while/\endwhile looping meta-commands</dd></div><div><dt>差分</dt><dd>4 files <span class="plus">+657</span> <span class="minus">&minus;38</span></dd></div></dl>
+
+<h3 class="step" id="p-while-problem"><span class="step-mark">問題</span>何が足りなかったか</h3>
+        <p>pgbench のスクリプト言語には条件分岐 (\if) はあるがループがない。TPC-C 風のワークロードでは New-Order が 5〜15 本のオーダーラインを、Delivery が 10 個の district を処理するといった可変長の反復が本質的で、これを書くには (a) 最大回数までボディを展開して \if で個々の反復を潰す、(b) ループをサーバ側の DO ブロックに移す、のどちらかしかなかった。(a) はスクリプトが巨大になり、同じ SQL が別コマンドとして -r 統計に分散する。(b) はクライアントのラウンドトリップが消えるので、そもそも測っている対象が変わってしまう。</p>
+<figure class="term">
+<figcaption>実行例</figcaption>
+<pre><code>  $ pgbench -n -t 1 -f /tmp/nord.sql
+  pgbench: error: /tmp/nord.sql:3: invalid command in command &quot;while&quot;
+  \while :i &lt;= :ol_cnt</code></pre>
+</figure>
+
+<h3 class="step" id="p-while-design"><span class="step-mark">設計</span>採った道と捨てた道</h3>
+        <div class="choices"><div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>実行時のジャンプを executeMetaCommand() で直接行わず、CState に int pending_jump を持たせて CSTATE_END_COMMAND まで遅延させる。</p>
+<p>CSTATE_END_COMMAND は -r 統計のために commands[st-&gt;command] を読み直して addToSimpleStats() し、そのあとで st-&gt;command++ する。ジャンプ先の代入をこの増分の直前に置くことで、統計は「実際に実行したコマンド」に付き、増分をジャンプで置き換える形にできる。pending_jump は設定した直後の CSTATE_END_COMMAND で必ず消費されるので、CSTATE_START_TX での -1 初期化と CSTATE_END_TX の Assert(st-&gt;pending_jump == -1) だけで整合が取れる。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>executeMetaCommand() の中で st-&gt;command = command-&gt;jump_target と代入する案 (元の仕様案)。壊れる: (a) \endwhile の後方ジャンプ先が直後の st-&gt;command++ で while+1 になり、条件が二度と評価されない無条件の無限ループになる。(b) \while の偽ジャンプは目的地を 1 つ行き過ぎ、ループ直後のコマンドを黙って飛ばす。(c) -r ではメタコマンドの latency が「実行されていないジャンプ先コマンド」の統計に加算される。代わりに CSTATE_START_COMMAND を返す案も不可で、executeMetaCommand() の直後の Assert が WAIT_RESULT/END_COMMAND/SLEEP/ABORTED しか許さず、かつコマンド単位統計そのものを飛ばしてしまう。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>-T 満了時は「\while が条件を評価せずに偽として扱う」という 1 か所のグローバルな規則にする。\endwhile 側は変更せず、常に後方ジャンプする。</p>
+<p>timer_exceeded は SIGALRM が立てる sig_atomic_t で、実行中にクリアされない単調なフラグ。したがって一度立てば、どの \while も即座に抜ける。\endwhile の後方ジャンプが着地する先はその \while なので、入れ子がいくつあっても順にほどけ、スクリプト末尾 (通常は COMMIT) が普通に実行され、CSTATE_END_TX が通常どおりトランザクションを計上してから既存のタイマーチェックでクライアントを終了させる。メタコマンドだけのループに -T が効くのもこの経路。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>\endwhile で CSTATE_FINISHED にする案。既存のタイマーチェックはすべてトランザクション境界 (CHOOSE_SCRIPT / THROTTLE / END_TX など) にあり、スクリプト途中で切る挙動は今日どこにも存在しない。導入するとトランザクションを開いたまま接続を閉じ、-r のコマンド単位データ点は記録済みなのに processXactStats() を通らず、END_TX の整合チェックも迂回する。もう一つの「そのループだけ break する」案も入れ子に対して不十分で、内側を抜けた先の外側 \endwhile が後方ジャンプして内側ループに再突入しうる。フラグを見る場所を \while 1 か所に固定するとこの穴が消える。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>\if 系と \while 系を 1 本のスタック (ScriptBlock { is_while, saw_else, command }) で検査する pgbench ローカルの静的パスにし、CheckConditional() を CheckScriptStructure() に置き換える。</p>
+<p>閉じ側・分岐側のトークン (\elif/\else/\endif/\endwhile) が必ず「一番内側の開いたブロックの種別」を見るので、交差した入れ子は最初の交差トークンかスクリプト末尾で必ず捕まる。結果としてループは条件分岐の 1 つの枝に完全に含まれ、条件ブロックは 1 つのループボディに完全に含まれることが保証される。同じパスで \while と \endwhile を相互リンクし、jump_target を静的に埋める。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>fe_utils の ConditionalStack / ifState を拡張する案。この enum は psql と共有されており、pgbench 専用の WHILE フレームを表現するために共有の型を太らせることになる。\if 用と \while 用に別々のスタックを持つ案も不可で、\if 1 \while 1 \endif \endwhile のような交差はどちらのスタックも単体では balanced に見えるため検出できない。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>ループとパイプラインの組み合わせにパース時の制限を新設せず、既存の実行時ガードに任せる。リトライ時のクライアント変数の復元も行わない。</p>
+<p>ボディ内に \startpipeline と \endpipeline が揃っている正しい形は、PGRES_PIPELINE_SYNC の処理でパイプラインモードを抜けるため反復をまたいで動く。誤った形 (開いたまま後方ジャンプ) は 2 回目の \startpipeline が既存の "already in pipeline mode" でクライアントを abort させる。リトライについては CSTATE_RETRY が復元するのは乱数状態 (st-&gt;cs_func_rs = st-&gt;random_state) と st-&gt;command = 0 だけで、変数のスナップショットは CState に存在しない。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>ループを意識したパイプラインの対応チェックを parse 時に追加する案。そもそも \startpipeline/\endpipeline の対応は今日まったく静的検査されていないので、ループ絡みだけ検査するのはスコープの不整合。CState に変数スナップショットを持たせてリトライで復元する案も却下で、既存の全スクリプトのリトライ意味論を変えてしまう。代わりに「条件が読む変数をすべてスクリプト内でループ前に代入していれば反復数は再現する」ことをドキュメント化した。</p>
+</div>
+</div>
+
+<h3 class="step" id="p-while-code"><span class="step-mark">仕組み</span>コードを読む</h3>
+<figure>
+<pre class="mermaid">flowchart TD
+  A["CSTATE_START_COMMAND&lt;br/>commands[st.command] を取得"] --> B["executeMetaCommand()"]
+  B -->|"while: 条件が真"| C["pending_jump は -1 のまま"]
+  B -->|"while: 条件が偽 または -T 満了"| D["pending_jump = endwhile の次"]
+  B -->|"endwhile: 常に"| E["pending_jump = while の位置"]
+  C --> F["CSTATE_END_COMMAND&lt;br/>-r 統計を今実行した命令に加算"]
+  D --> F
+  E --> F
+  F -->|"pending_jump &lt; 0"| G["st.command++"]
+  F -->|"前方ジャンプ"| H["st.command = pending_jump&lt;br/>break して継続"]
+  F -->|"後方ジャンプ"| I["st.command = pending_jump&lt;br/>return しスレッドに譲る"]
+  G --> A
+  H --> A
+  I --> A</pre>
+</figure>
+<figure class="code">
+<figcaption>pgbench.c / executeMetaCommand() — \while のタイマー分岐</figcaption>
+<pre><code>	else if (command-&gt;meta == META_WHILE)
+	{
+		PgBenchExpr *expr = command-&gt;expr;
+		PgBenchValue result;
+
+		Assert(command-&gt;jump_target &gt;= 0);
+
+		if (timer_exceeded)
+		{
+			/*
+			 * Once the run duration has expired, treat the condition as false
+			 * without evaluating it, so that no new iteration can start.
+			 * timer_exceeded is never reset during a run, so from then on
+			 * every loop reached, including one entered by the backward jump
+			 * of an \endwhile, exits immediately: nested loops unwind and the
+			 * rest of the script executes normally down to CSTATE_END_TX,
+			 * whose regular timer check finishes the client.  This is what
+			 * makes -T work on a loop containing only meta commands, which
+			 * has no other reason to stop.
+			 */
+			st-&gt;pending_jump = command-&gt;jump_target;
+		}</code></pre>
+</figure>
+<p class="code-note">-T が満了していたら式を評価すらせずに脱出ジャンプを予約する。式を評価しないのは意図的で、条件が \gset の結果や関数呼び出しに依存していても、満了後は必ず抜けるという単調性を保証したいから。Assert(command-&gt;jump_target &gt;= 0) は、Command が pg_malloc0 されるためリンク漏れが「0 番コマンドへのジャンプ」という有効な値に化けるのを防ぐ守り。</p>
+<figure class="code">
+<figcaption>pgbench.c / executeMetaCommand() — 条件評価と \endwhile</figcaption>
+<pre><code>		else
+		{
+			if (!evaluateExpr(st, expr, &amp;result))
+			{
+				commandFailed(st, argv[0], &quot;evaluation of meta-command failed&quot;);
+				return CSTATE_ABORTED;
+			}
+
+			if (!valueTruth(&amp;result))
+				st-&gt;pending_jump = command-&gt;jump_target;
+		}
+	}
+	else if (command-&gt;meta == META_ENDWHILE)
+	{
+		Assert(command-&gt;jump_target &gt;= 0);
+
+		/* jump back to the \while, which re-evaluates its condition */
+		st-&gt;pending_jump = command-&gt;jump_target;
+	}</code></pre>
+</figure>
+<p class="code-note">条件の評価と真偽判定は \if とまったく同じ evaluateExpr() + valueTruth() で、0 と SQL NULL が偽。評価エラー時は \if と同じく commandFailed() + CSTATE_ABORTED (呼び出し側が ESTATUS_META_COMMAND_ERROR を立てる)。\endwhile 側にはタイマーチェックがないことに注意。無条件に \while へ戻し、判断はその \while に一元化している。</p>
+<figure class="code">
+<figcaption>pgbench.c / advanceConnectionState() — CSTATE_END_COMMAND の遅延ジャンプ</figcaption>
+<pre><code>				/* Go ahead with next command, to be executed or skipped */
+				if (st-&gt;pending_jump &gt;= 0)
+				{
+					bool		backward = st-&gt;pending_jump &lt;= st-&gt;command;
+
+					/* deferred jump of a \while or \endwhile */
+					st-&gt;command = st-&gt;pending_jump;
+					st-&gt;pending_jump = -1;
+					st-&gt;state = conditional_active(st-&gt;cstack) ?
+						CSTATE_START_COMMAND : CSTATE_SKIP_COMMAND;
+
+					/*
+					 * Return on a backward jump, so that a loop whose body
+					 * has no command yielding to the thread loop, such as one
+					 * containing only meta commands, does not monopolize its
+					 * thread and starve the other clients of it.
+					 */
+					if (backward)
+						return;
+					break;
+				}
+				st-&gt;command++;</code></pre>
+</figure>
+<p class="code-note">このブロックは、直前にある -r 用の addToSimpleStats() の後、既存の st-&gt;command++ の手前に置かれている。順序が肝で、統計は必ず「今実行し終えたコマンド」に付いてからジャンプが起きる。backward の判定は pending_jump &lt;= st-&gt;command という位置比較だけで、\endwhile かどうかは見ない (\while の偽ジャンプは必ず前方なので同じ式で足りる)。後方ジャンプで return するのがスレッド飢餓対策。</p>
+<figure class="code">
+<figcaption>pgbench.c / CheckScriptStructure() — \endwhile の検査とジャンプ先の相互リンク</figcaption>
+<pre><code>			case META_ENDWHILE:
+				if (depth == 0)
+					ConditionError(ps-&gt;desc, i + 1, &quot;\\endwhile without matching \\while&quot;);
+				if (!stack[depth - 1].is_while)
+					ConditionError(ps-&gt;desc, i + 1,
+								   openBlockOfKind(stack, depth, true) ?
+								   &quot;\\endwhile without matching \\while inside this \\if branch&quot; :
+								   &quot;\\endwhile without matching \\while&quot;);
+				depth--;
+
+				/*
+				 * Cross-link the pair: the \while jumps past this command
+				 * when its condition is false, and this command jumps back to
+				 * the \while.
+				 */
+				ps-&gt;commands[stack[depth].command]-&gt;jump_target = i + 1;
+				cmd-&gt;jump_target = stack[depth].command;
+				break;</code></pre>
+</figure>
+<p class="code-note">スタック最上位が \if フレームだった場合、下に \while フレームが開いているか (openBlockOfKind) でメッセージを出し分ける。開いていれば「その \if の枝をまたいでいる」という具体的な指摘、なければ従来どおりの素の "without matching"。相互リンクは \while → \endwhile の次 (i + 1)、\endwhile → \while の位置。i + 1 がスクリプト末尾の NULL スロットになるケース (ループがスクリプトの最後) も、CSTATE_START_COMMAND が commands[st-&gt;command] == NULL を見て CSTATE_END_TX に移るので正しく動く。</p>
+
+<h3 class="step" id="p-while-gotchas"><span class="step-mark">注意</span>落とし穴</h3>
+        <ul class="notes warn-list"><li><h4>後方ジャンプで return しないとスレッドが飢える (このパッチのレビューで見つかった欠陥)</h4><p>advanceConnectionState() の for(;;) から抜ける (return する) のは、結果待ちの CSTATE_WAIT_RESULT / CSTATE_WAIT_ROLLBACK_RESULT、待機中の CSTATE_SLEEP / CSTATE_THROTTLE、次のトランザクションへ移る CSTATE_END_TX、終端の CSTATE_ABORTED / CSTATE_FINISHED だけ。メタコマンドだけのループはそのどれにも到達しないので、return を入れないと 1 クライアントがスレッドを占有し、同じスレッドに割り当てられた他のクライアントが一度も進まない。pgbench -T 1 -c 2 -j 1 で processed が 2 でなく 1 になる。修正が backward 判定つきの return。なお終了はする (\while が timer_exceeded を見るので) ため、症状は「ハング」ではなく「他のクライアントが動かない」という見えにくい形になる。この return にコストはなく、threadRun() は CSTATE_START_COMMAND のクライアントを見つけると min_usec = 0 にして待たずに次のラウンドに入る。</p></li>
+<li><h4>jump_target は明示的に -1 で初期化する必要がある</h4><p>Command は create_sql_command() でも process_backslash_command() でも pg_malloc0 されるので、初期化を忘れると jump_target は 0、つまり「スクリプトの先頭コマンド」という完全に有効なインデックスになる。リンク漏れがクラッシュではなく静かな暴走 (毎回スクリプト先頭に戻る) になってしまうため、両方の生成箇所で -1 を代入し、実行時の 2 か所で Assert(command-&gt;jump_target &gt;= 0) している。</p></li>
+<li><h4>-T で打ち切られた最後のトランザクションは「不完全なのに成功として計上される」</h4><p>タイマー満了後もスクリプト末尾は普通に走るので、ループが本来の回数を回りきっていないのに COMMIT され、成功トランザクションとして数えられる。クライアントごとに最大 1 回起きる境界アーティファクト。データ不変条件がループの完走に依存するワークロード (TPC-C の o_ol_cnt と実際の order_line 行数など) はこの 1 トランザクションで壊れる。ドキュメントの caution は「ループ由来の値はループの後で書く」(例では UPDATE orders SET o_ol_cnt = :i - 1 をループの後に置く) か、-T ではなく -t を使うことを求めている。逆に -t にはタイマーがないので、終わらないループは単なるスクリプトのバグでクライアントは永久に回り続ける。</p></li>
+<li><h4>リトライでクライアント変数は復元されない</h4><p>CSTATE_RETRY が戻すのは乱数状態 (st-&gt;cs_func_rs = st-&gt;random_state) と st-&gt;command = 0 だけで、CState に変数のスナップショットは存在しない。したがってリトライ後のループ回数が一致するのは決定的リプレイが成り立つとき、つまり条件が読む変数をすべてスクリプト内でループより前に \set しているときだけ。\if の分岐ズレは「一度違う枝を通る」で有界だが、ループでは書き換わったカウンタが等値の終了条件をまたいで、以前は終了していたループが終了しなくなりうるという点で症状の質が異なる。pgbench.sgml の既存の「変数もトランザクション前の状態に戻る」という記述はここでは繰り返さず、\while の項と failures-and-retries の項の両方に注意書きを足している。</p></li>
+<li><h4>CSTATE_SKIP_COMMAND は \while / \endwhile を素通りする</h4><p>スキップループが特別扱いするのは META_IF/ELIF/ELSE/ENDIF だけで、\while と \endwhile は else 側の st-&gt;command++ に落ちてジャンプしない。これが安全なのはパース時の包含規則のおかげ。危険な逆ケース、つまり「実行中の反復の \endwhile がスキップ領域に入っていて黙って反復が殺される」は、\if/\endif の対がループボディに完全に含まれるかループを完全に含むかのどちらかでしかありえないので起こらない。単一スタックによる静的検査は、ジャンプ機構だけでなくこのスキップ経路の正しさも支えている。</p></li>
+<li><h4>エラーメッセージの出し分けと prepareCommandsInPipeline の過剰準備</h4><p>\while 1 \endif \endwhile は「\while ボディの中の \if にマッチしない」ではなく素の "\endif without matching \if" になる (下に \if フレームが開いていないため)。002 のテストが $ アンカーでこれを固定している。もう 1 点、prepareCommandsInPipeline() は \startpipeline の次から最初の \endpipeline まで前方走査するので、パイプラインがループ境界をまたぐと \endwhile を越えて、その反復では到達しないコマンドまで prepare する。準備は st-&gt;prepared[use_file][command_num] で冪等なので無害であり、修正ではなくコメントを足すだけにしてある。</p></li>
+</ul>
+
+<h3 class="step" id="p-while-tests"><span class="step-mark">検証</span>テストが固定していること</h3>
+        <ul class="notes ok-list"><li><h4>ループの基本セマンティクス一式を、simple / extended / prepared の 3 クエリモードで確認する (001_pgbench_with_server.pl の "pgbench while loops ($mode)")</h4><p>1 本のスクリプトに、カウンタループ、\gset の結果を条件に使うループ、0 回ループ (ボディの SELECT 1/0; が実行されないことで検証)、偽の \if 枝の中のループ (これも 1/0 が実行されないことで検証)、内側に \if を含む二重ループ、スクリプト末尾で終わるループを詰め込み、debug() の出力 (実際の形は debug(script=0,command=11): int 3) を qr{command=11.: int 3\b} / qr{command=17.: int 0\b} / qr{command=28.: int 1\b} / qr{command=43.: int 61\b} という正規表現で固定する。最後の 61 は total*10 + odd = 6*10+1 で、内側ループの総回数と \if の成立回数を 1 つの値に畳んだもの。3 モード合計で while_tab の行数が 9 になることも別途 SELECT count(*) で確認する。</p></li>
+<li><h4>メタコマンドだけのループが -T で止まること、かつ同じスレッドの他クライアントを飢えさせないこと (001 の 'meta-command-only while loop exits on -T expiry' と 'does not starve the other client')</h4><p>\while 1 / \set x 1 / \endwhile というスクリプトを、$node-&gt;pgbench ではなく IPC::Run::run + IPC::Run::timeout で直接起動する。リグレッションが「無限ループ」というテスト自体のハングになるため、timeout_default で守り $timer-&gt;is_expired が偽であることを assert する。飢餓側は -c 2 -j 1 -T 1 で走らせ、出力が processed: 2 であること (1 でないこと) を要求する。これが CSTATE_END_COMMAND の後方ジャンプ時 return を固定しているテスト。</p></li>
+<li><h4>-T で打ち切られたループの後もスクリプト末尾が走り、トランザクションが計上されること (001 の 'while loop cut short by -T ends its transaction')</h4><p>BEGIN; \while 1 SELECT 1; \endwhile COMMIT; を -T 1 で実行し、標準出力に processed: [1-9]\d* が出ること、かつ標準エラーが空であること (^$) を要求する。CSTATE_FINISHED で中断する設計だったなら、開いたトランザクションのまま接続が閉じられて processXactStats() も通らないため、この 2 つの条件は満たされない。</p></li>
+<li><h4>パース時検査の全分岐 (002_pgbench_no_server.pl の @script_tests に 10 ケース追加)</h4><p>\while without matching \endwhile、\endwhile without matching \while、交差 4 種 (\endwhile が \if 枝をまたぐ / \endif・\elif・\else が \while ボディをまたぐ)、\while ボディ内の対応しない \endif が素のメッセージになること ($ アンカーつき)、\while の式なし・式の構文エラー (syntax error in command "while" と ^ error found here)、\endwhile への余計な引数 (unexpected argument in command "endwhile") を、それぞれ 1 行スクリプトと期待メッセージの組で確認する。さらに 001 側で、ループ内で開いたままの \startpipeline が 2 周目に既存の "already in pipeline mode" で終了コード 2 になることも押さえている。</p></li>
+</ul>
+      </section>
+      <section class="patch" id="p-percentiles">
+        <p class="eyebrow"><span class="seq">0004</span><span class="sep">/</span><span>パーセンタイル</span></p>
+        <h2>pgbench に --latency-percentiles を追加する</h2>
+        <p class="lead">レイテンシを対数線形ヒストグラム (1537 バケット、12,296 バイト) に記録し、--latency-percentiles=50,90,99 のように指定したパーセンタイルを最終レポートに 1 行で出力する。ヒストグラムは各スレッドがロックなしの配列インクリメント 1 回で更新し、全スレッドを join した後に main() で合算する。</p>
+        <dl class="facts"><div><dt>コミット</dt><dd>5714ca4fb5b</dd></div><div><dt>件名</dt><dd>pgbench: Add --latency-percentiles option</dd></div><div><dt>差分</dt><dd>4 files <span class="plus">+346</span> <span class="minus">&minus;2</span></dd></div></dl>
+
+<h3 class="step" id="p-percentiles-problem"><span class="step-mark">問題</span>何が足りなかったか</h3>
+        <p>pgbench が出すレイテンシ指標は平均と標準偏差だけで、テール (裾) の挙動をほとんど表さない。一方 TPC-C の応答時間基準はトランザクション種別ごとの 90 パーセンタイルで定義されており、平均が基準を満たしていても p90 が超過している状況を pgbench 単体では検出できない。従来の唯一の手段は -l のトランザクションログを外部ツールでソートして手計算することだった。latency stddev を入れたのは commit 2d6c0f10ef4 "pgbench: Elaborate latency reporting." (Author: Fabien COELHO、コミッタが Noah Misch) で、そこでも平均と標準偏差だけではテールを表せないという限界は残ったままだった。</p>
+<p>パッチ前はオプションそのものが存在しない。</p>
+<figure class="term">
+<figcaption>実行例</figcaption>
+<pre><code>$ pgbench --latency-percentiles=90 -S -T 60 bench
+pgbench: unrecognized option &#x27;--latency-percentiles=90&#x27;
+pgbench: hint: Try &quot;pgbench --help&quot; for more information.</code></pre>
+</figure>
+<p class="code-note">最終レポートに出るのは実行時間から割り算した latency average = 1.234 ms の 1 行だけで (latency stddev は --progress / --rate / --latency-limit のいずれかでレイテンシを実測したときにしか出ない)、p90 を知るには -l でログを出して sort に流す自前の後処理が要る。</p>
+
+<h3 class="step" id="p-percentiles-design"><span class="step-mark">設計</span>採った道と捨てた道</h3>
+        <div class="choices"><div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>オプション指定時は processXactStats() の detailed 述語に num_latency_percentiles &gt; 0 を足し、レイテンシを実測させる。同時に printResults() の平均表示の分岐にも同じ条件を足す。</p>
+<p>detailed が偽のとき processXactStats は latency = 0.0 のまま accumStats を呼ぶ。ヒストグラム更新を accumStats に置くだけでは、成功トランザクションすべてがバケット 0 に入り、その中点 0.5 us が p90 = 0.001 ms として平然と出力される。表示側も同様で、条件を足さないと実測ヒストグラムから求めた p50 の隣に、実行時間から割り算しただけの latency average (total_duration * nclients / total_cnt、接続オーバーヘッドや idle を含む) が並び、同じレポート内で系統的に食い違う数値になる。両方を直した結果、このオプションだけを付けた実行でも latency stddev 行が新たに出るようになる (出力仕様の変更であり、TAP で固定した)。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>「ヒストグラムは常に累積する」案。将来 -P でパーセンタイルを出すのに便利という利点はあるが、測定純度の問題 (計測用の追加処理そのものが計測を歪める) への最も強い回答は「オプション未指定ならトランザクションあたりの追加命令はゼロ」であり、常時累積は既定の実行でも detailed 経路を強制して pg_time_now の呼び出し回数まで変えてしまう。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>ヒストグラムは固定長の int64[1537] を StatsData に直接埋め込む。</p>
+<p>StatsData のインスタンスは TState.stats、静的配列 sql_script[128].stats、threadRun のローカル aggs/last、printProgressReport のローカル cur、main のローカル stats と各所にあり、埋め込みなら確保もライフサイクル管理も不要で、構造体コピーが自動的にディープコピーになる。コストは initStats の 12,296 バイト memset (最悪でも集約インターバルごと、進捗レポートごと) と、sql_script[128] 分の約 1.57 MB (12,296 x 128 = 1,573,888 バイト) の BSS (未使用エントリのページはフォルトしない) だけで、トランザクション単位の経路には何も足さない。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>ポインタ + 遅延 alloc 案。StatsData は last = aggs (threadRun) と *last = cur (printProgressReport) で丸ごとコピーされるため、ポインタメンバだと 2 つの StatsData が同じヒストグラムを指すエイリアスになる。その状態で doLog の initStats(agg, next) が走ると、他方がまだ保持しているヒストグラムをゼロクリアしてしまう。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>スクリプト別ヒストグラムは既存の per-script 統計と同じく無同期のまま更新し、パーセンタイルの順位はヒストグラム自身のバケット合計 (latencyHistTotal) から計算する。</p>
+<p>per-script 統計には既に「XXX could use a mutex here, but we choose not to」というコメント付きの競合がある。64 ビット環境ではアラインされた int64 のインクリメントが破れることはなく、競合の影響は 1 衝突あたり 1 サンプルの更新喪失に限られる。ただし喪失があると バケット合計 &lt; sstats-&gt;cnt になるので、cnt から順位を出すと累積が rank に届かないままループが終わり、idx はあふれバケット 1536 ではなく配列の外側 1537 になる。この idx はあふれ判定 (idx == LATENCY_HIST_NBUCKETS - 1) に一致しないため、範囲外の中点計算がそのまま走り「549453.824 ms」という存在しない値を出しかねない。読み出しは全スレッド join 後の printResults だけなので、読み取り時に値が破れることはない。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>スレッド × スクリプトごとに正しくヒストグラムを持つ案。nthreads * num_scripts * 12.3 KB (最悪 128x128 で約 200 MB) に加え、TState の配列と join 後のマージループ、accumStats の契約変更が必要になる。コミュニティが明示的に受け入れている既存の競合を、診断用の集計値のためだけに直すことになり、それは別パッチの仕事。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>SUBBITS=6, MAXBITS=29。累乗レンジごとに 64 個の線形サブバケット、レンジは [0, 2^29) us = 536.871 s、末尾 1 個をあふれ用にして計 1537 バケット。</p>
+<p>64 分割なら 64 us 超での相対誤差は最悪 2^-6 = 1.6% で、p90/p95/p99 を 3 桁で報告するには十分。64 us 未満は幅 1 us の線形群になり、そこでは誤差が絶対値で 1 us 未満に収まる。レンジが 300 s を超えている必要があるのは、latency = now - txn_scheduled がスケジュール遅延を含むためで、--rate が詰まった実行では「レイテンシ」が実行時間そのものに近づいて分単位になるのが普通だから。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>MAXBITS=28 案 (元スペックの記述)。2^28 us = 268.435 s は 300 s に届かず、上のスケジュール遅延で日常的にあふれる。元スペックのバケット数 (28-6+1)*64 + 64 も、線形群が最初の群そのものであることを見落として二重計上していた。</p>
+</div>
+</div>
+
+<h3 class="step" id="p-percentiles-code"><span class="step-mark">仕組み</span>コードを読む</h3>
+<figure>
+<pre class="mermaid">flowchart TD
+    A["レイテンシ lat (us, double)&lt;br/>v = (int64) lat"] --> B{"v が 64 未満か"}
+    B -- はい --> C["線形群: バケット = v&lt;br/>負なら 0&lt;br/>幅 1us"]
+    B -- いいえ --> D["k = 最上位ビット位置&lt;br/>pg_leftmost_one_pos64"]
+    D --> E{"k が 29 以上か"}
+    E -- はい --> F["バケット 1536 (あふれ)&lt;br/>表示は > 536870.912 ms"]
+    E -- いいえ --> G["群 g = k - 5&lt;br/>副番号 = 最上位ビットの下 6 ビット&lt;br/>バケット = g * 64 + 副番号"]
+    C --> H["histogram[バケット]++&lt;br/>スレッドローカル、ロックなし"]
+    G --> H
+    F --> H
+    H --> I["join 後に main() で全スレッド合算&lt;br/>累積走査で順位から値を得る"]</pre>
+</figure>
+<figure class="code">
+<figcaption>pgbench.c / processXactStats()</figcaption>
+<pre><code>static void
+processXactStats(TState *thread, CState *st, pg_time_usec_t *now,
+				 bool skipped, StatsData *agg)
+{
+	double		latency = 0.0,
+				lag = 0.0;
+	bool		detailed = progress || throttle_delay || latency_limit ||
+		use_log || per_script_stats || num_latency_percentiles &gt; 0;
+
+	if (detailed &amp;&amp; !skipped &amp;&amp; st-&gt;estatus == ESTATUS_NO_ERROR)
+	{
+		pg_time_now_lazy(now);
+
+		/* compute latency &amp; lag */
+		latency = (*now) - st-&gt;txn_scheduled;
+		lag = st-&gt;txn_begin - st-&gt;txn_scheduled;
+	}
+
+	/* keep detailed thread stats */
+	accumStats(&amp;thread-&gt;stats, skipped, latency, lag, st-&gt;estatus, st-&gt;tries);</code></pre>
+</figure>
+<p class="code-note">このパッチで足したのは detailed 述語の末尾 num_latency_percentiles &gt; 0 だけだが、ここが機能全体の土台になっている。detailed が偽だと latency は 0.0 のまま、しかも accumStats は無条件に呼ばれる (最後の行)。つまり述語に足さなければ、ヒストグラムには毎回 0.0 が入り、パーセンタイル行はエラーも警告もなく p50 = 0.000 ms を出す。逆に足したことで、--progress も --rate も付けない実行でも pg_time_now_lazy が呼ばれ、latency = now - txn_scheduled が計測される。この latency はスケジュール遅延 (txn_scheduled から実際に始まるまでの待ち) を含む値であり、ヒストグラムのレンジ設計に直結する。</p>
+<figure class="code">
+<figcaption>pgbench.c / accumStats()</figcaption>
+<pre><code>	switch (estatus)
+	{
+			/* Record the successful transaction */
+		case ESTATUS_NO_ERROR:
+			stats-&gt;cnt++;
+
+			addToSimpleStats(&amp;stats-&gt;latency, lat);
+
+			if (num_latency_percentiles &gt; 0)
+				stats-&gt;latency_histogram[latencyHistBucket(lat)]++;
+
+			/* and possibly the same for schedule lag */
+			if (throttle_delay)
+				addToSimpleStats(&amp;stats-&gt;lag, lag);
+			break;</code></pre>
+</figure>
+<p class="code-note">累積点は既存の latency SimpleStats の真横 1 か所だけ。ゲート条件が既存の latency 計上と完全に同じ (成功かつ非スキップ) になるので、パーセンタイルの母集団と latency average の母集団が必ず一致する。オプション未指定時は num_latency_percentiles == 0 なので、トランザクションあたりの追加コストはグローバル変数の比較 1 回だけ。指定時でもロック・アロケーション・システムコールはなく、pg_leftmost_one_pos64 とシフト・マスク、そして配列インクリメント 1 回で済む (thread-&gt;stats はスレッド専有だが、sql_script[].stats は他の per-script 統計と同じく共有かつ無同期)。accumStats は渡された StatsData 全部 (thread-&gt;stats、per-script、doLog の agg) に対して同じことをするので、-l --aggregate-interval のときは報告されない agg のヒストグラムも更新される (統一性のために許容した無駄)。</p>
+<figure class="code">
+<figcaption>pgbench.c / latencyHistBucket()</figcaption>
+<pre><code>static int
+latencyHistBucket(double latency)
+{
+	int64		v = (int64) latency;
+	int			k;
+
+	if (v &lt; (1 &lt;&lt; LATENCY_HIST_SUBBITS))
+		return (v &lt; 0) ? 0 : (int) v;
+
+	k = pg_leftmost_one_pos64((uint64) v);
+	if (k &gt;= LATENCY_HIST_MAXBITS)
+		return LATENCY_HIST_NBUCKETS - 1;	/* overflow bucket */
+
+	return ((k - LATENCY_HIST_SUBBITS + 1) &lt;&lt; LATENCY_HIST_SUBBITS) |
+		((int) (v &gt;&gt; (k - LATENCY_HIST_SUBBITS)) &amp;
+		 ((1 &lt;&lt; LATENCY_HIST_SUBBITS) - 1));
+}</code></pre>
+</figure>
+<p class="code-note">us 単位の値を 1537 個のバケットに写す。v &lt; 64 の枝は幅 1 us の線形群 (群 g=0) を返すと同時に、pg_leftmost_one_pos64 が Assert(word != 0) を持つことへのガードでもある。サブミリ秒どころかサブマイクロ秒のトランザクション (メタコマンドだけのスクリプトなど) は (int64) キャストで 0 に落ちるので、この枝がなければ assert 失敗する。64 以上では k = 最上位ビット位置から群番号 g = k-5 を作り、最上位ビットのすぐ下の 6 ビット ((v &gt;&gt; (k-6)) &amp; 63) を副番号にする。境界の連続性: v=63 -&gt; 63、v=64 (k=6) -&gt; (1&lt;&lt;6)|0 = 64、v=127 -&gt; 127、v=128 (k=7) -&gt; (2&lt;&lt;6)|0 = 128、v=2^29-1 (k=28) -&gt; (23&lt;&lt;6)|63 = 1535 が最後の通常バケット、v=2^29 で k=29 となりインデックス 1536 のあふれバケットに落ちる。</p>
+<figure class="code">
+<figcaption>pgbench.c / printLatencyPercentiles()</figcaption>
+<pre><code>		exact = latency_percentiles[i] * (double) total / 100.0;
+		rank = (int64) ceil(exact - 1e-9 * exact);
+		rank = Max(rank, 1);
+		rank = Min(rank, total);
+
+		for (idx = 0; idx &lt; LATENCY_HIST_NBUCKETS; idx++)
+		{
+			cum += histogram[idx];
+			if (cum &gt;= rank)
+				break;
+		}
+
+		printf(&quot;%s p%.10g = &quot;, (i &gt; 0) ? &quot;,&quot; : &quot;&quot;, latency_percentiles[i]);
+		if (idx == LATENCY_HIST_NBUCKETS - 1)
+			printf(&quot;&gt; %.3f ms&quot;,
+				   0.001 * (double) ((int64) 1 &lt;&lt; LATENCY_HIST_MAXBITS));
+		else
+			printf(&quot;%.3f ms&quot;, 0.001 * latencyHistBucketMidpoint(idx));</code></pre>
+</figure>
+<p class="code-note">nearest-rank 定義: 順位 rank = ceil(p * total / 100) を求め、先頭から累積して cum &gt;= rank になった最初のバケットを答えにする。total は関数冒頭の latencyHistTotal(histogram)、つまりバケットの実合計であって SimpleStats の cnt ではない (per-script の無同期更新で cnt のほうが大きくなりうる)。1e-9 * exact を引くのは、10 進で表現できないパーセンタイルへの保険。例えば p=99.9 で total=41000 のとき 99.9 * 41000.0 / 100.0 は 40959.00000000001 になり、素直に ceil すると 40960 と 1 サンプル分ずれる。値の表示はバケット中点 (latencyHistBucketMidpoint) で、あふれバケットに当たったときだけ "&gt; 536870.912 ms" と出す。</p>
+<figure class="code">
+<figcaption>pgbench.c / printResults()</figcaption>
+<pre><code>	if (throttle_delay || progress || latency_limit ||
+		num_latency_percentiles &gt; 0)
+		printSimpleStats(&quot;latency&quot;, &amp;total-&gt;latency);
+	else
+	{
+		/* no measurement, show average latency computed from run time */
+		printf(&quot;latency average = %.3f ms%s\n&quot;,
+			   0.001 * total_duration * nclients / total_cnt,
+			   failures &gt; 0 ? &quot; (including failures)&quot; : &quot;&quot;);
+	}
+
+	if (num_latency_percentiles &gt; 0)
+	{
+		if (latencyHistTotal(total-&gt;latency_histogram) &gt; 0)
+			printLatencyPercentiles(&quot;latency&quot;, total-&gt;latency_histogram);
+		else
+			printf(&quot;latency percentiles: (no successful transactions)\n&quot;);
+	}</code></pre>
+</figure>
+<p class="code-note">上の分岐が「実測レイテンシを出すか、実行時間から割り算した平均を出すか」の選択。ここに num_latency_percentiles &gt; 0 を足さないと、実測ヒストグラムから出した p50 の隣に、接続オーバーヘッドや idle を含む導出値の平均が並ぶ。足した結果、printSimpleStats が latency average と latency stddev の 2 行を出すようになり、--latency-percentiles だけを付けた実行でも stddev 行が現れる。下のブロックは総数 0 の扱いで、printLatencyPercentiles 自体は空ヒストグラムなら何も出さない (per-script 行が黙って消えるのはこの仕様) ため、グローバル側だけ明示的に "(no successful transactions)" を出して行の消失を防いでいる。</p>
+
+<h3 class="step" id="p-percentiles-gotchas"><span class="step-mark">注意</span>落とし穴</h3>
+        <ul class="notes warn-list"><li><h4>detailed 述語に足し忘れると、無言で p50 = 0.001 ms を出す</h4><p>レビューで最初に見つかった重大欠陥。processXactStats は latency = 0.0 で始まり、detailed が偽でも accumStats を呼ぶ。したがって accumStats にヒストグラム更新を置いただけでは、成功トランザクション全部がバケット 0 に積まれる。失敗モードが「行が出ない」ではなく「もっともらしい 0.001 ms (バケット 0 の中点 0.5 us) が出る」ことが厄介で、TAP で latency stddev 行 (実測しないと出ない行) を同時に検査することでこの結合を固定している。</p></li>
+<li><h4>pg_leftmost_one_pos64 はゼロに対して未定義</h4><p>pg_bitutils.h の pg_leftmost_one_pos64 は Assert(word != 0) を持つ。latencyHistBucket の v &lt; 64 の線形枝は「最初の群を線形にする」ためだけでなく、この assert のガードでもある。サブマイクロ秒のトランザクション (メタコマンドだけのスクリプトなど) は (int64) キャストで 0 になるので現実に起こる。最適化のつもりで枝の順序を入れ替えると assert 版ビルドで落ちる。</p></li>
+<li><h4>順位は必ずヒストグラムのバケット合計から求める</h4><p>cnt から rank を出すと累積が rank に届かないままループが終わり、抜けたときの idx は 1536 (あふれ) ではなく 1537 (配列の外) になる。あふれ判定 idx == LATENCY_HIST_NBUCKETS - 1 に一致しないので "&gt; 536870.912 ms" ですらなく、範囲外バケットの中点から計算した "549453.824 ms" という嘘の値が出る。</p></li>
+<li><h4>レンジは 300 s ではなく 536.871 s まで必要</h4><p>latency = now - txn_scheduled にはスケジュール遅延が含まれる。--rate が詰まった実行では予定時刻からの遅れが実行時間全体に向かって伸びるため、分単位の「レイテンシ」が日常的に出る。2^28 us = 268.435 s ではこれを取りこぼす。MAXBITS=29 で [0, 536.871 s) をカバーし、バケット数は (29-6+1)*64 + 1 = 1537 (線形群は最初の群そのものなので別枠で足さない)。</p></li>
+<li><h4>進捗レポートのマージにはヒストグラムを混ぜてはいけない</h4><p>mergeSimpleStats の呼び出し箇所は 2 つある。main() の join 後のループ (ここに mergeLatencyHistogram を足した。スレッド 0 は threadRun を同期的に実行して戻っているので全スレッドをカバーする) と、printProgressReport 内のループ。後者はスレッド 0 が他スレッドの走行中に呼ぶもので、コード中に競合が明記されている。v1 ではここでヒストグラムを読まないと決めた結果、-P の出力は一切変わらない。</p></li>
+<li><h4>浮動小数の丸めで 1 サンプルずれる</h4><p>rank = ceil(p * total / 100.0) を素直に計算すると、10 進で表現できない p で 1 つ上のサンプルに着地することがある。実例: p=99.9, total=41000 で式の値は 40959.00000000001。相対許容 1e-9 * exact を引いてから ceil する。バケット幅が最悪 1.6% なので、この程度の許容がパーセンタイル値そのものを歪めることはない。</p></li>
+<li><h4>p は 0 &lt; p &lt; 100 の開区間、順序は保持、重複も可</h4><p>p=100 を弾くのは、最大値がせいぜい最上位の通常バケット (幅 2^22 us = 4.19 s) か、上限のないあふれバケット (表示は "&gt; 536870.912 ms") に落ちる粗い近似にしかならないため (printSimpleStats も max を出さない)。出力はユーザーが書いた順のままなので、p50 &lt;= p95 を検査したければ引数もソートして渡す必要がある。pgbench は setlocale を呼ばないので strtod は常に C ロケールで走り、小数点は必ず '.'、',' は曖昧さなくリスト区切りになる。したがって "99,5" はエラーではなく {99, 5} という妥当な 2 要素リスト。</p></li>
+<li><h4>空ヒストグラムのときの出力は 2 種類ある</h4><p>printLatencyPercentiles は total == 0 なら何も出さない (printSimpleStats が count == 0 で黙るのと同じ流儀)。したがって成功トランザクションが 1 件もないスクリプトの ' - latency percentiles' 行は単に消える。グローバル側だけは行が消えると気付きにくいので、printResults が "latency percentiles: (no successful transactions)" を明示的に出す。</p></li>
+</ul>
+
+<h3 class="step" id="p-percentiles-tests"><span class="step-mark">検証</span>テストが固定していること</h3>
+        <ul class="notes ok-list"><li><h4>オプション単独でレイテンシ実測が有効になること (detailed 述語と printResults 分岐の結合)</h4><p>001_pgbench_with_server.pl の 'pgbench latency percentiles': -t 10 -c 2 -S -n --latency-percentiles=50,95 を実行し、latency average 行に加えて latency stddev 行が出ること、そして 'latency percentiles: p50 = N ms, p95 = N ms' が 1 行で出ることを検査する。stddev は実測しないと出ない行なので、これがヒストグラムに実値が入っていることの代理検査になっている。</p></li>
+<li><h4>サンプル 1 件と 0 件の端点</h4><p>001 の 'pgbench latency percentiles single transaction' は -t 1 --latency-percentiles=50 で行の書式が壊れないことを確認する。'pgbench latency percentiles without successful transactions' は SELECT 1/0 のスクリプトを --continue-on-error で 5 回流し、失敗率 100% と 'latency percentiles: (no successful transactions)' の両方を検査する。</p></li>
+<li><h4>スクリプト別の行が独立に出ること</h4><p>001 の 'pgbench per-script latency percentiles': 重み付きの 2 スクリプト (001_pgbench_percentile_1@1 と _2@2) を -t 10 で流し、行頭アンカー付きの正規表現で 'latency percentiles:' 行 (グローバル) と ' - latency percentiles:' 行 (スクリプト別) が両方出ることを確認する。</p></li>
+<li><h4>引数パースの拒否条件</h4><p>002_pgbench_no_server.pl に 9 ケース: '0'、'100'、'-1' (範囲外)、'abc' (数値でない)、'' (空リスト)、',,' と '99,,5' (空要素)、'NaN'、そして 50 を 33 個並べた過大リスト。前 8 つは pg_fatal の 'invalid latency percentile: "..."' を、最後は 'at most 32 latency percentiles are allowed' を照合する。</p></li>
+</ul>
+      </section>
+      <section class="patch" id="p-warmup">
+        <p class="eyebrow"><span class="seq">0005</span><span class="sep">/</span><span>ウォームアップ</span></p>
+        <h2>pgbench --warmup: 立ち上がり期間を統計から除外する</h2>
+        <p class="lead">--warmup=SECONDS を追加し、-T の計測区間の前に指定秒数のウォームアップを走らせて、その間に記録される統計をスレッドごとの破棄バケットへ迂回させる。総実行時間は warmup + duration、最終レポートは最後の -T 秒だけを対象とし、破棄した件数は新しい "warmup:" 行に出る。</p>
+        <dl class="facts"><div><dt>コミット</dt><dd>356f36451a0</dd></div><div><dt>件名</dt><dd>pgbench: Add --warmup option to exclude ramp-up from statistics</dd></div><div><dt>差分</dt><dd>4 files <span class="plus">+230</span> <span class="minus">&minus;36</span></dd></div></dl>
+
+<h3 class="step" id="p-warmup-problem"><span class="step-mark">問題</span>何が足りなかったか</h3>
+        <p>TPC-C をはじめとする定常状態ベンチマークの方法論では、計測区間の前の立ち上がり(バッファプールの充填、プラン・接続の暖機、autovacuum の落ち着き)を捨てることが前提になっている。しかし pgbench は常に時刻ゼロから数えるため、ユーザーは -l のトランザクションログを後段で切り出すか、-P の出力を目視して「このあたりから定常」と判断するしかなかった。sysbench の --warmup-time や BenchmarkSQL の rampupMins に相当する機能が pgbench には無く、-hackers にも提案履歴がない。結果として、同じサーバー・同じスクリプトでも実行時間の長短だけで tps が変わり、比較可能な数字にならない。</p>
+<p>`pgbench -c 32 -j 8 -T 300 bench` の "tps = ..." には、shared_buffers が冷えている最初の数十秒が丸ごと入る。除外したければ -l を付けて後で awk で切るか、-P 10 の行を目視するしかない。パッチ前に `pgbench --warmup=60 -T 300 bench` と打つと、getopt_long が argv 要素をそのまま出すため `pgbench: unrecognized option '--warmup=60'` と `pgbench: hint: Try "pgbench --help" for more information.` を出して終了ステータス 1 で終わる。</p>
+
+<h3 class="step" id="p-warmup-design"><span class="step-mark">設計</span>採った道と捨てた道</h3>
+        <div class="choices"><div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>-T に対して加算方式 (総実行時間 = warmup + T) とし、-t との併用は起動時に fatal エラーにする。setalarm(duration + warmup)、end_time += warmup*1e6、printResults に渡す時間から warmup*1e6 を引く、という三点で実装する。</p>
+<p>-T が「計測区間」を意味するままになり、sysbench の --warmup-time と同じ挙動になる。--warmup を -T なしで指定した場合は DEFAULT_NXACTS により暗黙の -t 10 になってしまうので、duration &lt;= 0 を fatal ("--warmup requires -T/--time") にして -t 併用と -T 忘れをまとめて弾く。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>減算方式 (-T にウォームアップを含め、計測は T - warmup) は、-T が実行時間と計測時間の二重の意味を持ち、warmup &gt;= T のときの挙動も定義が要るので却下。-t との併用も却下: 終了判定は st-&gt;cnt (CSTATE_END_TX の `st-&gt;cnt &gt;= nxacts`) が駆動し、この st-&gt;cnt はウォームアップ中のトランザクションも数える。計測分だけ数えるよう st-&gt;cnt をゲートすると終了ロジックそのものが壊れるため、-t 併用は定義不能。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>破棄バケットは単なるカウンタではなく完全な StatsData (thread-&gt;warmup_stats) にし、統計のマージ処理を mergeStats() として切り出して printProgressReport と最終集約の両方で使う。</p>
+<p>printProgressReport() は threads[i].stats の latency/lag の和と cnt から区間 tps と平均レイテンシを出す。ウォームアップ中の統計を迂回させると、そのままでは -P の行が 0 tps / 0 ms になる。バケットを StatsData にしておけば進捗表示側で measured + warmup の両方を mergeStats() で足すだけで済み、-P は時刻ゼロから正しいライブ表示のままになる。accumStats() もそのまま再利用でき、--latency-percentiles 用の latency_histogram も StatsData の中にあるので自動的に除外対象になる。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>「破棄件数を数える int64 カウンタだけ持つ」案は却下。カウンタでは -P が必要とする latency.sum / sum2 / lag.sum を復元できず、ウォームアップ中の進捗行が 0 tps・0 ms になる (「-P は影響を受けない」という当初のスペック記述はこの方式では成立しない)。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>境界時刻 warmup_until はスレッドごとに持ち、threadRun() の GO バリア直後に thread-&gt;bench_start + warmup*1e6 として設定する。共有変数も追加バリアも導入しない。</p>
+<p>bench_start はバリア解放直後に各スレッドが自分で取る値で、!is_connect なら初期接続完了後、-C なら各トランザクションの接続の前という、ウォームアップの起点として意味のある時点になる。スレッド間のズレはバリア解放のジッタ (サブミリ秒) にすぎず、既存の -T が全スレッド共通の setalarm を(それよりさらに前の時点で)使っているのと同程度の許容誤差。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>「共有の bench start から導いた一つの絶対時刻 warmup_end を全スレッドで使う」案は実装不能なので却下。実行中に共有の bench start は存在せず、main のローカル bench_start は全スレッドを join した後に各 thread-&gt;bench_start の最小値として計算されるものだから、走行中に参照できる値ではない。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>ゲートは processXactStats の一点ではなく、統計が積まれる全サイトに個別に入れる: thread-&gt;stats の accumStats、latency_late++、スクリプト別 accumStats、そして CSTATE_END_COMMAND の command-&gt;stats、CSTATE_RETRY の command-&gt;retries++、CSTATE_FAILURE の command-&gt;failures++。</p>
+<p>統計の書き込み口を grep で列挙した結果、-r の per-command 統計だけは processXactStats の外、advanceConnectionState() の状態機械アームの中にあった。advanceConnectionState は thread ポインタを持っているので、同じ warmupActive(thread, &amp;now) をそこでも呼べる。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>「processXactStats を一箇所ゲートすれば -r の統計まで含めて全部覆える」という当初の設計は誤りなので却下。CSTATE_END_COMMAND の addToSimpleStats は完全に別サイトで、そこを漏らすと -r のレイテンシ列だけが計測区間、失敗数とリトライ数は全期間、という内部不整合なレポートになる。</p>
+</div>
+</div>
+
+<h3 class="step" id="p-warmup-code"><span class="step-mark">仕組み</span>コードを読む</h3>
+<figure>
+<pre class="mermaid">flowchart TD
+  A["統計の記録点: processXactStats と CSTATE_END_COMMAND"] --> B{"warmupActive: now が warmup_until 未満か"}
+  B -->|"はい (ウォームアップ中)"| C["warmup_stats に加算 (破棄バケット)"]
+  B -->|"いいえ (warmup_done を latch)"| D["thread.stats / latency_late / スクリプト別 / command.stats"]
+  A --> E["st.cnt++ と doLog はゲートしない (終了判定とログの完全性)"]
+  C --> F["printProgressReport: 両バケットをマージ (-P は時刻ゼロから)"]
+  D --> F
+  D --> G["printResults 本体 (tps, レイテンシ, パーセンタイル)"]
+  C --> H["warmup: N s (M transactions discarded) 行"]</pre>
+</figure>
+<figure class="code">
+<figcaption>pgbench.c / warmupActive()</figcaption>
+<pre><code>/*
+ * Return whether statistics recorded now belong to the --warmup period and
+ * must be diverted to the thread&#x27;s warmup bucket.  Reads the clock (lazily)
+ * while warmup is running; the boundary is judged on the recording time, so
+ * a transaction straddling it is measured in full.
+ */
+static bool
+warmupActive(TState *thread, pg_time_usec_t *now)
+{
+	if (warmup == 0 || thread-&gt;warmup_done)
+		return false;
+
+	pg_time_now_lazy(now);
+	if (*now &lt; thread-&gt;warmup_until)
+		return true;
+
+	thread-&gt;warmup_done = true;
+	thread-&gt;warmup_conn_duration = thread-&gt;conn_duration;
+	return false;
+}</code></pre>
+</figure>
+<p class="code-note">ゲートの本体。第一行の `warmup == 0` で、オプション未指定時は完全にゼロコスト(時計も読まない)。warmup_done が立った後も即 false を返すので、ウォームアップ終了後に毎トランザクション余分な時計読みをすることはない。逆に言うと、ウォームアップ中は pg_time_now_lazy() を自分で呼んで *now を必ず埋める。これは processXactStats の既存の時刻取得が `detailed` 条件の下にしかなく、素の `-T N --warmup=M` では now が 0 のままになってしまうため。ラッチが外れる瞬間 (最初に false を返す呼び出し) に thread-&gt;conn_duration をスナップショットして warmup_conn_duration に取り、-C の平均接続時間からウォームアップ分を引けるようにしている。</p>
+<figure class="code">
+<figcaption>pgbench.c / processXactStats()</figcaption>
+<pre><code>	if (in_warmup)
+	{
+		/* stats of warmup transactions go to the discard bucket */
+		accumStats(&amp;thread-&gt;warmup_stats, skipped, latency, lag, st-&gt;estatus,
+				   st-&gt;tries);
+	}
+	else
+	{
+		/* keep detailed thread stats */
+		accumStats(&amp;thread-&gt;stats, skipped, latency, lag, st-&gt;estatus,
+				   st-&gt;tries);
+
+		/* count transactions over the latency limit, if needed */
+		if (latency_limit &amp;&amp; latency &gt; latency_limit)
+			thread-&gt;latency_late++;
+	}</code></pre>
+</figure>
+<p class="code-note">in_warmup は関数冒頭で `bool in_warmup = warmupActive(thread, now);` として一度だけ評価され、以降の判定はすべてこの値を使う(同一トランザクションの中でゲートが揺れないため)。accumStats の宛先を差し替えるだけなので、成功件数・skipped・retries/retried・失敗種別・latency/lag の SimpleStats・レイテンシヒストグラムがまとめて破棄バケットへ行く。--latency-limit の latency_late も同じ else 側に入っている。このブロックの直後にある `st-&gt;cnt++;` と `doLog(...)` は意図的にゲートしていない: 前者はクライアントの終了判定を駆動し、後者はログの完全性 (--aggregate-interval の集計は doLog の内部で行われる) のため。関数末尾のスクリプト別統計は `if (per_script_stats &amp;&amp; !in_warmup)` という形でゲートされている。</p>
+<figure class="code">
+<figcaption>pgbench.c / advanceConnectionState() の CSTATE_END_COMMAND</figcaption>
+<pre><code>			case CSTATE_END_COMMAND:
+
+				/*
+				 * command completed: accumulate per-command execution times
+				 * in thread-local data structure, if per-command latencies
+				 * are requested.
+				 */
+				if (report_per_command)
+				{
+					pg_time_now_lazy(&amp;now);
+
+					command = sql_script[st-&gt;use_file].commands[st-&gt;command];
+					/* XXX could use a mutex here, but we choose not to */
+					if (!warmupActive(thread, &amp;now))
+						addToSimpleStats(&amp;command-&gt;stats,
+										 PG_TIME_GET_DOUBLE(now - st-&gt;stmt_begin));
+				}</code></pre>
+</figure>
+<p class="code-note">-r (--report-per-command) の文別レイテンシは processXactStats ではなくこの状態機械アームで積まれる。ここを見落とすと、-r の出力だけがウォームアップを含んだままになる。判定は文の記録時刻で行われるので、境界をまたぐトランザクションでは、境界より前に終わった文は破棄側、後に終わった文は計測側に分かれる(トランザクション全体のレイテンシは計測側に丸ごと入る)。同じ理由で CSTATE_RETRY の `command-&gt;retries++` と CSTATE_FAILURE の `command-&gt;failures++` にも同じ `if (!warmupActive(thread, &amp;now))` が入っている。</p>
+<figure class="code">
+<figcaption>pgbench.c / printProgressReport()</figcaption>
+<pre><code>	initStats(&amp;cur, 0);
+	for (int i = 0; i &lt; nthreads; i++)
+	{
+		mergeStats(&amp;cur, &amp;threads[i].stats);
+
+		/*
+		 * Transactions diverted to the warmup bucket still count for live
+		 * progress reporting.
+		 */
+		if (warmup &gt; 0)
+			mergeStats(&amp;cur, &amp;threads[i].warmup_stats);
+	}</code></pre>
+</figure>
+<p class="code-note">-P の進捗行は「今どれくらい出ているか」のライブ表示なので、ウォームアップ中もゼロにしてはいけない。ここで両バケットを足すことで、進捗行は時刻ゼロから連続した正しい値になる。マーカー行は出さない方針なので、-P だけを見ているとウォームアップが終わった瞬間は分からない(区別が必要なら最終レポートの warmup 行を見る)。元のコードは threads[i].stats のフィールドを一つずつ足していたが、同じ足し算が二箇所と最終集約で必要になったので mergeStats() に括り出されている。</p>
+<figure class="code">
+<figcaption>pgbench.c / main()</figcaption>
+<pre><code>	total_duration = pg_time_now() - bench_start - (int64) 1000000 * warmup;
+	if (total_duration &lt; 1)
+		total_duration = 1;
+
+	printResults(&amp;stats, &amp;warmup_stats, total_duration, conn_total_duration,
+				 bench_start - start_time, latency_late);</code></pre>
+</figure>
+<p class="code-note">tps の分母。printResults は `tps = total-&gt;cnt / PG_TIME_GET_DOUBLE(total_duration)` を計算するので、分子 (計測区間の件数) と辻褄を合わせるには経過時間から warmup 秒を引く必要がある。クランプは中断時の保険: Ctrl-C や接続失敗でウォームアップが終わる前に走行が終わると引き算が負になり、tps が負値やレイテンシ平均が異常値になる。1 マイクロ秒に丸めれば「異常に大きい tps」として見えるだけで済む。conn_total_duration の方も、各スレッドで `thread-&gt;conn_duration - thread-&gt;warmup_conn_duration` として集約されている。</p>
+
+<h3 class="step" id="p-warmup-gotchas"><span class="step-mark">注意</span>落とし穴</h3>
+        <ul class="notes warn-list"><li><h4>-r の統計は processXactStats の外にあり、失敗数とリトライ数はさらに別サイト</h4><p>レビューで見つかった実際の欠陥。当初は「processXactStats をゲートすれば -r も覆える」と考えていたが、per-command のレイテンシは CSTATE_END_COMMAND、リトライ数は CSTATE_RETRY の command-&gt;retries++、失敗数は CSTATE_FAILURE の command-&gt;failures++ と、三つの独立した書き込み口がある。レイテンシだけゲートすると、-r の出力で「レイテンシ列は計測区間だけ、failures/retries 列は全期間」という内部不整合なレポートが出る。修正は三箇所すべてに同じ warmupActive() ガードを入れること。</p></li>
+<li><h4>-C の平均接続時間は分子と分母を揃える必要がある</h4><p>printResults は `average connection time = 0.001 * conn_total_duration / (total-&gt;cnt + failures)` (usec を ms に直した値) を出す。分母は計測区間の件数だけになったので、分子もウォームアップ中に費やした接続時間を引かないと平均が水増しされる (ウォームアップが長いほど大きく外れる)。そのため warmupActive() がラッチを外す瞬間に thread-&gt;conn_duration をスナップショットして warmup_conn_duration に保存し、main の集約で差し引いている。逆に、あるスレッドが走行中に一度も統計記録点に到達しなかった場合はラッチが外れず warmup_conn_duration が 0 のまま残る (極端に長いトランザクション一本だけ、といったケース)。</p></li>
+<li><h4>ゲート用の時計読みは自前で行う必要がある</h4><p>processXactStats の既存の `pg_time_now_lazy(now)` は `detailed = progress || throttle_delay || latency_limit || use_log || per_script_stats || num_latency_percentiles &gt; 0` の下にしかない。素の `pgbench -T 10 --warmup=5 -n` ではこれが全部 false なので *now は 0 のまま、`0 &lt; warmup_until` が常に真になって全トランザクションが破棄され、レポートが空になる。だから warmupActive() が自分で pg_time_now_lazy() を呼ぶ。そのままだと恒久的に余分な時計読みが増えるので、warmup_done フラグでラッチして終了後は最初の条件式だけで返る。</p></li>
+<li><h4>中断走行での負の duration</h4><p>`total_duration = pg_time_now() - bench_start - warmup*1e6` は、ウォームアップ完了前に走行が中断されると負になる。そのまま printResults に渡すと tps が負値、`latency average = 0.001 * total_duration * nclients / total_cnt` も負になる。`if (total_duration &lt; 1) total_duration = 1;` のクランプが必要。関連して、setalarm(duration + warmup) と end_time の計算で int が溢れないよう、起動時に `warmup &gt; INT_MAX - duration` を fatal にしている。</p></li>
+<li><h4>-P / -l と最終レポートの数字は意図的に食い違う</h4><p>-P は両バケットをマージするので時刻ゼロからの値、-l と --aggregate-interval の行はタイムスタンプ付きで後から切れるためゲートせず全期間を覆う。一方で最終レポートは計測区間のみ。したがって「-P の行を平均した値」と「最終行の tps」は --warmup ありでは一致しない。これは仕様であり、破棄した件数は `warmup: 60 s (12345 transactions discarded)` の行で確認できる (失敗があれば `, including N failed` が付く)。</p></li>
+<li><h4>境界判定は記録時刻ベース (record-time gating)</h4><p>「開始時刻がウォームアップ中かどうか」ではなく「統計を記録しようとした時刻がウォームアップ中かどうか」で判定する。したがって境界をまたぐトランザクションは丸ごと計測区間に算入される。トランザクション開始時刻でのゲートはトランザクションごとの追加簿記が必要で、しかも -T による打ち切りが既に記録時刻ベース (最後のトランザクションは -T を超えてもコミットまで走る) なのと不整合になる。なお -r の文別統計には同じ規則が文単位で適用されるため、またぐトランザクションの前半の文は破棄側に落ちる。</p></li>
+<li><h4>warmup_until はスレッドごと、GO バリアの直後</h4><p>走行中に共有の bench start は存在しない (main のローカル bench_start は join 後に各 thread-&gt;bench_start の最小値として計算される後付けの値)。よって warmup_until は threadRun() で `start + warmup*1e6` として各スレッドが自分で計算する。スレッド間のズレはバリア解放のジッタ分だけで、setalarm がさらに前の時点で仕掛けられている既存の -T と同程度の許容誤差。TState の初期化側 (main) では warmup_until = 0 を置くだけで、実値はバリア後に埋まる。</p></li>
+</ul>
+
+<h3 class="step" id="p-warmup-tests"><span class="step-mark">検証</span>テストが固定していること</h3>
+        <ul class="notes ok-list"><li><h4>走行が warmup + duration 続き、レポートに warmup 行が出て、実際に非ゼロ件数が破棄されていること (001_pgbench_with_server.pl の 'pgbench warmup')</h4><p>`-T 1 --warmup=1 -n -r` を `\sleep 200 ms` だけのスクリプトで走らせ、出力に `duration: 1 s`、`warmup: 1 s \([1-9]\d* transactions discarded\)`、`processed: \d+\b`、`statement latencies in milliseconds` を要求する。スクリプトを sleep にしているのは、マシン速度によらずウォームアップ区間と計測区間の双方にトランザクションが入るようにするため。破棄件数を [1-9]\d* (非ゼロ) にしてあるので、統計の迂回をやめる退行はここで落ちる。stderr は空 (qr{^$}) を要求。</p></li>
+<li><h4>--latency-percentiles との組み合わせで、パーセンタイルが計測区間のデータから計算されていること (001_pgbench_with_server.pl の 'pgbench warmup with latency percentiles')</h4><p>`-T 2 --warmup=1 -n --latency-percentiles=50` を `\sleep 200 ms` スクリプトで走らせ、warmup 行に加えて `latency percentiles: p50 = \d+\.\d+ ms` を要求する。ヒストグラムは StatsData の一部なので破棄バケット側へ一緒に迂回する。もし計測区間のトランザクションまで破棄していれば、printResults はここで `latency percentiles: (no successful transactions)` を出すためテストが落ちる。</p></li>
+<li><h4>オプション引数の検証 (002_pgbench_no_server.pl の 'zero warmup' / 'negative warmup' / 'not a warmup')</h4><p>`--warmup=0 -T 10` と `--warmup=-1 -T 10` に対して `--warmup must be in range 1\.\.` を、`--warmup=fast -T 10` に対して `invalid value "fast" for option --warmup` を要求する。これは option_parse_int(optarg, "--warmup", 1, INT_MAX, &amp;warmup) の下限が 1 であることを固定している。</p></li>
+<li><h4>-T との依存関係 (002_pgbench_no_server.pl の 'warmup with -t' / 'warmup without -T')</h4><p>`--warmup=5 -t 100` と `--warmup=5` (単独) の双方が `--warmup requires -T/--time` で落ちることを確認する。後者が重要で、-T も -t も無い場合は DEFAULT_NXACTS により暗黙の -t 10 になるため、duration &lt;= 0 のチェックがこのケースも捕まえていることを固定している。</p></li>
+</ul>
+      </section>
+
+
+      <section class="quiz" id="quiz">
+        <h2>理解度チェック</h2>
+        <p>全 20 問。選ぶと即座に正誤と解説が出る。間違えた節は最後にまとめて示すので、そこだけ読み返せばよい。</p>
+        <div class="scorebar">
+          <span class="score" id="score">0 / 20 正解</span>
+          <span class="track"><span class="fill" id="fill"></span></span>
+          <span class="remain" id="remain">未回答 20</span>
+          <button type="button" id="reset">最初からやり直す</button>
+        </div>
+        <article class="q" data-answer="3" data-anchor="p-gset-null" data-patch="\gset の NULL">
+          <p class="q-meta"><span class="q-no">Q01</span><a href="#p-gset-null">0001 \gset の NULL</a></p>
+          <h4>格納ループで NULL 判定に PQgetisnull(res, ntuples - 1, fld) を使う理由として正しいものはどれか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="0" data-o="0"><span class="opt-key">A</span><span class="opt-text">\gset は1行しか許さないので ntuples - 1 は常に 0 であり、実際にはどの行を指定してもよいから</span></button>
+<button type="button" class="opt" data-q="0" data-o="1"><span class="opt-key">B</span><span class="opt-text">NULL 判定は「結果セットのどこかに NULL があるか」で決めるのが \gset の仕様だから</span></button>
+<button type="button" class="opt" data-q="0" data-o="2"><span class="opt-key">C</span><span class="opt-text">libpq は最終行以外のタプルのメモリを PQgetResult の時点で解放しており、他の行は参照できないから</span></button>
+<button type="button" class="opt" data-q="0" data-o="3"><span class="opt-key">D</span><span class="opt-text">\aset は各結果セットの最終行を変数に残す仕様であり、既存の PQgetvalue と同じセルを判定しないと値と NULL フラグが食い違うから</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">この格納ループは \gset と \aset で共有されており、\aset は行数を制限せず最終行を採用する。TAP テストは ORDER BY ... NULLS LAST / NULLS FIRST を切り替えて、判定セルが本当に最終行であることを固定している。選択肢 A は \gset だけを見た人が選びがちだが、同じコードを \aset も通るので「どの行でもよい」は成り立たない。選択肢 B は \aset の「最後の行を残す」仕様と矛盾し、選択肢 C は事実として誤り (PGresult は全行を保持する)。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="2" data-anchor="p-gset-null" data-patch="\gset の NULL">
+          <p class="q-meta"><span class="q-no">Q02</span><a href="#p-gset-null">0001 \gset の NULL</a></p>
+          <h4>-M prepared で SELECT NULL AS nv \gset を実行した後、INSERT INTO t(x text) VALUES (:nv) を実行すると t.x はどうなるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="1" data-o="0"><span class="opt-key">A</span><span class="opt-text">undefined variable エラーになる</span></button>
+<button type="button" class="opt" data-q="1" data-o="1"><span class="opt-key">B</span><span class="opt-text">パラメータのバインドに失敗してクライアントが abort する</span></button>
+<button type="button" class="opt" data-q="1" data-o="2"><span class="opt-key">C</span><span class="opt-text">4文字の文字列 'NULL' が入る</span></button>
+<button type="button" class="opt" data-q="1" data-o="3"><span class="opt-key">D</span><span class="opt-text">SQL NULL が入る</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">getQueryParams() は getVariable() の戻り値をそのまま libpq に渡すだけで、getVariable() は PGBT_NULL を "NULL" という文字列にレンダリングして svalue にキャッシュする。よってパラメータは4文字の文字列になる (TAP テストが t = 'NULL' で固定している)。選択肢 D が最も誘惑的だが、それは simple モードの挙動 — simple では変数が引用符なしの NULL として SQL テキストに埋め込まれるので、パーサが NULL リテラルとして解釈して本物の SQL NULL になる。パッチはこのモード差を意図的に据え置き、ドキュメントに書くだけにしている。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-gset-null" data-patch="\gset の NULL">
+          <p class="q-meta"><span class="q-no">Q03</span><a href="#p-gset-null">0001 \gset の NULL</a></p>
+          <h4>このパッチ以前、SELECT NULL AS v \gset の直後に \set i debug(:v) を実行すると何が起きたか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="2" data-o="0"><span class="opt-key">A</span><span class="opt-text">debug が空文字列を出力して実行は続行された</span></button>
+<button type="button" class="opt" data-q="2" data-o="1"><span class="opt-key">B</span><span class="opt-text">debug が null を出力した (旧コードでも式では null 扱いだった)</span></button>
+<button type="button" class="opt" data-q="2" data-o="2"><span class="opt-key">C</span><span class="opt-text">そのトランザクションだけがリトライされ、2回目で成功した</span></button>
+<button type="button" class="opt" data-q="2" data-o="3"><span class="opt-key">D</span><span class="opt-text">クライアントが abort し、--max-tries を増やしても --continue-on-error を付けても復帰しなかった</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">PQgetvalue が "" を返し、makeVariableValue() が slen==0 で false を返すため、executeMetaCommand() が commandFailed("evaluation of meta-command failed") → CSTATE_ABORTED → ESTATUS_META_COMMAND_ERROR に落ちる。canRetryError() が真になるのは serialization / deadlock だけ、canContinueOnError() が扱うのは ESTATUS_OTHER_SQL_ERROR だけなので、どちらのオプションでも救えない。選択肢 A が誘惑的だが、空文字列は式言語の値として不正なので debug に到達すらしない (makeVariableValue はメッセージすら出さないため、原因が NULL だと分かりにくいのが実害の大きさでもある)。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="2" data-anchor="p-gset-null" data-patch="\gset の NULL">
+          <p class="q-meta"><span class="q-no">Q04</span><a href="#p-gset-null">0001 \gset の NULL</a></p>
+          <h4>setNullValue()+putVariableValue() の代わりに putVariable(&amp;st-&gt;variables, ..., "NULL") と文字列を格納した場合、何が起きるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="3" data-o="0"><span class="opt-key">A</span><span class="opt-text">何も変わらない。両者は完全に同一の内部表現になる</span></button>
+<button type="button" class="opt" data-q="3" data-o="1"><span class="opt-key">B</span><span class="opt-text">式評価時に malformed variable value エラーになる</span></button>
+<button type="button" class="opt" data-q="3" data-o="2"><span class="opt-key">C</span><span class="opt-text">式の上では null として振る舞うが、変数の svalue が4文字の "NULL"、value.type が PGBT_NO_VALUE のままになり、\set v NULL の内部表現と一致しない</span></button>
+<button type="button" class="opt" data-q="3" data-o="3"><span class="opt-key">D</span><span class="opt-text">\if :v IS NULL が偽になる</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">makeVariableValue() には pg_strcasecmp(svalue, "null") で null 値に変換する枝があるので、文字列 "NULL" を入れても式では null として動いてしまう。だから選択肢 B も選択肢 D も誤り。しかし putVariable() は svalue に文字列を入れ value.type を PGBT_NO_VALUE のままにするので、`\set v NULL` が作る svalue=NULL / PGBT_NULL とは別表現であり、遅延パースを1回挟む点も違う。選択肢 A が最も誘惑的だが、「観測される挙動がほぼ同じ」ことと「内部表現が同一」であることは別物で、パッチの目標は後者 (\set var NULL と等価) の達成にある。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-sleep-expr" data-patch="\sleep の式">
+          <p class="q-meta"><span class="q-no">Q05</span><a href="#p-sleep-expr">0002 \sleep の式</a></p>
+          <h4>なぜ「式をパースし終えてから残りの単語を単位として読む」実装にできなかったのか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="4" data-o="0"><span class="opt-key">A</span><span class="opt-text">flex が "1ms" を INTEGER_CONST と FUNCTION の 2 トークンに分けられないから</span></button>
+<button type="button" class="opt" data-q="4" data-o="1"><span class="opt-key">B</span><span class="opt-text">式パーサが大文字小文字を区別してしまい、US と us を同一視できないから</span></button>
+<button type="button" class="opt" data-q="4" data-o="2"><span class="opt-key">C</span><span class="opt-text">単位を括弧で囲んで \sleep ( expr ) ms と書けば境界が確定するので、先読みは問題にならないから</span></button>
+<button type="button" class="opt" data-q="4" data-o="3"><span class="opt-key">D</span><span class="opt-text">bison のパーサは式を還元するために常に 1 トークン先読みするので、expr_yyparse() が返る前に単位トークンが消費されてしまうから</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">LALR パーサは式が続くのかを判断するために必ず 1 トークン先読みする。\set x 1 ms がキャレットを ms に立てて syntax error になるのがその実証で、\sleep でも同じことが起きるため「後から読む」余地がない。だから先頭にモード選択トークンを注入し、単位を文法の一部にした。選択肢 C (括弧案) が最も紛らわしいが、'(' expr ')' 自体が expr の production なので ')' の後もパーサは次のトークンを先読みする (( 1 ) + 1 が書ける以上そうなる)。選択肢 A は誤りで、flex の最長一致により "1ms" は INTEGER_CONST(1) と FUNCTION(ms) に分かれる。選択肢 B も誤りで、単位判定は pg_strcasecmp なので US も通る。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-sleep-expr" data-patch="\sleep の式">
+          <p class="q-meta"><span class="q-no">Q06</span><a href="#p-sleep-expr">0002 \sleep の式</a></p>
+          <h4>\sleep 1 + 1 ms は実際にどれだけ待つか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="5" data-o="0"><span class="opt-key">A</span><span class="opt-text">1 秒と 1 ミリ秒 (最後の項だけに ms が掛かる)</span></button>
+<button type="button" class="opt" data-q="5" data-o="1"><span class="opt-key">B</span><span class="opt-text">スクリプト読み込み時に syntax error</span></button>
+<button type="button" class="opt" data-q="5" data-o="2"><span class="opt-key">C</span><span class="opt-text">2 秒 (単位が無視され既定の秒になる)</span></button>
+<button type="button" class="opt" data-q="5" data-o="3"><span class="opt-key">D</span><span class="opt-text">2 ミリ秒</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">文法アクションは make_op("*", &lt;式全体&gt;, &lt;倍率&gt;) で式木の根に掛け算ノードを被せる。テキスト上の位置ではなく構文木の根に対する操作なので、単位は常に式全体に掛かり (1 + 1) * 1000 = 2000us = 2 ミリ秒になる。選択肢 A は「ms が直前のトークンに付く」というテキスト的な直感からの誤りで、opt_unit は expr を還元し終えた後にしか現れないため、そのような結合は起こらない。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="0" data-anchor="p-sleep-expr" data-patch="\sleep の式">
+          <p class="q-meta"><span class="q-no">Q07</span><a href="#p-sleep-expr">0002 \sleep の式</a></p>
+          <h4>\sleep 0.4 s の挙動として正しいものはどれか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="6" data-o="0"><span class="opt-key">A</span><span class="opt-text">0.4 秒 (400000 マイクロ秒) 待つ</span></button>
+<button type="button" class="opt" data-q="6" data-o="1"><span class="opt-key">B</span><span class="opt-text">0.4 が 0 に丸められ、待たずに次のコマンドへ進む</span></button>
+<button type="button" class="opt" data-q="6" data-o="2"><span class="opt-key">C</span><span class="opt-text">coerceToInt が double を拒否し、実行時に "cannot coerce double to int" で失敗する</span></button>
+<button type="button" class="opt" data-q="6" data-o="3"><span class="opt-key">D</span><span class="opt-text">整数定数でないため読み込み時に "invalid sleep time, must be an integer" で落ちる</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">倍率は式木に畳み込まれているので、実行時はまず 0.4 * 1000000 が評価され (片方が double なので結果も double の 400000.0)、その後に coerceToInt が rint する。つまり丸めはマイクロ秒換算の後に起きる。選択肢 B は「先に整数化してから単位を掛ける」という旧実装のイメージからの誤りで、この順序なら 0 になるが実装はそうなっていない。選択肢 C は誤りで、coerceToInt が拒否するのは NULL と boolean だけ。選択肢 D は旧実装の読み込み時エラーで、現在は式として正当に受理される。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="2" data-anchor="p-sleep-expr" data-patch="\sleep の式">
+          <p class="q-meta"><span class="q-no">Q08</span><a href="#p-sleep-expr">0002 \sleep の式</a></p>
+          <h4>\sleep 9223372036854775807 us を実行するとどうなるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="7" data-o="0"><span class="opt-key">A</span><span class="opt-text">sleep_until が負に回り込み、ほぼ待たずに次のコマンドへ進む</span></button>
+<button type="button" class="opt" data-q="7" data-o="1"><span class="opt-key">B</span><span class="opt-text">定数が大きすぎるため読み込み時に "bigint constant overflow" で落ちる</span></button>
+<button type="button" class="opt" data-q="7" data-o="2"><span class="opt-key">C</span><span class="opt-text">now + usec の加算が桁あふれするので sleep_until が PG_INT64_MAX に飽和し、実質そのクライアントは走行終了まで眠り続ける</span></button>
+<button type="button" class="opt" data-q="7" data-o="3"><span class="opt-key">D</span><span class="opt-text">掛け算の時点で "bigint mul out of range" になり、クライアントが異常終了する</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">us の倍率は 1 なので掛け算は溢れず、値はそのまま INT64_MAX として evaluateSleep から返る。危ないのは executeMetaCommand の now + usec で、ここは pg_add_s64_overflow で検出して PG_INT64_MAX に飽和させている。選択肢 D が最も紛らわしいが、それが起きるのは倍率が 1000000 になる \sleep 9223372036854775807 s の場合。選択肢 A は飽和させなかった場合の壊れ方 (旧実装が int の桁あふれで 2148 秒以上を無効化していたのと同種) で、このパッチが明示的に潰したもの。選択肢 B は 9223372036854775807 が int64 に収まるので誤り (収まらない 20 桁の定数なら読み込み時に落ちる)。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="2" data-anchor="p-while" data-patch="\while ループ">
+          <p class="q-meta"><span class="q-no">Q09</span><a href="#p-while">0003 \while ループ</a></p>
+          <h4>なぜジャンプ先の代入を executeMetaCommand() の中で行わず、pending_jump を経由して CSTATE_END_COMMAND まで遅延させているのか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="8" data-o="0"><span class="opt-key">A</span><span class="opt-text">jump_target は実行時にしか確定しないため、メタコマンドの実行時点ではジャンプ先が分からない</span></button>
+<button type="button" class="opt" data-q="8" data-o="1"><span class="opt-key">B</span><span class="opt-text">executeMetaCommand() が CSTATE_START_COMMAND を返せば st-&gt;command から実行し直されるので、ジャンプの代入自体が不要になる</span></button>
+<button type="button" class="opt" data-q="8" data-o="2"><span class="opt-key">C</span><span class="opt-text">CSTATE_END_COMMAND は -r 統計のために commands[st-&gt;command] を読み直してから無条件に st-&gt;command++ するので、先に st-&gt;command を書き換えると統計が実行していないコマンドに付き、着地点も 1 つ行き過ぎる (\endwhile では条件が二度と評価されない)</span></button>
+<button type="button" class="opt" data-q="8" data-o="3"><span class="opt-key">D</span><span class="opt-text">executeMetaCommand() は CState を受け取らないので st-&gt;command を書き換えられない</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">CSTATE_END_COMMAND の処理順 (統計の加算 → st-&gt;command++) が理由のすべて。特に \endwhile の後方ジャンプは while の位置に置いてもその直後の ++ で while+1 になり、条件が一度も再評価されない無条件無限ループになる。紛らわしいのは選択肢 B で、executeMetaCommand() の直後の Assert は WAIT_RESULT / END_COMMAND / SLEEP / ABORTED しか許さず、仮に通してもコマンド単位統計を丸ごと飛ばすので採れない。jump_target はパース時に CheckScriptStructure() が静的に埋めるので選択肢 A も誤り。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="1" data-anchor="p-while" data-patch="\while ループ">
+          <p class="q-meta"><span class="q-no">Q10</span><a href="#p-while">0003 \while ループ</a></p>
+          <h4>入れ子のループを実行中に -T の時間が満了した。何が起きるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="9" data-o="0"><span class="opt-key">A</span><span class="opt-text">内側のループだけが break され、外側の \endwhile の後方ジャンプでループに再突入しうる</span></button>
+<button type="button" class="opt" data-q="9" data-o="1"><span class="opt-key">B</span><span class="opt-text">どの \while も条件を評価せず偽として扱うので入れ子が順にほどけ、スクリプト末尾 (COMMIT など) が普通に実行され、そのトランザクションも成功として計上される</span></button>
+<button type="button" class="opt" data-q="9" data-o="2"><span class="opt-key">C</span><span class="opt-text">-T はループには効かないので、条件が偽になるまで反復が続く</span></button>
+<button type="button" class="opt" data-q="9" data-o="3"><span class="opt-key">D</span><span class="opt-text">\endwhile が CSTATE_FINISHED に遷移し、トランザクションを開いたまま接続が閉じられ、そのトランザクションは計上されない</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">timer_exceeded は実行中クリアされない単調な sig_atomic_t で、これを見るのは \while 1 か所。\endwhile は常に後方ジャンプするが、着地する \while が即座に抜けるので新しい反復は始まらない。選択肢 A が一番もっともらしいが、これは「そのループを 1 回だけ break する」という言い方に対応する反論であって、フラグを見る場所を \while に固定した実装には当てはまらない。選択肢 D は元の仕様案の候補だが、トランザクション途中で終了させる挙動は既存のどのタイマーチェックにもなく、processXactStats() を飛ばしつつ -r のデータ点だけが残るため却下された。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-while" data-patch="\while ループ">
+          <p class="q-meta"><span class="q-no">Q11</span><a href="#p-while">0003 \while ループ</a></p>
+          <h4>CSTATE_END_COMMAND の後方ジャンプで return せずに break していたら、\while 1 / \set x 1 / \endwhile を pgbench -T 1 -c 2 -j 1 で実行するとどうなるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="10" data-o="0"><span class="opt-key">A</span><span class="opt-text">timer_exceeded が読まれず、-T を無視して永久に回り続ける</span></button>
+<button type="button" class="opt" data-q="10" data-o="1"><span class="opt-key">B</span><span class="opt-text">pending_jump が消費されないまま CSTATE_END_TX に到達し、Assert(st-&gt;pending_jump == -1) で落ちる</span></button>
+<button type="button" class="opt" data-q="10" data-o="2"><span class="opt-key">C</span><span class="opt-text">両方のクライアントは進むが、ループ内コマンドの latency が二重計上される</span></button>
+<button type="button" class="opt" data-q="10" data-o="3"><span class="opt-key">D</span><span class="opt-text">1 番目のクライアントが advanceConnectionState() の for(;;) から戻らないので、同じスレッドの 2 番目のクライアントが一度も進まないまま実行が終わる (processed が 2 でなく 1 になる)</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">advanceConnectionState() の状態機械ループから return するのは WAIT_RESULT / WAIT_ROLLBACK_RESULT / SLEEP / THROTTLE / END_TX と終端の ABORTED / FINISHED だけで、メタコマンドだけのループはそのどれにも到達しない。だから 1 クライアントがスレッドを占有する。選択肢 A (無限ループになる) が引っかけで、\while 自身が timer_exceeded を見るのでプロセスはちゃんと終わる。症状はハングではなく「他のクライアントの結果が出ない」という見つけにくい形で、001 の processed: 2 を要求するテストがこれを固定している。なお return してもコストはなく、threadRun() は CSTATE_START_COMMAND のクライアントを見つけると min_usec = 0 にして待機せず次のラウンドに入る。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="1" data-anchor="p-while" data-patch="\while ループ">
+          <p class="q-meta"><span class="q-no">Q12</span><a href="#p-while">0003 \while ループ</a></p>
+          <h4>\if false / \while 1 / SELECT 1/0; / \endwhile / \endif というスクリプトを実行すると何が起きるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="11" data-o="0"><span class="opt-key">A</span><span class="opt-text">\endwhile が jump_target を見て後方ジャンプするので、\if の枝が偽でも無限ループになる</span></button>
+<button type="button" class="opt" data-q="11" data-o="1"><span class="opt-key">B</span><span class="opt-text">スキップ処理が \while も \endwhile も単に st-&gt;command++ で読み飛ばし、ジャンプは一切起きない。ループが条件分岐の 1 つの枝に完全に含まれることをパース時に保証しているので、実行中の反復が殺される心配もない</span></button>
+<button type="button" class="opt" data-q="11" data-o="2"><span class="opt-key">C</span><span class="opt-text">スキップ処理が META_WHILE を特別扱いし、jump_target まで一気に飛ばす</span></button>
+<button type="button" class="opt" data-q="11" data-o="3"><span class="opt-key">D</span><span class="opt-text">スキップ中でも \while の条件式は評価され、真だったのでボディの SELECT 1/0; が実行されエラーになる</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">CSTATE_SKIP_COMMAND のループが特別扱いするのは META_IF / ELIF / ELSE / ENDIF だけで、それ以外は else 側の st-&gt;command++ に落ちる。\while と \endwhile はここに含まれるので executeMetaCommand() 自体が呼ばれず、条件も評価されない。選択肢 D が引っかけで、スキップ中はメタコマンドが実行されないという原則を見落とすと引っかかる。逆に危険なのは「実行中の反復の \endwhile がスキップ領域に入ってしまう」ケースだが、\if/\endif の対がループボディに完全に含まれるかループを完全に含むかのどちらかであることを CheckScriptStructure() が保証しているので起こらない。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="0" data-anchor="p-percentiles" data-patch="パーセンタイル">
+          <p class="q-meta"><span class="q-no">Q13</span><a href="#p-percentiles">0004 パーセンタイル</a></p>
+          <h4>accumStats() にヒストグラム更新を足しただけで、processXactStats() の detailed 述語に num_latency_percentiles &gt; 0 を足し忘れた場合、--latency-percentiles=90 だけを付けた実行はどうなるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="12" data-o="0"><span class="opt-key">A</span><span class="opt-text">すべての成功トランザクションがバケット 0 に入り、p90 = 0.001 ms (バケット 0 の中点 0.5 us) と出力される</span></button>
+<button type="button" class="opt" data-q="12" data-o="1"><span class="opt-key">B</span><span class="opt-text">pg_time_now_lazy が呼ばれないため assert 失敗でクラッシュする</span></button>
+<button type="button" class="opt" data-q="12" data-o="2"><span class="opt-key">C</span><span class="opt-text">latency が未初期化のまま使われ、パーセンタイル値が実行ごとにばらつく</span></button>
+<button type="button" class="opt" data-q="12" data-o="3"><span class="opt-key">D</span><span class="opt-text">ヒストグラムが空のままなので 'latency percentiles: (no successful transactions)' と出力される</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">detailed が偽でも processXactStats は accumStats を無条件に呼ぶ。latency は 0.0 で初期化されているので、成功トランザクションは全部 latencyHistBucket(0.0) = 0 に積まれ、合計は 0 にならない。バケット 0 の中点は 0.5 us なので、printf("%.3f ms", 0.001 * 0.5) がもっともらしい p90 = 0.001 ms を警告なしに出す。選択肢 D が紛らわしいのは、その分岐が総数 0 のときにしか走らないから。ヒストグラムには 0.0 が「入っている」ので総数は正の値になり、この分岐には落ちない。この失敗モードが「行が出ない」ではなく「誤った数値が出る」ことが、レビューでこれを重大と判定した理由。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="0" data-anchor="p-percentiles" data-patch="パーセンタイル">
+          <p class="q-meta"><span class="q-no">Q14</span><a href="#p-percentiles">0004 パーセンタイル</a></p>
+          <h4>ヒストグラムを StatsData にポインタで持たせ、必要になったときだけ確保する設計が退けられた理由は何か。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="13" data-o="0"><span class="opt-key">A</span><span class="opt-text">StatsData が threadRun の last = aggs や printProgressReport の *last = cur で丸ごとコピーされ、2 つの StatsData が同じヒストグラムを共有してしまうから</span></button>
+<button type="button" class="opt" data-q="13" data-o="1"><span class="opt-key">B</span><span class="opt-text">pgbench はスレッド生成後にヒープ確保をしてはいけない規約があるから</span></button>
+<button type="button" class="opt" data-q="13" data-o="2"><span class="opt-key">C</span><span class="opt-text">12,296 バイトの確保が Windows の既定 1 MB スタックに収まらないから</span></button>
+<button type="button" class="opt" data-q="13" data-o="3"><span class="opt-key">D</span><span class="opt-text">測定純度の指摘に答えられなくなるから</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">StatsData には丸ごとコピーする箇所が 2 つあり、ポインタメンバはそこでエイリアスになる。その後 doLog の initStats(agg, next) が走ると、もう一方がまだ参照しているヒストグラムをゼロクリアする。埋め込みならコピーが自動的にディープコピーになり、このバグの種類が消える。選択肢 D も一見もっともらしいが、間接参照 1 回は測定純度の議論の争点ではない (その議論の答えは「オプション未指定なら追加命令ゼロ」というゲート設計のほう) し、ポインタ案でもコストはほぼ同じ。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="2" data-anchor="p-percentiles" data-patch="パーセンタイル">
+          <p class="q-meta"><span class="q-no">Q15</span><a href="#p-percentiles">0004 パーセンタイル</a></p>
+          <h4>スクリプト別のパーセンタイルで、順位を sstats-&gt;cnt から計算すると何が起きるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="14" data-o="0"><span class="opt-key">A</span><span class="opt-text">cnt にはスキップ・失敗も含まれるため、常に実際より小さいパーセンタイルが出る</span></button>
+<button type="button" class="opt" data-q="14" data-o="1"><span class="opt-key">B</span><span class="opt-text">int64 の読み取りが破れて、桁の違う値が表示されることがある</span></button>
+<button type="button" class="opt" data-q="14" data-o="2"><span class="opt-key">C</span><span class="opt-text">cnt がバケット合計を上回りうるため、累積走査が配列の終端 (idx = 1537) まで走り抜け、あふれ判定にも当たらず範囲外の中点から計算した '549453.824 ms' という嘘の値が出ることがある</span></button>
+<button type="button" class="opt" data-q="14" data-o="3"><span class="opt-key">D</span><span class="opt-text">パーセンタイルが 1 サンプル分低いバケットに着地する</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">per-script 統計は無同期に更新され、同時インクリメントは更新を失う。失われるとバケット合計 &lt; cnt になり、cnt から出した rank に累積が届かないままループが終わる。ループを抜けたときの idx は NBUCKETS (1537) であって NBUCKETS-1 ではないので、あふれ判定にも当たらず、範囲外バケットの中点 549453.824 ms がそのまま印字される (実際のコードは rank = Min(rank, latencyHistTotal(...)) で頭打ちにしているのでこの経路には入らない)。選択肢 B が紛らわしいのは、64 ビット環境ではアラインされた int64 の更新が破れないうえ、読み出しは全スレッドの join 後 (printResults) にしか起きないから。破れではなく更新喪失が本質。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="2" data-anchor="p-percentiles" data-patch="パーセンタイル">
+          <p class="q-meta"><span class="q-no">Q16</span><a href="#p-percentiles">0004 パーセンタイル</a></p>
+          <h4>latencyHistBucket() で v &lt; 64 の判定を pg_leftmost_one_pos64 の呼び出しより前に置くことが必須なのはなぜか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="15" data-o="0"><span class="opt-key">A</span><span class="opt-text">負のレイテンシを 0 に丸めるのは pg_leftmost_one_pos64 の後では表現できないから</span></button>
+<button type="button" class="opt" data-q="15" data-o="1"><span class="opt-key">B</span><span class="opt-text">短いトランザクションが多い測定でビット演算を省いて速くするため</span></button>
+<button type="button" class="opt" data-q="15" data-o="2"><span class="opt-key">C</span><span class="opt-text">pg_leftmost_one_pos64 は引数 0 に対して Assert(word != 0) を持ち、サブマイクロ秒のレイテンシは (int64) キャストで 0 になるから</span></button>
+<button type="button" class="opt" data-q="15" data-o="3"><span class="opt-key">D</span><span class="opt-text">64 未満の値では pg_leftmost_one_pos64 が常に 0 を返すので、1 us から 63 us がすべてバケット 0 にまとめられてしまうから</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">この枝は幅 1 us の線形群を返すという役割と、pg_leftmost_one_pos64 のゼロ引数ガードという役割を兼ねている。メタコマンドだけのスクリプトなど、1 us 未満で終わるトランザクションは実在するので assert 版ビルドで確実に踏む。選択肢 D は誤りで、pg_leftmost_one_pos64 は最上位ビット位置 (v=1..63 なら k=0..5) を返し、常に 0 を返すわけではない。なお枝を外すと v=1..31 では群番号 k-5 が負になって配列外書き込みにもなるが、v=0 の assert 失敗のほうが先に問題になる。選択肢 B の速度は動機ではない (この枝がなくても正しく動くなら話は別だが、動かない)。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="0" data-anchor="p-warmup" data-patch="ウォームアップ">
+          <p class="q-meta"><span class="q-no">Q17</span><a href="#p-warmup">0005 ウォームアップ</a></p>
+          <h4>--warmup の実装で、ウォームアップ中でもゲートしてはならない (常に実行しなければならない) のはどれか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="16" data-o="0"><span class="opt-key">A</span><span class="opt-text">processXactStats の st-&gt;cnt++ と doLog() の呼び出し</span></button>
+<button type="button" class="opt" data-q="16" data-o="1"><span class="opt-key">B</span><span class="opt-text">CSTATE_END_COMMAND の command-&gt;stats への addToSimpleStats()</span></button>
+<button type="button" class="opt" data-q="16" data-o="2"><span class="opt-key">C</span><span class="opt-text">processXactStats のスクリプト別 accumStats()</span></button>
+<button type="button" class="opt" data-q="16" data-o="3"><span class="opt-key">D</span><span class="opt-text">processXactStats の thread-&gt;stats への accumStats()</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">st-&gt;cnt はクライアントの終了判定 (CSTATE_END_TX の `st-&gt;cnt &gt;= nxacts`) を駆動するので、ゲートすると -t 系の終了ロジックが壊れる。doLog は「ログはタイムスタンプ付きで完全に残し、後段で切ってもらう」という方針で非ゲートであり、--aggregate-interval の集計は doLog の内部で行われるので、これによって集計行も自動的に全期間を覆う。誘惑されやすい 選択肢 B は逆で、-r の per-command 統計は processXactStats の外の別の状態機械アームにあるため見落としやすいが、ここもゲート対象 (加えて CSTATE_RETRY の retries++ と CSTATE_FAILURE の failures++ も)。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="1" data-anchor="p-warmup" data-patch="ウォームアップ">
+          <p class="q-meta"><span class="q-no">Q18</span><a href="#p-warmup">0005 ウォームアップ</a></p>
+          <h4>破棄バケットを単なる int64 カウンタではなく完全な StatsData にした理由として正しいものはどれか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="17" data-o="0"><span class="opt-key">A</span><span class="opt-text">最終レポートでウォームアップ中の平均レイテンシと標準偏差を表示する必要があるから</span></button>
+<button type="button" class="opt" data-q="17" data-o="1"><span class="opt-key">B</span><span class="opt-text">printProgressReport が threads[i].stats の latency 合計と cnt から区間 tps を計算するため、カウンタだけではウォームアップ中の -P 行が 0 tps / 0 ms になるから</span></button>
+<button type="button" class="opt" data-q="17" data-o="2"><span class="opt-key">C</span><span class="opt-text">accumStats() が StatsData 以外を受け取れず、シグネチャを変えるとバイナリ互換性が壊れるから</span></button>
+<button type="button" class="opt" data-q="17" data-o="3"><span class="opt-key">D</span><span class="opt-text">破棄したトランザクションを -l のログに別フォーマットで出力する必要があるから</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">-P の行は独立した計測ではなく threads[i].stats の生の集計値から計算するので、統計を迂回させただけではウォームアップ中の進捗行が 0 になってしまう。バケットを StatsData にしておけば printProgressReport で measured + warmup を mergeStats() で足すだけで元の表示に戻せる。選択肢 A が誘惑的だが、warmup 行に出るのは件数 (と失敗があればその数) だけで、レイテンシ統計は表示しない。選択肢 C は無関係 (pgbench は単一バイナリで ABI の話は出てこない)、選択肢 D は doLog をゲートしていないので破棄トランザクションも通常フォーマットでログに残る。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-warmup" data-patch="ウォームアップ">
+          <p class="q-meta"><span class="q-no">Q19</span><a href="#p-warmup">0005 ウォームアップ</a></p>
+          <h4>warmupActive() が自分で pg_time_now_lazy() を呼ばず、processXactStats の既存の `detailed` 条件下の時計読みに頼っていたとすると、`pgbench -T 10 --warmup=5 -n` (-P も -l も -R も -L も --latency-percentiles も無し) で何が起きるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="18" data-o="0"><span class="opt-key">A</span><span class="opt-text">ウォームアップ境界の判定が最大 1 秒ずれる</span></button>
+<button type="button" class="opt" data-q="18" data-o="1"><span class="opt-key">B</span><span class="opt-text">スレッド 0 だけウォームアップが終わらず、他スレッドは正常に動く</span></button>
+<button type="button" class="opt" data-q="18" data-o="2"><span class="opt-key">C</span><span class="opt-text">レイテンシ平均だけが 0 ms になるが、件数と tps は正しい</span></button>
+<button type="button" class="opt" data-q="18" data-o="3"><span class="opt-key">D</span><span class="opt-text">*now が 0 のままなので `0 &lt; warmup_until` が常に真になり、全トランザクションが破棄されて計測レポートが空になる</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">detailed = progress || throttle_delay || latency_limit || use_log || per_script_stats || num_latency_percentiles &gt; 0 であり、この起動オプションではすべて false になるので pg_time_now_lazy が一度も呼ばれず *now は 0 のまま。ゲートが常に真になり、thread-&gt;stats には何も入らないので「number of transactions actually processed: 0」になる。選択肢 C が誘惑的だが、レイテンシが 0 になるだけでなく件数そのものが破棄バケットへ行ってしまう点が本質。なお warmup_done ラッチにより、ウォームアップ終了後は追加の時計読みは発生しない。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-warmup" data-patch="ウォームアップ">
+          <p class="q-meta"><span class="q-no">Q20</span><a href="#p-warmup">0005 ウォームアップ</a></p>
+          <h4>warmup_until の 50 ミリ秒前に開始し、20 ミリ秒後にコミットしたトランザクション (-r 指定あり) はどう扱われるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="19" data-o="0"><span class="opt-key">A</span><span class="opt-text">破棄され、しかも -l のトランザクションログにも出力されない</span></button>
+<button type="button" class="opt" data-q="19" data-o="1"><span class="opt-key">B</span><span class="opt-text">レイテンシが開始からの経過時間で按分され、境界前の分だけ破棄バケットに計上される</span></button>
+<button type="button" class="opt" data-q="19" data-o="2"><span class="opt-key">C</span><span class="opt-text">開始時刻で判定されるので、トランザクション統計も -r の統計もすべて破棄バケットに入る</span></button>
+<button type="button" class="opt" data-q="19" data-o="3"><span class="opt-key">D</span><span class="opt-text">トランザクション全体の統計は計測区間に算入されるが、-r の文別統計は文ごとの記録時刻で判定されるため、境界前に終わった文は破棄バケット側に落ちる</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">判定は記録時刻ベースで、processXactStats が呼ばれた時点では now &gt;= warmup_until なので計測側に丸ごと入る。同じ規則が CSTATE_END_COMMAND では文単位に適用されるため、-r の統計だけは境界前後で分かれる。選択肢 C が誘惑的だが、開始時刻ゲートはトランザクションごとの追加簿記を要求する上、-T の打ち切り (最後のトランザクションは -T を超えてもコミットまで走る) が既に記録時刻ベースなのと不整合になるため採用していない。選択肢 B のような按分は行わない。選択肢 A は誤りで、doLog は非ゲートなのでログには必ず残る。</p>
+          </div>
+        </article>
+
+        <div class="result" id="result" hidden>
+          <h4 id="result-title"></h4>
+          <p id="result-body"></p>
+          <ul id="result-list"></ul>
+        </div>
+      </section>
+    </main>
+  </div>
+  <footer class="site-footer">ブランチ poc-pgbench-tpc-c、ベース e395fbd32a0。各パッチは SGML ドキュメントと TAP テストを含む。</footer>
+
+  <script>
+  (function () {
+    var total = 20;
+    var answered = 0, correct = 0, wrong = {};
+    var scoreEl = document.getElementById('score');
+    var fillEl = document.getElementById('fill');
+    var remainEl = document.getElementById('remain');
+    var resultEl = document.getElementById('result');
+    var resultTitle = document.getElementById('result-title');
+    var resultBody = document.getElementById('result-body');
+    var resultList = document.getElementById('result-list');
+
+    function refresh() {
+      scoreEl.textContent = correct + ' / ' + total + ' 正解';
+      fillEl.style.width = (answered ? (correct / total) * 100 : 0) + '%';
+      remainEl.textContent = answered < total ? ('未回答 ' + (total - answered)) : '回答完了';
+      if (answered === total) {
+        var names = Object.keys(wrong);
+        resultTitle.textContent = correct + ' / ' + total + ' 正解';
+        if (names.length === 0) {
+          resultBody.textContent = '全問正解。各パッチの設計判断と落とし穴を押さえられている。';
+          resultList.innerHTML = '';
+        } else {
+          resultBody.textContent = '取りこぼしのあった節を読み返すと効率がよい。';
+          resultList.innerHTML = names.map(function (a) {
+            return '<li><a href="#' + a + '">' + wrong[a].label + '</a>（' + wrong[a].count + ' 問）</li>';
+          }).join('');
+        }
+        resultEl.hidden = false;
+      } else {
+        resultEl.hidden = true;
+      }
+    }
+
+    document.querySelectorAll('.q').forEach(function (q) {
+      var answer = parseInt(q.dataset.answer, 10);
+      q.querySelectorAll('.opt').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          if (q.dataset.done) return;
+          q.dataset.done = '1';
+          var picked = parseInt(btn.dataset.o, 10);
+          var ok = picked === answer;
+          answered++;
+          if (ok) {
+            correct++;
+          } else {
+            var key = q.dataset.anchor;
+            if (!wrong[key]) wrong[key] = { label: q.dataset.patch, count: 0 };
+            wrong[key].count++;
+          }
+          q.querySelectorAll('.opt').forEach(function (b) {
+            var idx = parseInt(b.dataset.o, 10);
+            b.disabled = true;
+            if (idx === answer) b.classList.add('correct');
+            else if (idx === picked) b.classList.add('wrong');
+          });
+          var fb = q.querySelector('.q-feedback');
+          var verdict = fb.querySelector('.verdict');
+          verdict.textContent = ok ? '正解' : '不正解 — 正解は ' + String.fromCharCode(65 + answer);
+          verdict.className = 'verdict ' + (ok ? 'ok' : 'ng');
+          fb.hidden = false;
+          refresh();
+        });
+      });
+    });
+
+    document.getElementById('reset').addEventListener('click', function () {
+      answered = 0; correct = 0; wrong = {};
+      document.querySelectorAll('.q').forEach(function (q) {
+        delete q.dataset.done;
+        q.querySelector('.q-feedback').hidden = true;
+        q.querySelectorAll('.opt').forEach(function (b) {
+          b.disabled = false;
+          b.classList.remove('correct', 'wrong');
+        });
+      });
+      refresh();
+      document.getElementById('quiz').scrollIntoView({ block: 'start' });
+    });
+
+    refresh();
+  })();
+  </script>
+</body>
+</html>
