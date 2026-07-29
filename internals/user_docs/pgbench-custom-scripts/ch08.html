@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第8章 まとめとチートシート | pgbench カスタムスクリプト実践ガイド — PostgreSQL 18 · 2026-07-29</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgbench カスタムスクリプト実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18 · 2026-07-29</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 カスタムスクリプトでできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 組み込みスクリプトの限界</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 カスタムスクリプトの構成要素</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 実行の全体像と重み付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バージョンと接続を確認する</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 ベンチマーク用データベースを初期化する</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 作業ディレクトリと実行の基本形</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 最小のカスタムスクリプトを書いて動かす</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 -r でステートメント単位に分解する</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 :scale の罠</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 変数と式を使いこなす</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 \set と式の評価</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 自動変数と -D</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 乱数分布を選ぶ</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 permute() で相関を断つ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 メタコマンドで制御する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 \gset / \aset</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 \if で条件分岐する</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 \sleep / \shell / \setshell</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 パイプラインで往復を減らす</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 実践：現実的なワークロードを組む</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 複数スクリプトを重み付けで混ぜる</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 スクリプト別レポートを読む</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 プロトコルを変えて比較する</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 ログを取って分析する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 エラーの切り分け方</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 起動時に失敗する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 実行中に abort する</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 数字が信用できないとき</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch08.html">第8章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 メタコマンド早見表</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 関数早見表</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 オプション早見表</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 スクリプトを書くときの型</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第8章　まとめとチートシート</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>メタコマンド・関数・オプションを一覧から引ける</li>
+    <li>カスタムスクリプトを書くときの手順を型として持てる</li>
+  </ul>
+</div>
+
+<h2 id="sec-8-1">8.1　メタコマンド早見表</h2>
+
+<table>
+  <thead>
+    <tr><th>メタコマンド</th><th>用途</th><th>注意</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>\set 変数 式</code></td><td>式を評価して変数に代入</td><td>評価は pgbench 側。行末 <code>\</code> で継続</td></tr>
+    <tr><td><code>SQL \gset [接頭辞]</code></td><td>直前クエリの列を変数に</td><td><strong>1行ちょうど</strong>でないと abort。パイプライン内不可</td></tr>
+    <tr><td><code>SQL \aset [接頭辞]</code></td><td>連結クエリ全部の列を変数に</td><td>0行なら代入なし、複数行なら最後の行。パイプライン内不可</td></tr>
+    <tr><td><code>\if 式</code> / <code>\elif</code> / <code>\else</code> / <code>\endif</code></td>
+        <td>条件分岐</td><td>0 と NULL が偽、それ以外が真。入れ子可</td></tr>
+    <tr><td><code>\sleep 数 [us|ms|s]</code></td><td>思考時間の再現</td><td>単位省略時は秒。tps を下げる</td></tr>
+    <tr><td><code>\setshell 変数 コマンド</code></td><td>シェルの出力（整数）を変数に</td><td>非常に重い。計測中は避ける</td></tr>
+    <tr><td><code>\shell コマンド</code></td><td>シェル実行（結果は捨てる）</td><td>同上</td></tr>
+    <tr><td><code>\startpipeline</code></td><td>パイプライン開始</td><td><strong><code>-M extended</code> 以上が必須</strong></td></tr>
+    <tr><td><code>\syncpipeline</code></td><td>途中で sync を送る</td><td>PostgreSQL 17 以降</td></tr>
+    <tr><td><code>\endpipeline</code></td><td>パイプライン終了</td><td>待ち時間はここに計上される</td></tr>
+  </tbody>
+</table>
+
+<h2 id="sec-8-2">8.2　関数早見表</h2>
+
+<table>
+  <thead>
+    <tr><th>関数</th><th>戻り値</th><th>説明</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>random(lb, ub)</code></td><td>integer</td><td>一様分布</td></tr>
+    <tr><td><code>random_exponential(lb, ub, p)</code></td><td>integer</td><td>指数分布。<code>p &gt; 0</code>、大きいほど下限寄り</td></tr>
+    <tr><td><code>random_gaussian(lb, ub, p)</code></td><td>integer</td><td>正規分布。<code>p &gt;= 2.0</code>、大きいほど中央寄り</td></tr>
+    <tr><td><code>random_zipfian(lb, ub, p)</code></td><td>integer</td><td>Zipf 分布。<code>1.001 &lt;= p &lt;= 1000</code></td></tr>
+    <tr><td><code>permute(i, size [, seed])</code></td><td>integer</td><td><code>[0, size)</code> の疑似ランダム置換。衝突・抜けなし</td></tr>
+    <tr><td><code>hash(v [, seed])</code></td><td>integer</td><td><code>hash_murmur2</code> の別名</td></tr>
+    <tr><td><code>hash_murmur2(v [, seed])</code></td><td>integer</td><td>MurmurHash2</td></tr>
+    <tr><td><code>hash_fnv1a(v [, seed])</code></td><td>integer</td><td>FNV-1a</td></tr>
+    <tr><td><code>debug(v)</code></td><td>入力と同型</td><td>標準エラーへ型と値を出力し、引数をそのまま返す</td></tr>
+    <tr><td><code>abs(v)</code></td><td>入力と同型</td><td>絶対値</td></tr>
+    <tr><td><code>int(v)</code> / <code>double(v)</code></td><td>integer / double</td><td>型変換</td></tr>
+    <tr><td><code>greatest(...)</code> / <code>least(...)</code></td><td>可変</td><td>最大 / 最小</td></tr>
+    <tr><td><code>exp(v)</code> / <code>ln(v)</code> / <code>sqrt(v)</code> / <code>pi()</code></td><td>double</td><td>数学関数</td></tr>
+    <tr><td><code>pow(x, y)</code> / <code>power(x, y)</code></td><td>double</td><td>べき乗</td></tr>
+    <tr><td><code>mod(a, b)</code></td><td>integer</td><td>剰余</td></tr>
+  </tbody>
+</table>
+
+<p>
+演算子は SQL とほぼ同じものが使える（4.1 節の表を参照）。
+関数と多くの演算子は、<code>NULL</code> を入力すると <code>NULL</code> を返す。
+</p>
+
+<h2 id="sec-8-3">8.3　オプション早見表</h2>
+
+<table>
+  <thead>
+    <tr><th>やりたいこと</th><th>オプション</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>スクリプトを指定する</td><td><code>-f ファイル</code>（<code>@重み</code> を付けられる）</td></tr>
+    <tr><td>組み込みスクリプトを使う</td><td><code>-b 名前[@重み]</code>、一覧は <code>-b list</code></td></tr>
+    <tr><td>組み込みの中身を見る</td><td><code>--show-script=名前</code></td></tr>
+    <tr><td><strong><code>:scale</code> を設定する</strong></td><td><code>-s 数</code>（<code>-f</code> では必須）</td></tr>
+    <tr><td>変数を渡す</td><td><code>-D 名前=値</code>（文字列は <code>-D k="'v'"</code>）</td></tr>
+    <tr><td>実行前 VACUUM を省く</td><td><code>-n</code>（カスタムスクリプトでは基本的に付ける）</td></tr>
+    <tr><td>同時実行数・スレッド数</td><td><code>-c 数</code> / <code>-j 数</code></td></tr>
+    <tr><td>実行時間・回数</td><td><code>-T 秒</code> / <code>-t 回数</code></td></tr>
+    <tr><td>プロトコルを変える</td><td><code>-M simple|extended|prepared</code></td></tr>
+    <tr><td>ステートメント別レポート</td><td><code>-r</code></td></tr>
+    <tr><td>進捗を表示</td><td><code>-P 秒</code></td></tr>
+    <tr><td>トランザクションログ</td><td><code>-l</code>（<code>--log-prefix=名前</code> で接頭辞変更）</td></tr>
+    <tr><td>ログを集約する</td><td><code>--aggregate-interval=秒</code></td></tr>
+    <tr><td>乱数の種を固定</td><td><code>--random-seed=整数</code></td></tr>
+    <tr><td>目標スループットを決める</td><td><code>-R 数</code></td></tr>
+    <tr><td>直列化・デッドロックで再試行</td><td><code>--max-tries=数</code></td></tr>
+  </tbody>
+</table>
+
+<h2 id="sec-8-4">8.4　スクリプトを書くときの型</h2>
+
+<p>
+最後に、カスタムスクリプトで計測するときの手順をまとめる。図 8.1 の順に進めると、
+本ガイドで挙げた落とし穴をおおむね避けられる。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TD
+    S1["1. 測りたいトランザクションを1本の SQL 列として書く"] --> S2["2. 可変部分を \set と :変数 に置き換える"]
+    S2 --> S3["3. -t 10 で動作確認<br/>scaling factor 行を必ず見る"]
+    S3 --> S4["4. -r でどの文が重いか確認"]
+    S4 --> S5["5. 比率が要るなら<br/>ファイルを分けて @重み"]
+    S5 --> S6["6. -T で数分回す<br/>-M を揃えて複数回"]
+    S6 --> S7["7. -l のログを保存し<br/>条件とセットで記録"]
+  </pre>
+  <figcaption>図 8.1: カスタムスクリプトで計測するときの手順</figcaption>
+</figure>
+
+<p>
+繰り返しになるが、特に忘れやすいのは次の3点である。
+</p>
+
+<ol>
+  <li><strong><code>-s</code> を明示する。</strong> <code>-f</code> では <code>:scale</code> が
+      自動設定されない。実行のたびに <code>scaling factor:</code> 行で確認する（3.4 節）。</li>
+  <li><strong><code>-n</code> を付ける。</strong> 自前テーブルだけを使うなら実行前 VACUUM は失敗する（2.3 節）。</li>
+  <li><strong>tps はスクリプト実行回数である。</strong> スクリプト構成が違うもの同士を比べない（3.2 節）。</li>
+</ol>
+
+<div class="tip">
+  <strong>💡 さらに詳しく</strong>
+  各オプションの完全な仕様、失敗と再試行（<code>--max-tries</code>）の詳細、
+  テーブルアクセスメソッドの指定などは
+  <a href="https://www.postgresql.org/docs/18/pgbench.html">公式ドキュメントの pgbench</a>
+  を参照してほしい。
+</div>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li>測りたいワークロードを、自分でスクリプトに落とせる</li>
+    <li>結果を見て、どのステートメントが支配的か指摘できる</li>
+    <li>他人の計測結果を見たとき、<code>-s</code> / <code>-M</code> / 実行時間を確認できる</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch07.html"><span class="dir">← 前の章</span><span class="ttl">第7章 つまずきポイントと対処</span></a>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <span class="pager-spacer" aria-hidden="true"></span>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgbench カスタムスクリプト実践ガイド — PostgreSQL 18.4 で実行して確認 / 仕様は <a href="https://www.postgresql.org/docs/18/pgbench.html">公式ドキュメント pgbench</a> を参照</footer>
+</body>
+</html>

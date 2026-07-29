@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第7章 つまずきポイントと対処 | pgbench カスタムスクリプト実践ガイド — PostgreSQL 18 · 2026-07-29</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgbench カスタムスクリプト実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18 · 2026-07-29</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 カスタムスクリプトでできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 組み込みスクリプトの限界</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 カスタムスクリプトの構成要素</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 実行の全体像と重み付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バージョンと接続を確認する</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 ベンチマーク用データベースを初期化する</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 作業ディレクトリと実行の基本形</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 最小のカスタムスクリプトを書いて動かす</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 -r でステートメント単位に分解する</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 :scale の罠</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 変数と式を使いこなす</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 \set と式の評価</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 自動変数と -D</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 乱数分布を選ぶ</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 permute() で相関を断つ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 メタコマンドで制御する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 \gset / \aset</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 \if で条件分岐する</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 \sleep / \shell / \setshell</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 パイプラインで往復を減らす</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 実践：現実的なワークロードを組む</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 複数スクリプトを重み付けで混ぜる</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 スクリプト別レポートを読む</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 プロトコルを変えて比較する</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 ログを取って分析する</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch07.html">第7章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 エラーの切り分け方</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 起動時に失敗する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 実行中に abort する</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 数字が信用できないとき</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 メタコマンド早見表</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 関数早見表</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 オプション早見表</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 スクリプトを書くときの型</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第7章　つまずきポイントと対処</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>pgbench のエラーメッセージから原因を切り分けられる</li>
+    <li>起動時エラーと実行中 abort を区別して対処できる</li>
+    <li>「数字は出たが信用できない」パターンを見抜ける</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>第6章までの環境を引き継ぐ</li>
+  </ul>
+</div>
+
+<h2 id="sec-7-1">7.1　エラーの切り分け方</h2>
+
+<p>
+pgbench のエラーは、出るタイミングで大きく2つに分かれる。
+図 7.1 の順に切り分けると早い。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TD
+    E["エラーが出た"] --> Q1{"ファイル名と<br/>行番号が出ているか"}
+    Q1 -->|"はい"| Parse["構文エラー<br/>7.2 節へ"]
+    Q1 -->|"いいえ"| Q2{"client N aborted<br/>と出ているか"}
+    Q2 -->|"はい"| Run["実行中の中断<br/>7.3 節へ"]
+    Q2 -->|"いいえ"| Conn["接続・ファイルの問題<br/>7.2 節へ"]
+  </pre>
+  <figcaption>図 7.1: エラーメッセージからの切り分け</figcaption>
+</figure>
+
+<p>
+起動時のエラーは<strong>スクリプトを1回も実行せずに</strong>終わる。
+実行中の abort は、途中まで動いてから止まるので
+<code>number of transactions actually processed: 0/1</code> のような
+不完全な結果が併せて表示され、最後に
+<code>Run was aborted; the above results are incomplete.</code> が出る。
+</p>
+
+<h2 id="sec-7-2">7.2　起動時に失敗する</h2>
+
+<p>
+スクリプトが読み込めない・解釈できない場合のエラーである。
+</p>
+
+<h3 id="sec-7-2-1">ファイルが見つからない</h3>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>pgbench: error: could not open file "nosuch.sql": No such file or directory</code></pre>
+</div>
+<p>
+パスの誤りか、作業ディレクトリの取り違え。<code>ls</code> で確認する。
+</p>
+
+<h3 id="sec-7-2-2">メタコマンドの構文エラー</h3>
+<div class="example">
+  <span class="example-label">入力（<code>bad1.sql</code>）</span>
+  <pre><code>\set x 1 +
+SELECT 1;</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>pgbench: error: bad1.sql:1: syntax error in command "set"
+\set x 1 +
+          ^ error found here</code></pre>
+</div>
+<p>
+<strong>ファイル名と行番号、そして問題箇所を指す <code>^</code> が出る</strong>ので原因は明確である。
+式が途中で終わっている、括弧が閉じていない、といった単純な誤りが大半。
+</p>
+
+<div class="pitfall">
+  <strong>⚠️ 継続行のバックスラッシュ</strong>
+  式を複数行に分けるときは行末にバックスラッシュを置くが、
+  その後ろに<strong>空白があってはいけない</strong>。見た目では気付きにくく、
+  <code>syntax error in command "set"</code> になる。
+</div>
+
+<h2 id="sec-7-3">7.3　実行中に abort する</h2>
+
+<p>
+スクリプトの解釈は通ったが、実行中に止まるケース。以下は実際のメッセージである。
+</p>
+
+<h3 id="sec-7-3-1">SQL の構文エラー（セミコロン忘れ）</h3>
+<div class="example">
+  <span class="example-label">入力（<code>bad2.sql</code>）</span>
+  <pre><code>SELECT 1
+SELECT 2;</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>pgbench: error: client 0 script 0 aborted in command 0 query 0: ERROR:  syntax error at or near "2"
+pgbench: error: Run was aborted; the above results are incomplete.</code></pre>
+</div>
+<p>
+PostgreSQL 9.6 以降、SQL の終端は<strong>セミコロン</strong>である。改行では区切られない。
+上の例は <code>SELECT 1 SELECT 2;</code> という1文としてサーバへ送られている。
+</p>
+
+<h3 id="sec-7-3-2">未定義の変数</h3>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>pgbench: error: client 0 script 0 aborted in command 0 query 0: ERROR:  syntax error at or near ":"</code></pre>
+</div>
+<p>
+未定義の変数は展開されず、<code>:nosuchvar</code> という文字列のままサーバへ送られる。
+そのため「未定義変数」とは言われず、<strong>SQL の構文エラーとして現れる</strong>。
+<code>:</code> の近くで構文エラーが出たら、まず変数名の綴りと
+<code>-D</code> の渡し忘れを疑う。
+</p>
+
+<h3 id="sec-7-3-3">トランザクションを閉じずに終わる</h3>
+<div class="example">
+  <span class="example-label">入力（<code>noend.sql</code>）</span>
+  <pre><code>BEGIN;
+SELECT 1;</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>pgbench: error: client 0 aborted: end of script reached without completing the last transaction</code></pre>
+</div>
+<p>
+<code>BEGIN;</code> を書いたら、必ず <code>END;</code>（または <code>COMMIT;</code>）で閉じる。
+<code>\if</code> の分岐の片方にだけ <code>END;</code> を書いてしまう、という形で混入しやすい。
+</p>
+
+<h3 id="sec-7-3-4">その他の頻出エラー</h3>
+<table>
+  <thead>
+    <tr><th>メッセージ</th><th>原因と対処</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>expected one row, got 0</code></td>
+      <td><code>\gset</code> の対象が0行。条件を見直すか <code>\aset</code> にする（5.1 節）</td>
+    </tr>
+    <tr>
+      <td><code>expected one row, got 2</code></td>
+      <td><code>\gset</code> の対象が複数行。<code>LIMIT 1</code> を付ける</td>
+    </tr>
+    <tr>
+      <td><code>cannot use pipeline mode with the simple query protocol</code></td>
+      <td><code>-M extended</code> か <code>-M prepared</code> を付ける（5.4 節）</td>
+    </tr>
+    <tr>
+      <td><code>\gset is not allowed in pipeline mode</code></td>
+      <td>パイプラインの外へ出す（5.4 節）</td>
+    </tr>
+    <tr>
+      <td><code>relation "pgbench_branches" does not exist</code><br>
+          （<code>ignoring this error and continuing anyway</code> が続く）</td>
+      <td>実行前 VACUUM の対象が無いだけ。<strong>計測は中断されない</strong>。
+          出力を静かにするには <code>-n</code> を付ける（2.3 節）</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="sec-7-4">7.4　数字が信用できないとき</h2>
+
+<p>
+エラーは出ないが結果が誤っている、というのが最も危険である。
+チェックリストとして使ってほしい。
+</p>
+
+<table>
+  <thead>
+    <tr><th>症状</th><th>疑うこと</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>tps が異様に高い</td>
+      <td><strong><code>-s</code> の指定漏れ</strong>で狭い範囲しか触っていない（3.4 節）。
+          <code>scaling factor:</code> 行を確認する。
+          あるいは <code>permute()</code> の <code>+1</code> 忘れで 0 行ヒットになっている（4.4 節）</td>
+    </tr>
+    <tr>
+      <td>実行のたびに結果がぶれる</td>
+      <td>実行時間が短すぎる。<strong>数分以上</strong>回す。
+          autovacuum やチェックポイントの影響も受ける</td>
+    </tr>
+    <tr>
+      <td>回すたびに遅くなっていく</td>
+      <td>更新系スクリプトで不要行が蓄積している。
+          計測の前に <code>pgbench -i</code> で作り直すか、実行間隔を揃える</td>
+    </tr>
+    <tr>
+      <td>クライアントを増やしても tps が伸びない</td>
+      <td>サーバではなく <strong>pgbench 側が頭打ち</strong>の可能性。
+          <code>-j</code> を増やす。それでも伸びなければ別ホストから実行する</td>
+    </tr>
+    <tr>
+      <td>スクリプトを変えたら tps が激減した</td>
+      <td>1スクリプトあたりの SQL 本数が増えていないか。
+          tps はスクリプト実行回数であり、SQL 実行回数ではない（3.2 節）</td>
+    </tr>
+    <tr>
+      <td>更新が異常に競合する</td>
+      <td><code>-c</code> が <code>-s</code> より大きいと
+          <code>pgbench_branches</code> の同じ行を奪い合う。<code>-s</code> を <code>-c</code> 以上にする</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="pitfall">
+  <strong>⚠️ 数秒の計測を信じない</strong>
+  公式ドキュメントも明記しているが、<strong>数秒で終わる計測結果は信用してはいけない</strong>。
+  <code>-T</code> で最低でも数分は回し、複数回実行して再現するか確かめる。
+  本ガイドの例が <code>-T 5</code> や <code>-t 10</code> と短いのは、
+  動作を確認するための例だからである。実際の計測では時間を延ばすこと。
+</div>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li>起動時エラーと実行中 abort を、メッセージから区別できる</li>
+    <li><code>:</code> の近くの構文エラーを見たら変数名を疑える</li>
+    <li><code>expected one row, got 0</code> の対処を2通り挙げられる</li>
+    <li>tps が異様に高いとき、最初に <code>scaling factor:</code> 行を確認できる</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch06.html"><span class="dir">← 前の章</span><span class="ttl">第6章 実践：現実的なワークロードを組む</span></a>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <a class="next" href="ch08.html"><span class="dir">次の章 →</span><span class="ttl">第8章 まとめとチートシート</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgbench カスタムスクリプト実践ガイド — PostgreSQL 18.4 で実行して確認 / 仕様は <a href="https://www.postgresql.org/docs/18/pgbench.html">公式ドキュメント pgbench</a> を参照</footer>
+</body>
+</html>

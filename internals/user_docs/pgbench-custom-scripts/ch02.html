@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第2章 準備 | pgbench カスタムスクリプト実践ガイド — PostgreSQL 18 · 2026-07-29</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgbench カスタムスクリプト実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18 · 2026-07-29</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 カスタムスクリプトでできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 組み込みスクリプトの限界</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 カスタムスクリプトの構成要素</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 実行の全体像と重み付け</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バージョンと接続を確認する</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 ベンチマーク用データベースを初期化する</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 作業ディレクトリと実行の基本形</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 最小のカスタムスクリプトを書いて動かす</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 -r でステートメント単位に分解する</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 :scale の罠</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 変数と式を使いこなす</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 \set と式の評価</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 自動変数と -D</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 乱数分布を選ぶ</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 permute() で相関を断つ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 メタコマンドで制御する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 \gset / \aset</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 \if で条件分岐する</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 \sleep / \shell / \setshell</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 パイプラインで往復を減らす</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 実践：現実的なワークロードを組む</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 複数スクリプトを重み付けで混ぜる</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 スクリプト別レポートを読む</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 プロトコルを変えて比較する</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 ログを取って分析する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 エラーの切り分け方</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 起動時に失敗する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 実行中に abort する</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 数字が信用できないとき</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 メタコマンド早見表</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 関数早見表</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 オプション早見表</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 スクリプトを書くときの型</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第2章　準備</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>この先すべての章で使う <code>bench</code> データベースを用意できる</li>
+    <li>接続情報を環境変数にまとめ、以降のコマンドを短く書けるようにする</li>
+    <li>スクリプトファイルの置き場所と、実行コマンドの基本形を決める</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>PostgreSQL 18 のサーバが起動しており、テーブルを作成できる権限のあるユーザで接続できること</li>
+    <li><code>pgbench</code> と <code>psql</code> にパスが通っていること</li>
+  </ul>
+</div>
+
+<h2 id="sec-2-1">2.1　バージョンと接続を確認する</h2>
+
+<p>
+まず <code>pgbench</code> のバージョンを確認する。本ガイドは PostgreSQL 18 を対象にしている。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>pgbench --version</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>pgbench (PostgreSQL) 18.4</code></pre>
+</div>
+
+<p>
+以降のコマンドを短く保つため、接続情報を環境変数に入れておく。
+値は自分の環境に合わせて読み替える。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>export PGHOST=localhost
+export PGPORT=5432
+export PGUSER=postgres</code></pre>
+</div>
+
+<p>
+サーバのバージョンも確認しておく。クライアント側の <code>pgbench</code> とサーバの
+メジャーバージョンは揃っているほうが、機能差による混乱がない。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>psql -tAc 'SELECT version();'</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>PostgreSQL 18.4 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit</code></pre>
+</div>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  メタコマンドはバージョンによって使えるものが違う。<code>\syncpipeline</code> は PostgreSQL 17 以降、
+  <code>permute()</code> 関数は 15 以降で追加された。古いサーバ／クライアントを相手にするときは、
+  該当の章で注記しているバージョン条件を確認する。
+</div>
+
+<h2 id="sec-2-2">2.2　ベンチマーク用データベースを初期化する</h2>
+
+<p>
+第3章以降で使うデータベースを作り、<code>pgbench -i</code> で標準テーブルを投入する。
+スケールファクタは 10（<code>pgbench_accounts</code> が 100 万行）にする。
+</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: bench データベースを作る</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>データベースを作成する。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>createdb bench</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>（成功時は何も出力されない）</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>スケールファクタ 10 で標準テーブルを初期化する。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pgbench -i -s 10 bench</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力（抜粋）</span>
+          <pre><code>dropping old tables...
+NOTICE:  table "pgbench_accounts" does not exist, skipping
+NOTICE:  table "pgbench_branches" does not exist, skipping
+NOTICE:  table "pgbench_history" does not exist, skipping
+NOTICE:  table "pgbench_tellers" does not exist, skipping
+creating tables...
+generating data (client-side)...
+100000 of 1000000 tuples (10%) of pgbench_accounts done (elapsed 0.02 s, remaining 0.22 s)
+...
+1000000 of 1000000 tuples (100%) of pgbench_accounts done (elapsed 2.14 s, remaining 0.00 s)
+vacuuming...
+creating primary keys...
+done in 3.90 s (drop tables 0.00 s, create tables 0.01 s, client-side generate 2.92 s, vacuum 0.21 s, primary keys 0.77 s).</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>行数を確認する。<code>-s 10</code> なら <code>pgbench_accounts</code> は 100 万行になる。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d bench -c 'SELECT count(*) FROM pgbench_accounts;'</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>  count
+---------
+ 1000000
+(1 row)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>
+<code>NOTICE: table ... does not exist, skipping</code> は初回実行時に必ず出る。
+削除対象が無いだけなので問題ない。
+</p>
+
+<div class="pitfall">
+  <strong>⚠️ 破壊的操作に注意</strong>
+  <code>pgbench -i</code> は既存の <code>pgbench_accounts</code> / <code>pgbench_branches</code> /
+  <code>pgbench_history</code> / <code>pgbench_tellers</code> を<strong>削除してから作り直す</strong>。
+  本番や共有のデータベースに対して実行しないこと。専用のデータベースを用意する。
+</div>
+
+<h2 id="sec-2-3">2.3　作業ディレクトリと実行の基本形</h2>
+
+<p>
+スクリプトファイルを置く作業ディレクトリを決めておく。以降の章では、このディレクトリで
+スクリプトを作成し、そこから <code>pgbench</code> を実行する前提で書く。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>mkdir -p ~/pgbench-work
+cd ~/pgbench-work</code></pre>
+</div>
+
+<p>
+カスタムスクリプトを実行するコマンドの基本形は次のとおり。本ガイドではこの形を繰り返し使う。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>pgbench -n -f スクリプト.sql -s 10 -c 4 -j 2 -T 10 -r bench</code></pre>
+</div>
+
+<table>
+  <thead>
+    <tr><th>オプション</th><th>意味</th><th>カスタムスクリプトでの注意</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>-n</code></td><td>実行前の VACUUM を省略</td>
+        <td>自前テーブルを使うなら必須。<code>pgbench_*</code> が無いとエラーになるため</td></tr>
+    <tr><td><code>-f</code></td><td>スクリプトファイルを指定</td><td>複数指定可。<code>@重み</code> を付けられる</td></tr>
+    <tr><td><code>-s</code></td><td><code>:scale</code> の値を指定</td>
+        <td><strong><code>-f</code> では自動検出されない</strong>。3.4 節で詳述</td></tr>
+    <tr><td><code>-c</code></td><td>同時クライアント数</td><td>—</td></tr>
+    <tr><td><code>-j</code></td><td>pgbench 側のスレッド数</td><td>クライアント数が多いときは増やす</td></tr>
+    <tr><td><code>-T</code></td><td>実行秒数</td><td><code>-t</code>（回数指定）とは排他</td></tr>
+    <tr><td><code>-r</code></td><td>ステートメント別のレポートを出す</td><td>スクリプトのどこが遅いかを見る</td></tr>
+  </tbody>
+</table>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  <p>pgbench は実行前に <code>pgbench_branches</code> / <code>pgbench_tellers</code> /
+  <code>pgbench_history</code> を VACUUM しようとする。
+  自前のテーブルだけを使うスクリプトでこれらが存在しないと、次のエラーが出る。</p>
+  <div class="example">
+    <span class="example-label out">出力</span>
+    <pre><code>starting vacuum...pgbench: error: ERROR:  relation "pgbench_branches" does not exist
+pgbench: detail: (ignoring this error and continuing anyway)</code></pre>
+  </div>
+  <p><code>ignoring this error and continuing anyway</code> とあるとおり、
+  <strong>これは致命的ではなく、計測自体は最後まで走って終了ステータスも 0 になる</strong>。
+  とはいえ実行のたびにエラーが並ぶのは紛らわしく、無駄な VACUUM も走る。
+  カスタムスクリプトでは <code>-n</code> を付ける習慣にしておくとよい。</p>
+</div>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>pgbench --version</code> が 18 系を返す</li>
+    <li><code>bench</code> データベースがあり、<code>pgbench_accounts</code> が 100 万行ある</li>
+    <li><code>PGHOST</code> / <code>PGPORT</code> / <code>PGUSER</code> を設定し、<code>psql -d bench</code> で接続できる</li>
+    <li>作業ディレクトリを作り、そこに移動した</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch01.html"><span class="dir">← 前の章</span><span class="ttl">第1章 カスタムスクリプトでできること</span></a>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <a class="next" href="ch03.html"><span class="dir">次の章 →</span><span class="ttl">第3章 まず動かす（最短ルート）</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgbench カスタムスクリプト実践ガイド — PostgreSQL 18.4 で実行して確認 / 仕様は <a href="https://www.postgresql.org/docs/18/pgbench.html">公式ドキュメント pgbench</a> を参照</footer>
+</body>
+</html>

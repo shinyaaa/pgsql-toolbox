@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>pgbench カスタムスクリプト実践ガイド — PostgreSQL 18 · 2026-07-29</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgbench カスタムスクリプト実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18 · 2026-07-29</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 カスタムスクリプトでできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 組み込みスクリプトの限界</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 カスタムスクリプトの構成要素</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 実行の全体像と重み付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バージョンと接続を確認する</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 ベンチマーク用データベースを初期化する</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 作業ディレクトリと実行の基本形</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 最小のカスタムスクリプトを書いて動かす</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 -r でステートメント単位に分解する</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 :scale の罠</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 変数と式を使いこなす</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 \set と式の評価</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 自動変数と -D</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 乱数分布を選ぶ</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 permute() で相関を断つ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 メタコマンドで制御する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 \gset / \aset</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 \if で条件分岐する</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 \sleep / \shell / \setshell</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 パイプラインで往復を減らす</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 実践：現実的なワークロードを組む</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 複数スクリプトを重み付けで混ぜる</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 スクリプト別レポートを読む</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 プロトコルを変えて比較する</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 ログを取って分析する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 エラーの切り分け方</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 起動時に失敗する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 実行中に abort する</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 数字が信用できないとき</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 メタコマンド早見表</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 関数早見表</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 オプション早見表</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 スクリプトを書くときの型</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>pgbench カスタムスクリプト実践ガイド</h1>
+        <p class="version-hero">PostgreSQL 18 · 2026-07-29</p>
+        <p class="audience">対象: <code>pgbench -i</code> / <code>-c</code> / <code>-T</code> は使えるが、<code>-f</code> で自前のシナリオを書くのはこれからという方</p>
+        <p class="lead">組み込みの <code>tpcb-like</code> では測れないワークロードを、自分で書いたスクリプトで測れるようになるためのガイド。<code>\set</code> と式・乱数分布・<code>\gset</code>・条件分岐・パイプラインといったカスタムスクリプトの全機能を、実際に動く例と実測した出力で一つずつ確認していく。最後まで手を動かすと、読み書きを混ぜた現実的なワークロードを組み、スクリプト別・ステートメント別に結果を読み解けるようになる。所要時間の目安は 2〜3 時間。本文中の出力はすべて PostgreSQL 18.4 上で実際に実行して採取したもの（tps や latency は環境で変わる）。</p>
+      </div>
+      <div class="toc-grid">
+        <a class="toc-card" href="ch01.html"><span class="num">第1章</span><span class="title">カスタムスクリプトでできること</span><span class="desc">組み込みスクリプトの限界を確認し、カスタムスクリプトの構成要素と重み付けの全体像をつかむ。</span></a>
+        <a class="toc-card" href="ch02.html"><span class="num">第2章</span><span class="title">準備</span><span class="desc">以降すべての章で使う bench データベースを用意し、実行コマンドの基本形を決める。</span></a>
+        <a class="toc-card" href="ch03.html"><span class="num">第3章</span><span class="title">まず動かす（最短ルート）</span><span class="desc">最小のスクリプトを書いて実行し、出力の読み方と :scale の罠を実測で確認する。</span></a>
+        <a class="toc-card" href="ch04.html"><span class="num">第4章</span><span class="title">変数と式を使いこなす</span><span class="desc">\set の式・自動変数・4つの乱数分布・permute() を、debug() と実測で確かめながら覚える。</span></a>
+        <a class="toc-card" href="ch05.html"><span class="num">第5章</span><span class="title">メタコマンドで制御する</span><span class="desc">\gset で結果を受け取り、\if で分岐し、パイプラインで往復を減らす。</span></a>
+        <a class="toc-card" href="ch06.html"><span class="num">第6章</span><span class="title">実践：現実的なワークロードを組む</span><span class="desc">読み9:書き1のミックスを組み、スクリプト別レポート・プロトコル比較・ログ分析まで通す。</span></a>
+        <a class="toc-card" href="ch07.html"><span class="num">第7章</span><span class="title">つまずきポイントと対処</span><span class="desc">実際のエラーメッセージから原因を切り分け、「数字が信用できない」パターンを見抜く。</span></a>
+        <a class="toc-card" href="ch08.html"><span class="num">第8章</span><span class="title">まとめとチートシート</span><span class="desc">メタコマンド・関数・オプションの早見表と、計測手順の型。</span></a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer">pgbench カスタムスクリプト実践ガイド — PostgreSQL 18.4 で実行して確認 / 仕様は <a href="https://www.postgresql.org/docs/18/pgbench.html">公式ドキュメント pgbench</a> を参照</footer>
+</body>
+</html>
