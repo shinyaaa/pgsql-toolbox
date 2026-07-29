@@ -38,6 +38,23 @@
 `user` と `patch` は URL プレフィックスとして予約されているため、
 インターナルドキュメントのトピック名には使えない。
 
+カードのタイトルはディレクトリ名、バージョン行は `index.html` 内の
+`<span class="version-badge">` から読む (先頭の `PostgreSQL ` は表示時に落とす)。種別バッジは
+`<meta name="doc-kind" content="user">` / `content="patch"` で決まり、
+指定が無いか未知の値なら内部構造ドキュメント扱いになる。
+
+各タブのドキュメントは、対応するスキルで生成する。
+
+| タブ | 生成スキル |
+|------|------------|
+| Internal | `db-internals-docs` |
+| User | `db-user-docs` |
+| Patch | `db-patch-docs` (git のパッチシリーズを1コミット1章で解説し、末尾に理解度チェックを付ける) |
+
+`db-patch-docs` は解説対象のコミットが worktree 側にあるため、`skel/.claude/skills/` にも
+入口を置いてある (本体を読みに行くだけの薄いスキル)。worktree のセッションから
+「パッチ解説ドキュメントを作って」と頼めば、生成物はこのサーバの `internals/patch_docs/` に置かれる。
+
 #### 更新ボタン
 
 ヘッダの「更新」ボタン (`POST /api/pull`) は origin から fetch し、

@@ -37,7 +37,7 @@ CATEGORIES = [
         "label": "Patch",
         "dir": "patch_docs",
         "prefix": "patch",
-        "hint": "パッチ解説ドキュメントを生成してください。",
+        "hint": "db-patch-docs スキルを使って生成してください。",
     },
 ]
 
@@ -48,14 +48,14 @@ _VERSION_RE = re.compile(r'<span class="version-badge">(?:PostgreSQL\s+)?([^<]+)
 _KIND_RE = re.compile(
     r'<meta\s+name=["\']doc-kind["\']\s+content=["\']([^"\']+)["\']', re.I
 )
-_KNOWN_KINDS = ("internal", "user")
+_KNOWN_KINDS = ("internal", "user", "patch")
 
 
 def _doc_meta(index_path):
-    """Version string and doc kind ('internal'/'user') parsed from index.html.
+    """Version string and doc kind ('internal'/'user'/'patch') from index.html.
 
     Docs without a doc-kind meta tag (all the internals docs) default to
-    'internal', so the marker is opt-in for user guides only.
+    'internal', so the marker is opt-in for user guides and patch docs.
     """
     try:
         html = index_path.read_text(encoding="utf-8")

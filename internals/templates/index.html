@@ -1,3 +1,4 @@
+{% set KIND_LABELS = {'internal': '内部構造', 'user': 'ユーザーガイド', 'patch': 'パッチ解説'} %}
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -17,6 +18,8 @@
     --cyan: #22d3ee;
     --teal: #2dd4bf;
     --teal-dim: #14b8a6;
+    --violet: #a78bfa;
+    --violet-dim: #8b5cf6;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -86,6 +89,12 @@
   .kind-user:hover { border-color: var(--teal); }
   .kind-user .topic-name { color: var(--teal); }
   .kind-user .open-label { color: var(--teal); }
+  /* パッチ解説ドキュメントはバイオレット色で区別する */
+  .kind-patch .kind-badge { background: rgba(167, 139, 250, 0.16); color: var(--violet); }
+  .kind-patch { border-left: 3px solid var(--violet-dim); }
+  .kind-patch:hover { border-color: var(--violet); }
+  .kind-patch .topic-name { color: var(--violet); }
+  .kind-patch .open-label { color: var(--violet); }
   .topic-name {
     display: block;
     font-family: 'SF Mono', 'Cascadia Code', monospace;
@@ -220,7 +229,7 @@
     {% for topic in cat.topics %}
     <a class="topic-link kind-{{ topic.kind }}" href="{{ cat.base }}{{ topic.name }}/">
       <div>
-        <span class="kind-badge">{{ 'ユーザーガイド' if topic.kind == 'user' else '内部構造' }}</span>
+        <span class="kind-badge">{{ KIND_LABELS.get(topic.kind, '内部構造') }}</span>
         <span class="topic-name">{{ topic.name }}</span>
         {% if topic.version %}<div class="topic-version">{{ topic.version }}</div>{% endif %}
       </div>

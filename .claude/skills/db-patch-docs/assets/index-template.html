@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="patch">
+  <title>{{TITLE}} — {{VERSION_INFO}}</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ede9fe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#7c3aed',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#faf8ff',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f5f3ff',
+        clusterBorder:     '#c4b5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">{{TITLE}}</a>
+    <span class="doc-kind-badge">パッチ解説</span>
+    <span class="version-badge">{{VERSION_INFO}}</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+{{SIDEBAR}}
+      </ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>{{TITLE}}</h1>
+        <p class="version-hero">{{SERIES_INFO}}</p>
+        <p class="lead">{{LEAD}}</p>
+      </div>
+
+{{OVERVIEW}}
+
+{{PATCHES}}
+
+      <section class="quiz" id="quiz">
+        <h2>理解度チェック</h2>
+        <p>全 {{QUIZ_COUNT}} 問。選ぶと即座に正誤と解説が出る。間違えた節は最後にまとめて示すので、そこだけ読み返せばよい。</p>
+        <div class="scorebar">
+          <span class="score" id="score">0 / {{QUIZ_COUNT}} 正解</span>
+          <span class="track"><span class="fill" id="fill"></span></span>
+          <span class="remain" id="remain">未回答 {{QUIZ_COUNT}}</span>
+          <button type="button" id="reset">最初からやり直す</button>
+        </div>
+{{QUIZ}}
+        <div class="result" id="result" hidden>
+          <h4 id="result-title"></h4>
+          <p id="result-body"></p>
+          <ul id="result-list"></ul>
+        </div>
+      </section>
+    </main>
+  </div>
+  <footer class="site-footer">{{FOOTER}}</footer>
+
+  <script>
+  (function () {
+    var total = {{QUIZ_COUNT}};
+    var answered = 0, correct = 0, wrong = {};
+    var scoreEl = document.getElementById('score');
+    var fillEl = document.getElementById('fill');
+    var remainEl = document.getElementById('remain');
+    var resultEl = document.getElementById('result');
+    var resultTitle = document.getElementById('result-title');
+    var resultBody = document.getElementById('result-body');
+    var resultList = document.getElementById('result-list');
+
+    function refresh() {
+      scoreEl.textContent = correct + ' / ' + total + ' 正解';
+      fillEl.style.width = (answered ? (correct / total) * 100 : 0) + '%';
+      remainEl.textContent = answered < total ? ('未回答 ' + (total - answered)) : '回答完了';
+      if (answered === total) {
+        var names = Object.keys(wrong);
+        resultTitle.textContent = correct + ' / ' + total + ' 正解';
+        if (names.length === 0) {
+          resultBody.textContent = '全問正解。各パッチの設計判断と落とし穴を押さえられている。';
+          resultList.innerHTML = '';
+        } else {
+          resultBody.textContent = '取りこぼしのあった節を読み返すと効率がよい。';
+          resultList.innerHTML = names.map(function (a) {
+            return '<li><a href="#' + a + '">' + wrong[a].label + '</a>（' + wrong[a].count + ' 問）</li>';
+          }).join('');
+        }
+        resultEl.hidden = false;
+      } else {
+        resultEl.hidden = true;
+      }
+    }
+
+    document.querySelectorAll('.q').forEach(function (q) {
+      var answer = parseInt(q.dataset.answer, 10);
+      q.querySelectorAll('.opt').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          if (q.dataset.done) return;
+          q.dataset.done = '1';
+          var picked = parseInt(btn.dataset.o, 10);
+          var ok = picked === answer;
+          answered++;
+          if (ok) {
+            correct++;
+          } else {
+            var key = q.dataset.anchor;
+            if (!wrong[key]) wrong[key] = { label: q.dataset.patch, count: 0 };
+            wrong[key].count++;
+          }
+          q.querySelectorAll('.opt').forEach(function (b) {
+            var idx = parseInt(b.dataset.o, 10);
+            b.disabled = true;
+            if (idx === answer) b.classList.add('correct');
+            else if (idx === picked) b.classList.add('wrong');
+          });
+          var fb = q.querySelector('.q-feedback');
+          var verdict = fb.querySelector('.verdict');
+          verdict.textContent = ok ? '正解' : '不正解 — 正解は ' + String.fromCharCode(65 + answer);
+          verdict.className = 'verdict ' + (ok ? 'ok' : 'ng');
+          fb.hidden = false;
+          refresh();
+        });
+      });
+    });
+
+    document.getElementById('reset').addEventListener('click', function () {
+      answered = 0; correct = 0; wrong = {};
+      document.querySelectorAll('.q').forEach(function (q) {
+        delete q.dataset.done;
+        q.querySelector('.q-feedback').hidden = true;
+        q.querySelectorAll('.opt').forEach(function (b) {
+          b.disabled = false;
+          b.classList.remove('correct', 'wrong');
+        });
+      });
+      refresh();
+      document.getElementById('quiz').scrollIntoView({ block: 'start' });
+    });
+
+    refresh();
+  })();
+  </script>
+</body>
+</html>
