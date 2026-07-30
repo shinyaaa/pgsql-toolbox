@@ -47,6 +47,9 @@ CLAUDE_STARTUP_BUFFER = 2
 # How long to wait for an already-running Claude Code to finish its current
 # turn before giving up on driving it (resume/Remote Control recovery).
 CLAUDE_BUSY_TIMEOUT = 30
+# How long to wait for Remote Control to connect and print its session URL
+# after the /remote-control command is submitted.
+CLAUDE_RC_TIMEOUT = 15
 
 # MCP server endpoint
 MCP_ENDPOINT = "http://localhost:40000/mcp"
