@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="patch">
+  <title>pgbench \sleep の整数溢れ 精読ノート — PostgreSQL 20devel · 8f191a79617 · 2026-07-30</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ede9fe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#7c3aed',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#faf8ff',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f5f3ff',
+        clusterBorder:     '#c4b5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgbench \sleep の整数溢れ 精読ノート</a>
+    <span class="doc-kind-badge">パッチ解説</span>
+    <span class="version-badge">PostgreSQL 20devel · 8f191a79617 · 2026-07-30</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li>
+          <a class="chap-title" href="#p-sleep-overflow">0001 \sleep の整数溢れ</a>
+          <ol class="sect">
+            <li><a href="#p-sleep-overflow-problem">問題</a></li>
+            <li><a href="#p-sleep-overflow-design">設計</a></li>
+            <li><a href="#p-sleep-overflow-code">仕組み</a></li>
+            <li><a href="#p-sleep-overflow-gotchas">注意</a></li>
+            <li><a href="#p-sleep-overflow-tests">検証</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="#quiz">理解度チェック</a>
+        </li>
+
+      </ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>pgbench \sleep の整数溢れ 精読ノート</h1>
+        <p class="version-hero">postgres / src/bin/pgbench — patch 0001</p>
+        <p class="lead">pgbench の \sleep は、約 2148 秒以上を指定すると一切待たずに次のコマンドへ進む。このノートは、その 1 コミットのパッチを、壊れ方の連鎖と設計の選択肢までさかのぼって読み解く。読み終えたら、なぜ換算はエラーで絶対時刻は飽和なのか、なぜ parse 側の 1 行が必要なのかを自分で説明できるはずである。</p>
+      </div>
+
+      <h2>このドキュメントの読み方</h2>
+      <p>1 コミットのパッチだが、触る場所は 3 つに分かれる。引数を解釈する evaluateSleep()、待ち時間を絶対時刻に変える executeMetaCommand() の META_SLEEP 分岐、そしてスクリプトを読む側の process_backslash_command() である。3 つ目は機能の変更ではなく、1 つ目の実装を成立させるための下地で、これが無いと \sleep 2ms が壊れる。
+
+全体を通して頭に置いておく土台は 2 つある。1 つは advanceConnectionState() の CSTATE_SLEEP で、ここは st-&gt;sleep_until と現在時刻を比べるだけの状態であり、待ち時間の妥当性を検査しない。もう 1 つは pgbench が -fwrapv でビルドされることで、int の溢れはクラッシュも警告も起こさず、静かに負の値になる。この 2 つが重なると、壊れた待ち時間は「成功した測定」の形で出力される。</p>
+      <table><tr><th>ベースコミット</th><td>8f191a79617 (PostgreSQL 20devel)</td></tr><tr><th>パッチ本数</th><td>1 本</td></tr><tr><th>総差分</th><td>2 files, +59 / −25</td></tr><tr><th>TAP テスト</th><td>690 passed, 0 failed (src/bin/pgbench)</td></tr><tr><th>検証方法</th><td>assert 有効・-O0 ビルドで再現と境界値を実測</td></tr></table>
+
+
+      <section class="patch" id="p-sleep-overflow">
+        <p class="eyebrow"><span class="seq">0001</span><span class="sep">/</span><span>\sleep の整数溢れ</span></p>
+        <h2>\sleep の待ち時間を int64 で扱い、換算と絶対時刻の溢れを塞ぐ</h2>
+        <p class="lead">\sleep の待ち時間は int で保持され、単位からマイクロ秒への換算は検査のない掛け算だった。単位を省略すると秒として 1000000 倍されるので、2148 秒以上の指定は int を溢れて負になり、sleep_until が過去の時刻になって一切待たずに次のコマンドへ進んでいた。待ち時間を int64 に替え、取り込みを strtoint64() に、換算を pg_mul_s64_overflow() に、絶対時刻の加算を pg_add_s64_overflow() による飽和に置き換える。</p>
+        <dl class="facts"><div><dt>コミット</dt><dd>98690a8919a</dd></div><div><dt>件名</dt><dd>pgbench: Fix integer overflow in \sleep delay computation</dd></div><div><dt>差分</dt><dd>2 files <span class="plus">+59</span> <span class="minus">&minus;25</span></dd></div></dl>
+
+<h3 class="step" id="p-sleep-overflow-problem"><span class="step-mark">問題</span>何が足りなかったか</h3>
+        <p>evaluateSleep() は待ち時間を int の局所変数 usec に取り、単位に応じて usec *= 1000000 を行う。単位を省略したときの既定は秒なので、この掛け算は必ず走る。INT_MAX / 1000000 は 2147 なので、2148 秒以上の指定は int を溢れる。pgbench は -fwrapv でビルドされるため値は未定義にはならず負に回り込み、executeMetaCommand() の st-&gt;sleep_until = (*now) + usec が過去の時刻になる。CSTATE_SLEEP は now &lt; st-&gt;sleep_until の間だけ待つ状態なので、この条件は最初から偽になり、クライアントは待たずに CSTATE_END_COMMAND へ進む。エラーも警告も出ず、トランザクションは成功として計上される。1 時間おきに 1 トランザクションのような低頻度ワークロードを組むと、待ちが全部消えたまま「成功した測定」の見た目で結果が出る。ms 指定でも 2148000 ms 以上で同じことが起きる。</p>
+<figure class="term">
+<figcaption>実行例</figcaption>
+<pre><code>$ cat work/tmp/s3000.sql
+\sleep 3000
+$ time pgbench -n -t 1 -f work/tmp/s3000.sql postgres
+pgbench (20devel)
+transaction type: work/tmp/s3000.sql
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+number of transactions per client: 1
+number of transactions actually processed: 1/1
+number of failed transactions: 0 (0.000%)
+latency average = 0.012 ms
+initial connection time = 1.799 ms
+tps = 83333.333333 (without initial connection time)
+
+real	0m0.005s
+user	0m0.001s
+sys	0m0.000s</code></pre>
+</figure>
+<p class="code-note">50 分待つはずのスクリプトが 5 ミリ秒で終わり、しかも失敗として数えられていない。出力のどこにも異常は現れないので、測定結果だけを見て気づくことはできない。パッチ後は同じスクリプトが指定どおり 3000 秒待つ。</p>
+
+<h3 class="step" id="p-sleep-overflow-design"><span class="step-mark">設計</span>採った道と捨てた道</h3>
+        <div class="choices"><div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>待ち時間を int64 で持ち、単位の掛け算を pg_mul_s64_overflow() で検査して、溢れたら実行時エラーにする。</p>
+<p>溢れるのはユーザが指定した値がマイクロ秒として表現できないときだけで、これは入力の誤りである。同じ pgbench の式評価も、掛け算の溢れを pg_mul_s64_overflow() で検出して bigint mul out of range を出す。エラーにすれば語調も既存の \set 系とそろう。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>溢れた換算結果を PG_INT64_MAX に飽和させる案。桁を打ち間違えた \sleep 99999999999 s が約 29 万年の待ちに化けるが、エラーが出ないので気づけない。しかも CSTATE_SLEEP は timer_exceeded を見ないので -T を付けていても打ち切られない。直そうとしていた「静かに壊れる」形がそのまま残る。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>絶対時刻の側、つまり st-&gt;sleep_until = (*now) + usec は pg_add_s64_overflow() で検査し、溢れたら PG_INT64_MAX に飽和させる。</p>
+<p>ここに来た時点で usec はマイクロ秒として表現できることが確定している。溢れるのは now を足したときだけで、それは要求された待ち時間が長すぎるという意味ではない。CSTATE_SLEEP はこの絶対時刻としか比較しないので、飽和させれば「待ち続ける」に落ちる。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>換算側と同じくエラーで統一する案。表現できる待ち時間を要求したクライアントを、pgbench 内部の時刻表現の都合で中断することになる。now は pg_time_now() が返す単調時計の値をマイクロ秒にしたものなので、この加算が溢れるのは指定が int64 の上限そのものに迫るときに限られる。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>値の取り込みを atoi() から strtoint64(str, errorOK, &amp;result) に替える。</p>
+<p>atoi() は範囲外の入力に対して未定義動作で、\sleep 99999999999999999999 のような定数を検出できない。strtoint64() は pgbench 内で \set の整数リテラルにも使われている関数で、範囲外と構文誤りの両方を返す。errorOK を真にして呼べば、関数自身の bigint 向けメッセージは出ず、既存の invalid sleep time "%s" for variable "%s" をそのまま使える。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>atoi() の寛容さに合わせて、先頭の数字だけを読む独自の取り込みを書く案。文字列の途中で打ち切る以上、桁数が多すぎる定数は「読めた」ことになり、検出したかった範囲外がそのまま通る。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>範囲検査は evaluateSleep() の実行時 1 か所に置き、parse 時の process_backslash_command() には足さない。</p>
+<p>\sleep :var は変数の値が実行時にしか決まらないので、換算の溢れ検査はどのみち実行時に要る。定数だけを parse 時にも検査すると、同じ換算を 2 か所に書くことになる。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>定数の範囲を parse 時に syntax_error で弾く案。スクリプトは起動時に全部読まれるので測定開始前に落とせる利点はあるが、変数経路の検査を消せるわけではないため、重複した換算のコピーが残る。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>parse 時に数値部を null 終端し、単位の argv[2] は pg_strdup() した複製にする。</p>
+<p>\sleep 1ms のように単位を空白なしで書くと、parse 側は argv[1] を "1ms" のまま残し、argv[2] に 'm' の位置を指させていた。これは atoi() が末尾の非数字を読み飛ばす性質に依存した実装で、文字列全体を解釈する strtoint64() では成り立たない。終端しておけば取り込みは定数も変数も同じ 1 行で済む。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>evaluateSleep() 側で数字の続く範囲を測り、一時バッファへ複製してから strtoint64() に渡す案。parse 時に一度確定している数字と単位の境界を、\sleep を実行するたびに数え直すことになる。argv[2] が argv[1] の内部を指したままになる点も直らない。</p>
+</div>
+</div>
+
+<h3 class="step" id="p-sleep-overflow-code"><span class="step-mark">仕組み</span>コードを読む</h3>
+<figure>
+<pre class="mermaid">flowchart TD
+  A["sleep 3000 と書いたコマンド (単位省略なので秒)"] --> B["evaluateSleep() が引数を取り込む"]
+  B --> C{"待ち時間を保持する型"}
+  C -- "パッチ前: int" --> D["3000 * 1000000 が int を溢れ&lt;br/>-1294967296 に回り込む"]
+  D --> E["sleep_until = now + 負の値&lt;br/>= 過去の時刻"]
+  E --> F["CSTATE_SLEEP の比較 (now は sleep_until 未満か) が偽"]
+  F --> G["待たずに CSTATE_END_COMMAND へ&lt;br/>成功として計上される"]
+  C -- "パッチ後: int64" --> H["pg_mul_s64_overflow() で換算を検査"]
+  H -- "溢れない" --> I["pg_add_s64_overflow() で絶対時刻を計算&lt;br/>溢れたら PG_INT64_MAX に飽和"]
+  I --> J["指定どおり待つ"]
+  H -- "溢れる" --> K["sleep time ... is out of range で&lt;br/>クライアントを中断"]</pre>
+</figure>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / evaluateSleep() — 引数の取り込み (変数経路)</figcaption>
+<pre><code>static bool
+evaluateSleep(Variables *variables, int argc, char **argv, int64 *usecs)
+{
+	const char *number;
+	const char *unit;
+	int64		usec;
+	int64		multiplier;
+
+	if (*argv[1] == &#x27;:&#x27;)
+	{
+		if ((number = getVariable(variables, argv[1] + 1)) == NULL)
+		{
+			pg_log_error(&quot;%s: undefined variable \&quot;%s\&quot;&quot;, argv[0], argv[1] + 1);
+			return false;
+		}
+
+		/*
+		 * Raise an error if the value of a variable is not an integer, or is
+		 * out of range.
+		 */
+		if (!strtoint64(number, true, &amp;usec))
+		{
+			pg_log_error(&quot;%s: invalid sleep time \&quot;%s\&quot; for variable \&quot;%s\&quot;&quot;,
+						 argv[0], number, argv[1] + 1);
+			return false;
+		}</code></pre>
+</figure>
+<p class="code-note">getVariable() の戻り値をそのまま number で受けているので、エラーメッセージが引用する文字列は変数の値そのものになる。strtoint64() の errorOK を真にしているのは、範囲外のときに関数自身の value "..." is out of range for type bigint を出させず、\sleep が従来から出している文言を保つためである。パッチ前の判定は usec == 0 &amp;&amp; !isdigit(*var) で先頭 1 文字しか見ておらず、"0abc" は 0 として通り、範囲外の値は atoi() の未定義動作のまま素通りしていた。</p>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / evaluateSleep() — 定数経路と単位換算</figcaption>
+<pre><code>	else
+	{
+		number = argv[1];
+
+		/* the syntax has been checked, so only the range can be wrong here */
+		if (!strtoint64(number, true, &amp;usec))
+		{
+			pg_log_error(&quot;%s: invalid sleep time \&quot;%s\&quot;&quot;, argv[0], number);
+			return false;
+		}
+	}
+
+	/* seconds is the default unit */
+	unit = argc &gt; 2 ? argv[2] : &quot;s&quot;;
+
+	if (pg_strcasecmp(unit, &quot;ms&quot;) == 0)
+		multiplier = 1000;
+	else if (pg_strcasecmp(unit, &quot;s&quot;) == 0)
+		multiplier = 1000000;
+	else						/* &quot;us&quot;, checked at parse time */
+		multiplier = 1;
+
+	if (pg_mul_s64_overflow(usec, multiplier, usecs))
+	{
+		pg_log_error(&quot;%s: sleep time \&quot;%s\&quot; is out of range for unit \&quot;%s\&quot;&quot;,
+					 argv[0], number, unit);
+		return false;
+	}</code></pre>
+</figure>
+<p class="code-note">定数側の strtoint64() が失敗しうるのは範囲外のときだけである。先頭が数字であることと単位の綴りは parse 時に検査済みで、そこは変わっていない。単位の分岐は multiplier を決めるだけにしてあるので、掛け算と検査は 1 か所に集まり、us の枝 (multiplier = 1) を通っても pg_mul_s64_overflow() は必ず呼ばれる。unit を argc &gt; 2 ? argv[2] : "s" として先に確定させているのは、エラーメッセージにどの単位で溢れたかを載せるためである。</p>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / executeMetaCommand() — META_SLEEP 分岐</figcaption>
+<pre><code>	if (command-&gt;meta == META_SLEEP)
+	{
+		int64		usec;
+
+		/*
+		 * A \sleep doesn&#x27;t execute anything, we just get the delay from the
+		 * argument, and enter the CSTATE_SLEEP state.  (The per-command
+		 * latency will be recorded in CSTATE_SLEEP state, not here, after the
+		 * delay has elapsed.)
+		 */
+		if (!evaluateSleep(&amp;st-&gt;variables, argc, argv, &amp;usec))
+		{
+			commandFailed(st, &quot;sleep&quot;, &quot;execution of meta-command failed&quot;);
+			return CSTATE_ABORTED;
+		}
+
+		pg_time_now_lazy(now);
+		/* an absurd delay saturates rather than wrapping to the past */
+		if (pg_add_s64_overflow(*now, usec, &amp;st-&gt;sleep_until))
+			st-&gt;sleep_until = PG_INT64_MAX;
+		return CSTATE_SLEEP;
+	}</code></pre>
+</figure>
+<p class="code-note">evaluateSleep() が真を返した時点で usec はマイクロ秒として表現できることが保証されるので、ここで残る溢れは now を足す側だけになる。加算を pg_time_now_lazy() の後に置く必要があるのは、now が確定していないと足せないからである。飽和させた sleep_until は次に示す CSTATE_SLEEP との比較にしか使われないので、PG_INT64_MAX を入れることは「待ち続ける」と同義になる。</p>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / advanceConnectionState() — CSTATE_SLEEP (パッチが触っていない箇所)</figcaption>
+<pre><code>			case CSTATE_SLEEP:
+				pg_time_now_lazy(&amp;now);
+				if (now &lt; st-&gt;sleep_until)
+					return;		/* still sleeping, nothing to do here */
+				/* Else done sleeping. */
+				st-&gt;state = CSTATE_END_COMMAND;
+				break;</code></pre>
+</figure>
+<p class="code-note">壊れていたのはこの比較ではなく sleep_until の作り方だった。負の usec を足した時点で now &lt; st-&gt;sleep_until が偽になり、この case は「寝終わった」と判断して CSTATE_END_COMMAND へ進む。だから待ちが消えても失敗にはならない。この節に timer_exceeded の検査がないことも読み取れる。-T の満了は sleep 中のクライアントには届かない。</p>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / process_backslash_command() — 数値と単位の分割</figcaption>
+<pre><code>			if (*c)
+			{
+				if (my_command-&gt;argc == 2 &amp;&amp; have_digit)
+				{
+					offsets[2] = offsets[1] + (c - my_command-&gt;argv[1]);
+					my_command-&gt;argv[2] = pg_strdup(c);
+					my_command-&gt;argc = 3;
+					*c = &#x27;\0&#x27;;
+				}</code></pre>
+</figure>
+<p class="code-note">offsets[2] を先に計算しているのは、c がまだ argv[1] の内部を指しているうちにsyntax_error 用の位置を確定させるためである。pg_strdup(c) を *c = '\0' より前に置く順序も同じ理由で、逆にすると単位が空文字列になる。argv[2] を複製にしたことで、argv を順に pg_free() する free_command() に内部ポインタを渡す形もなくなる。</p>
+
+<h3 class="step" id="p-sleep-overflow-gotchas"><span class="step-mark">注意</span>落とし穴</h3>
+        <ul class="notes warn-list"><li><h4>実装中に見つかった欠陥: 空白なしの単位記法が壊れる</h4><p>atoi() を strtoint64() に替えただけだと、\sleep 2ms が実行時に invalid sleep time "2ms" で中断する。parse 側が argv[1] を "1ms" のまま残し、単位の argv[2] にその内部を指させていて、数値部が終端されていなかったためである。atoi() が末尾の非数字を読み飛ばすので今まで表面化していなかった。実機確認: *c = '\0' の 1 行だけを外してビルドすると \sleep 2ms が invalid sleep time "2ms" で落ちる。既存の TAP ケース pgbench late throttling がこの記法を使っているので、入れ忘れればテストが落ちる。</p></li>
+<li><h4>-T も -t も sleep 中のクライアントを止めない</h4><p>CSTATE_SLEEP は sleep_until としか比較せず、timer_exceeded を見ない。threadRun() の待ちは SIGALRM で EINTR になるが、ループの先頭に戻って同じ残り時間を待ち直すだけである。実機確認: \sleep 30 のスクリプトを -T 1 で走らせても 8 秒後に終わっておらず、timeout に kill された。換算の溢れをエラーにした理由でもある。飽和させると、打ち間違えた 1 行が測定を無期限に止める。</p></li>
+<li><h4>変数の値の解釈が厳しくなる</h4><p>\sleep :x の x が "1.5" や "0.0" のとき、パッチ前は atoi() が 1 と 0 に切り捨てて通していたが、パッチ後は invalid sleep time で中断する。ドキュメントは以前から integer value を要求しているので文面との差はないが、既存スクリプトの挙動は変わる。バックパッチを master のみにした理由の 1 つである。既存テストの \set one 1.0 が通り続けるのは、getVariable() が double を "%.*g" で文字列化して "1" になるからで、値が "1.5" なら落ちる。</p></li>
+<li><h4>単位ごとに通る上限が違う</h4><p>s なら 9223372036854 秒までが通り、9223372036855 秒からは out of range になる。us は int64 の最大値まで換算を通り抜けるので、\sleep 9223372036854775807 us は加算側の飽和で「待ち続ける」に落ちる。実機確認: 前者 2 つは 1 秒の timeout で kill / 即エラー、後者は kill されるまで待つ。</p></li>
+<li><h4>負の待ち時間はそのまま</h4><p>\sleep -1 は parse 時に符号が許され、パッチ後も sleep_until が過去になるので即座に次へ進む。溢れの修正であって値域の妥当性検査ではないので、ここは意図的に変えていない。実機確認: 終了コード 0、実行時間 13 ミリ秒。</p></li>
+<li><h4>argv[2] の内部ポインタは顕在化していなかった</h4><p>パッチ前は argv[2] が argv[1] の途中を指すので、argv を順に pg_free() する free_command() に内部ポインタが渡る形になっていた。free_command() が呼ばれるのは \gset と \aset を直前の SQL コマンドへ畳み込む経路だけで、\sleep のコマンドは解放されないため、実際に踏むことはなかった。この変更で形としても解消する。</p></li>
+</ul>
+
+<h3 class="step" id="p-sleep-overflow-tests"><span class="step-mark">検証</span>テストが固定していること</h3>
+        <ul class="notes ok-list"><li><h4>範囲外の定数が未定義動作ではなくエラーになる</h4><p>src/bin/pgbench/t/001_pgbench_with_server.pl の @errors に 'sleep constant out of range' を追加した。\sleep 99999999999999999999 を実行し、終了コード 2、stdout に processed: 0/1、stderr に invalid sleep time "99999999999999999999" を要求する。取り込みを atoi() に戻すと、範囲外が何も報告されずに通るのでこのケースが落ちる。</p></li>
+<li><h4>単位換算の溢れがエラーになる</h4><p>同ファイルの 'sleep out of range for unit' が \sleep :maxint s を実行する。maxint はテスト共通の -Dmaxint=9223372036854775807 で、秒への換算が必ず溢れる。stderr に sleep time "9223372036854775807" is out of range for unit "s" を要求するので、pg_mul_s64_overflow() の検査を外すと落ちる。</p></li>
+<li><h4>変数の値が整数でなければ受け付けない</h4><p>'sleep variable not an integer' が -Dzero=0.0 の変数を使って \sleep :zero を実行し、invalid sleep time "0.0" for variable "zero" を要求する。取り込みを先頭の数字だけ読む実装に緩めると、0 として受理されてエラーが出ず落ちる。</p></li>
+<li><h4>空白なしの単位記法が壊れていない</h4><p>既存の 'pgbench late throttling' が \sleep 2ms だけのスクリプト 001_pgbench_sleep を走らせ、processed: [01]/10 と above the 1.0 ms latency limit の行を要求する。parse 時の *c = '\0' を落とすと、このケースが invalid sleep time "2ms" で落ちる。</p></li>
+<li><h4>変数経由の \sleep が従来どおり動く</h4><p>既存の 'pgbench backslash commands' が \sleep :one ms、\sleep 100 us、\sleep 0 s、\sleep :zero を続けて実行する。\set one 1.0 が作る double の変数がここを通るので、getVariable() の文字列化と strtoint64() の厳しさが食い違えばこのケースが落ちる。</p></li>
+</ul>
+      </section>
+
+
+      <section class="quiz" id="quiz">
+        <h2>理解度チェック</h2>
+        <p>全 4 問。選ぶと即座に正誤と解説が出る。間違えた節は最後にまとめて示すので、そこだけ読み返せばよい。</p>
+        <div class="scorebar">
+          <span class="score" id="score">0 / 4 正解</span>
+          <span class="track"><span class="fill" id="fill"></span></span>
+          <span class="remain" id="remain">未回答 4</span>
+          <button type="button" id="reset">最初からやり直す</button>
+        </div>
+        <article class="q" data-answer="2" data-anchor="p-sleep-overflow" data-patch="\sleep の整数溢れ">
+          <p class="q-meta"><span class="q-no">Q01</span><a href="#p-sleep-overflow">0001 \sleep の整数溢れ</a></p>
+          <h4>パッチ前の pgbench で \sleep 3000 がエラーも警告も出さずに次のコマンドへ進んだのはなぜか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="0" data-o="0"><span class="opt-key">A</span><span class="opt-text">evaluateSleep() が偽を返し、commandFailed() がそのコマンドを飛ばして次へ進めるから</span></button>
+<button type="button" class="opt" data-q="0" data-o="1"><span class="opt-key">B</span><span class="opt-text">-fwrapv を付けたビルドでは int の溢れが 0 に丸められ、待ち時間が消えるから</span></button>
+<button type="button" class="opt" data-q="0" data-o="2"><span class="opt-key">C</span><span class="opt-text">usec が負になって sleep_until が過去の時刻になり、CSTATE_SLEEP の now &lt; st-&gt;sleep_until が最初から偽になるから</span></button>
+<button type="button" class="opt" data-q="0" data-o="3"><span class="opt-key">D</span><span class="opt-text">threadRun() の pg_usleep() が負の待ち時間を受け取ると 0 として扱うから</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">CSTATE_SLEEP は sleep_until と now を比べるだけで、待ち時間の符号も妥当性も見ない。3000 * 1000000 が int を溢れて負になり、sleep_until が過去になった時点でこの比較は偽になる。選択肢 A が最も誘惑的だが、evaluateSleep() は溢れを検出できず真を返しているので commandFailed() は呼ばれない。呼ばれていればクライアントは中断し、processed は 1/1 ではなく 0/1 になっていた。選択肢 D は待ちに入った後の話で、そもそもクライアントが CSTATE_SLEEP に留まらないので到達しない。選択肢 B は事実として誤りで、-fwrapv は回り込みを定義するだけで値を 0 にはしない。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="1" data-anchor="p-sleep-overflow" data-patch="\sleep の整数溢れ">
+          <p class="q-meta"><span class="q-no">Q02</span><a href="#p-sleep-overflow">0001 \sleep の整数溢れ</a></p>
+          <h4>パッチ後の pgbench で \sleep 9223372036854775807 us を実行すると何が起きるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="1" data-o="0"><span class="opt-key">A</span><span class="opt-text">strtoint64() が範囲外と判定して invalid sleep time で中断する</span></button>
+<button type="button" class="opt" data-q="1" data-o="1"><span class="opt-key">B</span><span class="opt-text">換算は乗数 1 なので通り、絶対時刻が PG_INT64_MAX に飽和して事実上待ち続ける</span></button>
+<button type="button" class="opt" data-q="1" data-o="2"><span class="opt-key">C</span><span class="opt-text">単位換算が溢れるので sleep time ... is out of range for unit "us" で中断する</span></button>
+<button type="button" class="opt" data-q="1" data-o="3"><span class="opt-key">D</span><span class="opt-text">now を足した時点で回り込み、パッチ前と同じく待たずに次のコマンドへ進む</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">us の枝は multiplier が 1 なので pg_mul_s64_overflow() は溢れない。溢れるのは now を足す側で、そこは pg_add_s64_overflow() が真を返して sleep_until が PG_INT64_MAX になる。選択肢 C が最も誘惑的だが、out of range になるのは s や ms のように掛け算がある単位のときである。選択肢 A は 9223372036854775807 がちょうど int64 に収まるので誤り。選択肢 D はパッチ前の挙動で、飽和処理がその経路を塞いでいる。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-sleep-overflow" data-patch="\sleep の整数溢れ">
+          <p class="q-meta"><span class="q-no">Q03</span><a href="#p-sleep-overflow">0001 \sleep の整数溢れ</a></p>
+          <h4>単位換算が溢れたときにエラーではなく PG_INT64_MAX へ飽和させる案が退けられた理由はどれか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="2" data-o="0"><span class="opt-key">A</span><span class="opt-text">sleep_until に PG_INT64_MAX を入れると now &lt; st-&gt;sleep_until が偽になり、待たずに次のコマンドへ進んでしまう</span></button>
+<button type="button" class="opt" data-q="2" data-o="1"><span class="opt-key">B</span><span class="opt-text">変数経由の \sleep は値が実行時にしか決まらないので、飽和という設計自体を実装できない</span></button>
+<button type="button" class="opt" data-q="2" data-o="2"><span class="opt-key">C</span><span class="opt-text">飽和させると pgbench の終了コードが 2 になり、\sleep を含む既存の TAP ケースが軒並み落ちる</span></button>
+<button type="button" class="opt" data-q="2" data-o="3"><span class="opt-key">D</span><span class="opt-text">桁を打ち間違えた \sleep 99999999999 s が約 29 万年の待ちになり、-T を付けても CSTATE_SLEEP は打ち切られないので測定が黙って止まる</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">換算の溢れは、ユーザの指定がマイクロ秒として表現できないという入力の誤りである。黙って別の値に読み替えると、直そうとしていた「静かに壊れる」形がそのまま残る。同じ飽和でも絶対時刻の側で採っているのは、そちらの溢れが入力の誤りではなく時刻表現の限界だからである。選択肢 A が最も誘惑的だが、比較は now &lt; sleep_until なので飽和させると偽ではなく真になり、待ち続ける方に倒れる。選択肢 B は誤りで、飽和も検査も実行時に行えば足りる。選択肢 C は根拠がなく、飽和させた場合は正常終了する。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="0" data-anchor="p-sleep-overflow" data-patch="\sleep の整数溢れ">
+          <p class="q-meta"><span class="q-no">Q04</span><a href="#p-sleep-overflow">0001 \sleep の整数溢れ</a></p>
+          <h4>atoi() を strtoint64() に替える一方で、parse 側の *c = '\0' を入れ忘れると何が観測されるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="3" data-o="0"><span class="opt-key">A</span><span class="opt-text">\sleep 2ms のように単位を空白なしで書いたスクリプトが、実行時に invalid sleep time "2ms" で中断する</span></button>
+<button type="button" class="opt" data-q="3" data-o="1"><span class="opt-key">B</span><span class="opt-text">\sleep 2ms の単位が読み飛ばされ、2 マイクロ秒の待ちとして実行される</span></button>
+<button type="button" class="opt" data-q="3" data-o="2"><span class="opt-key">C</span><span class="opt-text">argv[2] が argv[1] の内部を指したままになり、free_command() の二重解放でクラッシュする</span></button>
+<button type="button" class="opt" data-q="3" data-o="3"><span class="opt-key">D</span><span class="opt-text">\sleep 2ms がスクリプトの読み込み時点で unrecognized time unit の syntax error になる</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">終端しないと argv[1] は "2ms" のままで、文字列全体を解釈する strtoint64() が失敗する。実機でも *c = '\0' の 1 行を外すと invalid sleep time "2ms" が出る。選択肢 B が最も誘惑的だが、それは末尾の非数字を読み飛ばす atoi() の性質であって、strtoint64() は途中で打ち切らない。選択肢 D は誤りで、数値と単位の分割そのものは parse 時に成功しており、単位の綴りも既知のものである。選択肢 C は free_command() が \gset と \aset の畳み込み経路でしか呼ばれないので起きない。</p>
+          </div>
+        </article>
+
+        <div class="result" id="result" hidden>
+          <h4 id="result-title"></h4>
+          <p id="result-body"></p>
+          <ul id="result-list"></ul>
+        </div>
+      </section>
+    </main>
+  </div>
+  <footer class="site-footer">ブランチ fix-pgbench-sleep-overflow / パッチは work/fix-pgbench-sleep-overflow/v1-0001-pgbench-Fix-integer-overflow-in-sleep-delay-compu.patch</footer>
+
+  <script>
+  (function () {
+    var total = 4;
+    var answered = 0, correct = 0, wrong = {};
+    var scoreEl = document.getElementById('score');
+    var fillEl = document.getElementById('fill');
+    var remainEl = document.getElementById('remain');
+    var resultEl = document.getElementById('result');
+    var resultTitle = document.getElementById('result-title');
+    var resultBody = document.getElementById('result-body');
+    var resultList = document.getElementById('result-list');
+
+    function refresh() {
+      scoreEl.textContent = correct + ' / ' + total + ' 正解';
+      fillEl.style.width = (answered ? (correct / total) * 100 : 0) + '%';
+      remainEl.textContent = answered < total ? ('未回答 ' + (total - answered)) : '回答完了';
+      if (answered === total) {
+        var names = Object.keys(wrong);
+        resultTitle.textContent = correct + ' / ' + total + ' 正解';
+        if (names.length === 0) {
+          resultBody.textContent = '全問正解。各パッチの設計判断と落とし穴を押さえられている。';
+          resultList.innerHTML = '';
+        } else {
+          resultBody.textContent = '取りこぼしのあった節を読み返すと効率がよい。';
+          resultList.innerHTML = names.map(function (a) {
+            return '<li><a href="#' + a + '">' + wrong[a].label + '</a>（' + wrong[a].count + ' 問）</li>';
+          }).join('');
+        }
+        resultEl.hidden = false;
+      } else {
+        resultEl.hidden = true;
+      }
+    }
+
+    document.querySelectorAll('.q').forEach(function (q) {
+      var answer = parseInt(q.dataset.answer, 10);
+      q.querySelectorAll('.opt').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          if (q.dataset.done) return;
+          q.dataset.done = '1';
+          var picked = parseInt(btn.dataset.o, 10);
+          var ok = picked === answer;
+          answered++;
+          if (ok) {
+            correct++;
+          } else {
+            var key = q.dataset.anchor;
+            if (!wrong[key]) wrong[key] = { label: q.dataset.patch, count: 0 };
+            wrong[key].count++;
+          }
+          q.querySelectorAll('.opt').forEach(function (b) {
+            var idx = parseInt(b.dataset.o, 10);
+            b.disabled = true;
+            if (idx === answer) b.classList.add('correct');
+            else if (idx === picked) b.classList.add('wrong');
+          });
+          var fb = q.querySelector('.q-feedback');
+          var verdict = fb.querySelector('.verdict');
+          verdict.textContent = ok ? '正解' : '不正解 — 正解は ' + String.fromCharCode(65 + answer);
+          verdict.className = 'verdict ' + (ok ? 'ok' : 'ng');
+          fb.hidden = false;
+          refresh();
+        });
+      });
+    });
+
+    document.getElementById('reset').addEventListener('click', function () {
+      answered = 0; correct = 0; wrong = {};
+      document.querySelectorAll('.q').forEach(function (q) {
+        delete q.dataset.done;
+        q.querySelector('.q-feedback').hidden = true;
+        q.querySelectorAll('.opt').forEach(function (b) {
+          b.disabled = false;
+          b.classList.remove('correct', 'wrong');
+        });
+      });
+      refresh();
+      document.getElementById('quiz').scrollIntoView({ block: 'start' });
+    });
+
+    refresh();
+  })();
+  </script>
+</body>
+</html>
