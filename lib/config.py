@@ -44,6 +44,9 @@ LOG_PREVIEW_SIZE = 4096
 CLAUDE_STARTUP_TIMEOUT = 60
 CLAUDE_STARTUP_POLL_INTERVAL = 1
 CLAUDE_STARTUP_BUFFER = 2
+# How long to wait for an already-running Claude Code to finish its current
+# turn before giving up on driving it (resume/Remote Control recovery).
+CLAUDE_BUSY_TIMEOUT = 30
 
 # MCP server endpoint
 MCP_ENDPOINT = "http://localhost:40000/mcp"
