@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from lib.config import (
+    CLAUDE_BUSY_TIMEOUT,
     CLAUDE_STARTUP_BUFFER,
     CLAUDE_STARTUP_POLL_INTERVAL,
     CLAUDE_STARTUP_TIMEOUT,
@@ -490,6 +491,33 @@ def _pane_title(session: str) -> str:
     return result.stdout or ""
 
 
+def _pane_tail(session: str, lines: int = 12) -> str:
+    """Return the last visible lines of a pane, for diagnostics in errors."""
+    tail = _capture_pane(session).rstrip().splitlines()[-lines:]
+    return "\n".join(tail)
+
+
+def _leave_copy_mode(session: str) -> bool:
+    """Return a pane scrolled into copy mode to the live view.
+
+    capture-pane returns whatever the pane currently shows, so a session
+    someone scrolled up in reports stale content and no input box. Cancelling
+    copy mode only restores the live view; it changes nothing in the process
+    running there. Returns True if the pane was in a mode and got cancelled.
+    """
+    result = subprocess.run(
+        ["tmux", "display-message", "-t", session, "-p", "#{pane_in_mode}"],
+        capture_output=True, text=True,
+    )
+    if (result.stdout or "").strip() != "1":
+        return False
+    subprocess.run(
+        ["tmux", "send-keys", "-t", session, "-X", "cancel"],
+        capture_output=True, text=True,
+    )
+    return True
+
+
 def _pane_command(session: str) -> str:
     """Return the command currently running in the tmux pane."""
     result = subprocess.run(
@@ -503,6 +531,11 @@ def _pane_command(session: str) -> str:
 # pane_current_command values that mean the pane is sitting at an idle shell,
 # i.e. it is safe to type a new command into it.
 _SHELL_COMMANDS = {"bash", "zsh", "sh", "fish", "ksh", "dash"}
+
+# pane_current_command value for a running Claude Code. A dialog can cover the
+# input box, so the command name is what tells us Claude Code is there at all;
+# the pane text then only decides whether it is idle enough to type into.
+_CLAUDE_COMMAND = "claude"
 
 
 _SESSION_URL_RE = re.compile(r"https://claude\.ai/code/\S+")
@@ -540,9 +573,41 @@ def _dialog_visible(pane: str) -> bool:
     return "Enter to confirm" in pane
 
 
+# Claude Code's input box: a bordered box whose first line is the "> " prompt.
+# Matched on the border character so it cannot be confused with shell output.
+_INPUT_BOX_RE = re.compile(r"^\s*[│|]\s*>", re.MULTILINE)
+
+# Footer hints Claude Code draws under an idle input box. The exact set varies
+# between releases and with terminal width, so any one of them counts.
+_IDLE_HINTS = ("? for shortcuts", "for shortcuts", "/ for commands")
+
+# Footer text shown while Claude Code is working on a turn. Typing then would
+# only queue input for after the turn, so it does not count as idle.
+_BUSY_HINTS = ("esc to interrupt", "esc to cancel")
+
+
+def _claude_ui_visible(pane: str) -> bool:
+    """Detect that Claude Code's TUI (not a shell) is drawn in the pane."""
+    return bool(_INPUT_BOX_RE.search(pane)) or any(h in pane for h in _IDLE_HINTS)
+
+
+def _claude_busy(pane: str) -> bool:
+    """Detect that Claude Code is mid-turn rather than waiting for input."""
+    return any(h in pane for h in _BUSY_HINTS)
+
+
 def _prompt_ready(pane: str) -> bool:
-    """Detect that Claude Code's input box is drawn and idle for input."""
-    return "? for shortcuts" in pane
+    """Detect that Claude Code's input box is drawn and idle for input.
+
+    Idle means the TUI is up with no modal dialog on top of it and no turn in
+    progress: only then does a keystroke reach the input box and get submitted
+    right away. Matching the input box itself (plus the footer hints as a
+    fallback) keeps this working across releases that reword the hints or
+    drop them on a narrow terminal.
+    """
+    if _dialog_visible(pane) or _claude_busy(pane):
+        return False
+    return _claude_ui_visible(pane)
 
 
 def _session_renamed(session: str, name: str) -> bool:
@@ -578,6 +643,23 @@ def _wait_for_claude_prompt(session: str) -> bool:
             continue
         time.sleep(CLAUDE_STARTUP_POLL_INTERVAL)
     return False
+
+
+def _wait_for_claude_idle(session: str, timeout: int) -> bool:
+    """Poll until a running Claude Code is idle at its input prompt.
+
+    Unlike _wait_for_claude_prompt this never sends Enter: it is used on a
+    live conversation, where a dialog on screen is a real permission or tool
+    prompt and confirming it on the user's behalf is not ours to do. Returns
+    True once the prompt is idle, False on timeout.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if _prompt_ready(_capture_pane(session)):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(CLAUDE_STARTUP_POLL_INTERVAL)
 
 
 def _rename_claude_session(session: str, branch: str, attempts: int = 3) -> bool:
@@ -794,10 +876,35 @@ def resume_claude_session(branch: str) -> tuple:
         # Typing into the pane is only safe when it is an idle shell, or when
         # Claude Code itself is running and sitting idle at its input prompt
         # (in which case /rc is exactly what we want to send it).
+        if _leave_copy_mode(session):
+            logger.info(
+                f"tmux session '{session}' was scrolled into copy mode; "
+                f"returned it to the live view."
+            )
         current = _pane_command(session)
+        pane = _capture_pane(session)
         if current in _SHELL_COMMANDS:
             logger.info(f"Reusing idle tmux session '{session}'.")
-        elif _prompt_ready(_capture_pane(session)):
+        elif current == _CLAUDE_COMMAND or _claude_ui_visible(pane):
+            # Claude Code is up. If it is mid-turn or showing a dialog, give
+            # it a moment: a turn that finishes on its own leaves the prompt
+            # idle and we can carry on without disturbing it.
+            if not _prompt_ready(pane):
+                logger.info(
+                    f"Claude Code in '{session}' is not idle; waiting up to "
+                    f"{CLAUDE_BUSY_TIMEOUT}s for it to reach its prompt..."
+                )
+            if not _wait_for_claude_idle(session, CLAUDE_BUSY_TIMEOUT):
+                pane = _capture_pane(session)
+                why = ("is waiting on a confirmation dialog"
+                       if _dialog_visible(pane)
+                       else "is working on a turn")
+                raise RuntimeError(
+                    f"Claude Code in tmux session '{session}' {why}, so /rc "
+                    f"cannot be sent to it right now. Attach and let it "
+                    f"finish, then retry: tmux attach -t {session}\n"
+                    f"Last pane output:\n{_pane_tail(session)}"
+                )
             logger.info(
                 f"Claude Code is already running in tmux session '{session}'; "
                 f"reusing the live conversation instead of resuming a new one."
@@ -805,9 +912,10 @@ def resume_claude_session(branch: str) -> tuple:
             reused = True
         else:
             raise RuntimeError(
-                f"tmux session '{session}' is busy running '{current}' and is "
-                f"not idle at a Claude Code prompt, so it cannot be driven "
-                f"remotely. Attach with: tmux attach -t {session}"
+                f"tmux session '{session}' is running '{current}', which is "
+                f"neither a shell nor Claude Code, so it cannot be driven "
+                f"remotely. Attach with: tmux attach -t {session}\n"
+                f"Last pane output:\n{_pane_tail(session)}"
             )
     else:
         logger.info(f"Creating tmux session '{session}'...")
@@ -822,10 +930,10 @@ def resume_claude_session(branch: str) -> tuple:
 
         logger.info("Waiting for Claude Code to start...")
         if not _wait_for_claude_prompt(session):
-            tail = "\n".join(_capture_pane(session).strip().splitlines()[-5:])
             raise RuntimeError(
                 f"Claude Code prompt not detected within {CLAUDE_STARTUP_TIMEOUT}s "
-                f"in tmux session '{session}'. Last pane output:\n{tail}"
+                f"in tmux session '{session}'. "
+                f"Last pane output:\n{_pane_tail(session)}"
             )
         time.sleep(CLAUDE_STARTUP_BUFFER)
 
