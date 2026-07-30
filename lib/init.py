@@ -759,40 +759,56 @@ def setup_tmux_claude(branch: str, src_dir: Path,
     logger.info(f"  Attach: tmux attach -t {session}")
 
 
-def resume_claude_session(branch: str) -> str:
-    """Relaunch Claude Code in tmux, resuming the conversation named `branch`.
+def resume_claude_session(branch: str) -> tuple:
+    """Reconnect Claude Code in tmux for the conversation named `branch`.
 
-    Used when the tmux session or Claude Code process is gone (or Remote
-    Control has silently dropped): setup_tmux_claude renamed the conversation
-    to the branch name with /rename, so `claude --resume <branch>` picks the
-    same conversation back up. Runs it in a tmux session named after the
-    branch (created if missing, reused if its pane is an idle shell), then
-    re-enables Remote Control with /rc and stores the session URL.
+    Used when Remote Control has silently dropped or the Claude Code process
+    is gone. Three cases, decided by what the tmux session is running:
 
-    Returns the session URL, or "" if Remote Control could not be confirmed.
-    Raises RuntimeError when the worktree is missing, the tmux session is
-    busy running something else, or Claude Code never reaches its prompt.
+    * no session, or an idle shell -> `claude --resume <branch>` picks the
+      conversation back up (setup_tmux_claude renamed it to the branch name
+      with /rename), then /rc re-enables Remote Control.
+    * Claude Code already running and idle at its prompt -> reuse that live
+      conversation and just re-enable Remote Control with /rc. Starting a
+      second `claude --resume` here is impossible anyway (the keystrokes
+      would be typed into the running instance's input box).
+    * anything else running -> refuse, since keystrokes would land in it.
+
+    Returns (url, reused): the session URL ("" if Remote Control could not be
+    confirmed) and whether an already-running Claude Code was reused rather
+    than relaunched. Raises RuntimeError when the worktree is missing, the
+    tmux session is busy with something else, or Claude Code never reaches
+    its prompt.
     """
     src_dir = MAIN_REPO if branch == "master" else PGSQL_DIR / branch / "postgres"
     if not (src_dir / ".git").exists():
         raise RuntimeError(f"Worktree not found: {src_dir}")
 
     session = branch
+    reused = False
     result = subprocess.run(
         ["tmux", "has-session", "-t", session],
         capture_output=True, text=True,
     )
     if result.returncode == 0:
-        # Only reuse the session if its pane is an idle shell; otherwise the
-        # keystrokes would be typed into whatever is running there (possibly
-        # a live Claude Code instance).
+        # Typing into the pane is only safe when it is an idle shell, or when
+        # Claude Code itself is running and sitting idle at its input prompt
+        # (in which case /rc is exactly what we want to send it).
         current = _pane_command(session)
-        if current not in _SHELL_COMMANDS:
-            raise RuntimeError(
-                f"tmux session '{session}' is busy running '{current}'. "
-                f"Attach with: tmux attach -t {session}"
+        if current in _SHELL_COMMANDS:
+            logger.info(f"Reusing idle tmux session '{session}'.")
+        elif _prompt_ready(_capture_pane(session)):
+            logger.info(
+                f"Claude Code is already running in tmux session '{session}'; "
+                f"reusing the live conversation instead of resuming a new one."
             )
-        logger.info(f"Reusing idle tmux session '{session}'.")
+            reused = True
+        else:
+            raise RuntimeError(
+                f"tmux session '{session}' is busy running '{current}' and is "
+                f"not idle at a Claude Code prompt, so it cannot be driven "
+                f"remotely. Attach with: tmux attach -t {session}"
+            )
     else:
         logger.info(f"Creating tmux session '{session}'...")
         subprocess.run(
@@ -800,17 +816,18 @@ def resume_claude_session(branch: str) -> str:
             capture_output=True, text=True,
         )
 
-    logger.info(f"Resuming Claude Code conversation '{branch}'...")
-    _send_keys(session, f"claude --resume {branch}", "Enter")
+    if not reused:
+        logger.info(f"Resuming Claude Code conversation '{branch}'...")
+        _send_keys(session, f"claude --resume {branch}", "Enter")
 
-    logger.info("Waiting for Claude Code to start...")
-    if not _wait_for_claude_prompt(session):
-        tail = "\n".join(_capture_pane(session).strip().splitlines()[-5:])
-        raise RuntimeError(
-            f"Claude Code prompt not detected within {CLAUDE_STARTUP_TIMEOUT}s "
-            f"in tmux session '{session}'. Last pane output:\n{tail}"
-        )
-    time.sleep(CLAUDE_STARTUP_BUFFER)
+        logger.info("Waiting for Claude Code to start...")
+        if not _wait_for_claude_prompt(session):
+            tail = "\n".join(_capture_pane(session).strip().splitlines()[-5:])
+            raise RuntimeError(
+                f"Claude Code prompt not detected within {CLAUDE_STARTUP_TIMEOUT}s "
+                f"in tmux session '{session}'. Last pane output:\n{tail}"
+            )
+        time.sleep(CLAUDE_STARTUP_BUFFER)
 
     # Resumed sessions start without Remote Control, which is the very thing
     # this recovery path is for; re-enable it and surface the session URL.
@@ -829,9 +846,12 @@ def resume_claude_session(branch: str) -> str:
             f"enable it manually in the session with: /rc"
         )
 
-    logger.info(f"tmux session '{session}' resumed with Claude Code running.")
+    if reused:
+        logger.info(f"tmux session '{session}' reconnected to running Claude Code.")
+    else:
+        logger.info(f"tmux session '{session}' resumed with Claude Code running.")
     logger.info(f"  Attach: tmux attach -t {session}")
-    return url
+    return url, reused
 
 
 def init_branch(branch: str, base_branch: str = "master",

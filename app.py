@@ -336,21 +336,23 @@ def api_cluster_action(name):
 
 @app.route("/api/branches/<name>/claude/resume", methods=["POST"])
 def api_claude_resume(name):
-    """Relaunch Claude Code in tmux, resuming the renamed conversation.
+    """Reconnect Claude Code in tmux for the renamed conversation.
 
     Recovery path for when Remote Control has dropped or the tmux session
     died: runs `claude --resume <name>` in a tmux session named after the
-    branch, then re-enables Remote Control via /rc.
+    branch, then re-enables Remote Control via /rc. When Claude Code is
+    already running and idle in that session, its live conversation is
+    reused and only /rc is sent (`reused: true` in the response).
     """
     try:
         branch = validate_branch_name(name)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     try:
-        url = resume_claude_session(branch)
+        url, reused = resume_claude_session(branch)
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 500
-    return jsonify({"ok": True, "url": url})
+    return jsonify({"ok": True, "url": url, "reused": reused})
 
 
 @app.route("/api/branches/<name>/archive", methods=["POST"])
