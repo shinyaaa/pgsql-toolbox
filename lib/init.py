@@ -576,17 +576,28 @@ def _dialog_visible(pane: str) -> bool:
     "Enter to confirm" footer, so matching that is far more durable than
     matching any specific prompt text. For both dialogs the default-
     highlighted option is the one we want, so a plain Enter accepts them.
-    """
-    return "Enter to confirm" in pane
 
+    The highlighted numbered choice is matched too: a permission prompt on a
+    live session may render its footer differently, and mistaking one for an
+    idle prompt would send it an Enter, i.e. approve whatever it is asking
+    about. Refusing on a false positive only costs a retry.
+    """
+    return "Enter to confirm" in pane or bool(_CHOICE_RE.search(pane))
+
+
+# The highlighted option of a numbered dialog, e.g. "❯ 1. Yes".
+_CHOICE_RE = re.compile(r"^\s*❯\s*\d+\.\s", re.MULTILINE)
 
 # Claude Code's input box: a bordered box whose first line is the "> " prompt.
 # Matched on the border character so it cannot be confused with shell output.
 _INPUT_BOX_RE = re.compile(r"^\s*[│|]\s*>", re.MULTILINE)
 
-# Footer hints Claude Code draws under an idle input box. The exact set varies
-# between releases and with terminal width, so any one of them counts.
-_IDLE_HINTS = ("? for shortcuts", "for shortcuts", "/ for commands")
+# Footer hints Claude Code draws around an idle input box. The exact set varies
+# between releases, with terminal width and with context size, so any one of
+# them counts. "/clear to save" is the context-size hint newer releases print
+# under the prompt in place of the shortcut hint.
+_IDLE_HINTS = ("? for shortcuts", "for shortcuts", "/ for commands",
+               "/clear to save")
 
 # Footer text shown while Claude Code is working on a turn. Typing then would
 # only queue input for after the turn, so it does not count as idle.
@@ -652,21 +663,43 @@ def _wait_for_claude_prompt(session: str) -> bool:
     return False
 
 
+def _pane_settled(session: str, before: str) -> bool:
+    """Return True when the pane still reads exactly as `before`.
+
+    Called after a poll interval has elapsed, so an unchanged pane means
+    nothing is animating in it.
+    """
+    return _capture_pane(session) == before
+
+
 def _wait_for_claude_idle(session: str, timeout: int) -> bool:
     """Poll until a running Claude Code is idle at its input prompt.
 
-    Unlike _wait_for_claude_prompt this never sends Enter: it is used on a
-    live conversation, where a dialog on screen is a real permission or tool
-    prompt and confirming it on the user's behalf is not ours to do. Returns
-    True once the prompt is idle, False on timeout.
+    Two acceptance routes. The first is _prompt_ready, i.e. a footer or input
+    box we recognise. The second needs no recognisable wording at all: a
+    Claude Code working on a turn redraws its spinner and elapsed-time counter
+    every second, so a pane that is byte-identical across a poll interval is
+    not working. That covers releases whose prompt we cannot match -- the
+    borderless "❯" input line, for one -- without having to enumerate every
+    UI Claude Code has ever drawn.
+
+    A dialog is static too, so the second route insists there is none on
+    screen: unlike _wait_for_claude_prompt this never sends Enter, because on
+    a live conversation a dialog is a real permission or tool prompt and
+    confirming it on the user's behalf is not ours to do. Returns True once
+    the prompt is idle, False on timeout.
     """
     deadline = time.monotonic() + timeout
     while True:
-        if _prompt_ready(_capture_pane(session)):
+        pane = _capture_pane(session)
+        if _prompt_ready(pane):
             return True
+        quiet = not _dialog_visible(pane) and not _claude_busy(pane)
         if time.monotonic() >= deadline:
             return False
         time.sleep(CLAUDE_STARTUP_POLL_INTERVAL)
+        if quiet and _pane_settled(session, pane):
+            return True
 
 
 def _rename_claude_session(session: str, branch: str, attempts: int = 3) -> bool:
@@ -932,9 +965,12 @@ def resume_claude_session(branch: str) -> tuple:
                 )
             if not _wait_for_claude_idle(session, CLAUDE_BUSY_TIMEOUT):
                 pane = _capture_pane(session)
-                why = ("is waiting on a confirmation dialog"
-                       if _dialog_visible(pane)
-                       else "is working on a turn")
+                if _dialog_visible(pane):
+                    why = "is waiting on a confirmation dialog"
+                elif _claude_busy(pane):
+                    why = "is working on a turn"
+                else:
+                    why = "never went quiet at its prompt"
                 raise RuntimeError(
                     f"Claude Code in tmux session '{session}' {why}, so /rc "
                     f"cannot be sent to it right now. Attach and let it "
