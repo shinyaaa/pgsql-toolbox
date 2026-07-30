@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第3章 まず動かす（最短ルート） | pgbench カスタムスクリプト実践ガイド — PostgreSQL 18 · 2026-07-29</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgbench カスタムスクリプト実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18 · 2026-07-29</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 カスタムスクリプトでできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 組み込みスクリプトの限界</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 カスタムスクリプトの構成要素</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 実行の全体像と重み付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バージョンと接続を確認する</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 ベンチマーク用データベースを初期化する</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 作業ディレクトリと実行の基本形</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 最小のカスタムスクリプトを書いて動かす</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 -r でステートメント単位に分解する</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 :scale の罠</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 変数と式を使いこなす</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 \set と式の評価</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 自動変数と -D</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 乱数分布を選ぶ</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 permute() で相関を断つ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 メタコマンドで制御する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 \gset / \aset</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 \if で条件分岐する</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 \sleep / \shell / \setshell</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 パイプラインで往復を減らす</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 実践：現実的なワークロードを組む</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 複数スクリプトを重み付けで混ぜる</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 スクリプト別レポートを読む</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 プロトコルを変えて比較する</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 ログを取って分析する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 エラーの切り分け方</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 起動時に失敗する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 実行中に abort する</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 数字が信用できないとき</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 メタコマンド早見表</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 関数早見表</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 オプション早見表</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 スクリプトを書くときの型</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第3章　まず動かす（最短ルート）</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>最小のカスタムスクリプトを書いて <code>-f</code> で実行できる</li>
+    <li>実行結果の各行が何を意味するか読める</li>
+    <li><code>-r</code> でステートメント単位に分解して、どこが遅いか特定できる</li>
+    <li><code>:scale</code> が自動では設定されないことを、実測で確認できる</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>第2章で作った <code>bench</code> データベース（<code>-s 10</code> で初期化済み）</li>
+    <li>作業ディレクトリにいること（<code>cd ~/pgbench-work</code>）</li>
+    <li><code>PGHOST</code> / <code>PGPORT</code> / <code>PGUSER</code> が設定済みであること</li>
+  </ul>
+</div>
+
+<h2 id="sec-3-1">3.1　最小のカスタムスクリプトを書いて動かす</h2>
+
+<p>
+まず「ランダムな口座を1件 SELECT する」だけのスクリプトを書く。これが最小の end-to-end 例になる。
+</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 最初のカスタムスクリプト</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p><code>myselect.sql</code> を作成する。1行目がメタコマンド、3行目が SQL である。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>cat &gt; myselect.sql &lt;&lt;'EOF'
+-- 口座を1件ランダムに引く
+\set aid random(1, 100000 * :scale)
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid;
+EOF</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>まず 10 トランザクションだけ実行して、動くことを確かめる。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pgbench -n -f myselect.sql -t 10 bench</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>pgbench (18.4)
+transaction type: myselect.sql
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+number of transactions per client: 10
+number of transactions actually processed: 10/10
+number of failed transactions: 0 (0.000%)
+latency average = 0.310 ms
+initial connection time = 3.171 ms
+tps = 3224.766204 (without initial connection time)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>
+<code>number of transactions actually processed: 10/10</code> と
+<code>number of failed transactions: 0</code> が出ていれば成功である。
+</p>
+
+<h2 id="sec-3-2">3.2　出力を読む</h2>
+
+<p>
+出力の各行の意味は次のとおり。カスタムスクリプトで特に注目すべき行を太字にしてある。
+</p>
+
+<table>
+  <thead>
+    <tr><th>行</th><th>意味</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>transaction type</code></td>
+        <td><strong>使われたスクリプト名</strong>。<code>-f</code> ならファイル名、組み込みなら <code>&lt;builtin: ...&gt;</code></td></tr>
+    <tr><td><code>scaling factor</code></td>
+        <td><strong><code>:scale</code> に入る値</strong>。<code>-f</code> のときは <code>-s</code> を渡さないと 1 のまま（3.4 節）</td></tr>
+    <tr><td><code>query mode</code></td><td>プロトコル。<code>-M</code> で simple / extended / prepared を選ぶ</td></tr>
+    <tr><td><code>maximum number of tries</code></td><td><code>--max-tries</code> の値。1 なら再試行しない</td></tr>
+    <tr><td><code>actually processed</code></td>
+        <td><strong>実際に完了した数 / 予定数</strong>。分子が小さければ途中で abort している</td></tr>
+    <tr><td><code>failed transactions</code></td><td>直列化エラー・デッドロックで失敗した数</td></tr>
+    <tr><td><code>latency average</code></td><td>1トランザクション（＝スクリプト1回）の平均所要時間</td></tr>
+    <tr><td><code>initial connection time</code></td><td>接続確立にかかった時間。tps の計算からは除外される</td></tr>
+    <tr><td><code>tps</code></td><td>1秒あたりのトランザクション数。<strong>スクリプト1回が1トランザクション</strong></td></tr>
+  </tbody>
+</table>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  tps は「SQL 文の実行回数」ではなく「<strong>スクリプトの実行回数</strong>」である。
+  1本のスクリプトに SELECT を10個書けば、同じサーバ負荷でも tps は約 1/10 に見える。
+  スクリプト構成が違うもの同士で tps を直接比べてはいけない。
+</div>
+
+<h2 id="sec-3-3">3.3　<code>-r</code> でステートメント単位に分解する</h2>
+
+<p>
+<code>-r</code> を付けると、スクリプトの各行ごとの平均レイテンシが出る。
+どのメタコマンド・どの SQL が時間を食っているかがひと目でわかる。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>pgbench -n -f myselect.sql -c 4 -T 5 -r bench</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>pgbench (18.4)
+transaction type: myselect.sql
+scaling factor: 1
+query mode: simple
+number of clients: 4
+number of threads: 1
+maximum number of tries: 1
+duration: 5 s
+number of transactions actually processed: 135408
+number of failed transactions: 0 (0.000%)
+latency average = 0.147 ms
+initial connection time = 10.985 ms
+tps = 27140.364317 (without initial connection time)
+statement latencies in milliseconds and failures:
+         0.000           0 \set aid random(1, 100000 * :scale)
+         0.137           0 SELECT abalance FROM pgbench_accounts WHERE aid = :aid;</code></pre>
+</div>
+
+<p>
+最後のブロックが <code>-r</code> による追加出力である。左から
+<strong>平均レイテンシ（ミリ秒）</strong>、<strong>失敗回数</strong>、<strong>コマンドの中身</strong>。
+<code>\set</code> は pgbench 内部で完結するので 0.000 ms、
+サーバへの往復がある SELECT が 0.137 ms を占めている。
+</p>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  <code>--max-tries</code> が 1 以外のときは、失敗回数の右に<strong>再試行回数</strong>の列が増え、
+  見出しも <code>statement latencies in milliseconds, failures and retries:</code> に変わる。
+  列数が変わるので、出力をスクリプトで解析するときは見出し行で判別する。
+</div>
+
+<div class="pitfall">
+  <strong>⚠️ 計測オーバーヘッド</strong>
+  <code>-r</code> はステートメントごとに時刻を取るため、それ自体が実行を遅くする。
+  最終的な tps を報告するときは <code>-r</code> 無しで測り直す。
+  <code>-r</code> の有無で tps を比べれば、オーバーヘッドがどれくらいか自分の環境で確認できる。
+</div>
+
+<h2 id="sec-3-4">3.4　<code>:scale</code> の罠</h2>
+
+<p>
+3.1 の出力をもう一度見てほしい。<code>-s 10</code> で初期化したのに
+<code>scaling factor: 1</code> と表示されていた。これは表示だけの問題ではなく、
+スクリプト中の <code>:scale</code> が実際に 1 になっている。
+</p>
+
+<p>
+<strong>組み込みスクリプトは <code>pgbench_branches</code> の行数からスケールを自動検出するが、
+<code>-f</code> のカスタムスクリプトは検出しない。</strong>
+pgbench は自前スクリプトがどのテーブルを使うか知らないためである。
+図 3.1 がその分かれ道である。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TD
+    Start["pgbench 起動"] --> Q1{"-s を指定したか"}
+    Q1 -->|"はい"| Use["指定した値を :scale に使う"]
+    Q1 -->|"いいえ"| Q2{"スクリプトの種類"}
+    Q2 -->|"組み込み (-b)"| Auto["pgbench_branches の<br/>行数から自動検出"]
+    Q2 -->|"カスタム (-f)"| One[":scale は 1 のまま"]
+    Auto --> Use
+    One --> Warn["触る範囲が狭まり<br/>数字が良く出すぎる"]
+  </pre>
+  <figcaption>図 3.1: <code>:scale</code> の値が決まる経路。<code>-f</code> で <code>-s</code> を省くと 1 になる</figcaption>
+</figure>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 触られる範囲が変わることを確かめる</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>引いた <code>aid</code> を記録するテーブルとスクリプトを用意する。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -q -d bench -c 'DROP TABLE IF EXISTS touched;
+  CREATE UNLOGGED TABLE touched(kind text, aid int);'
+
+cat &gt; touch.sql &lt;&lt;'EOF'
+\set aid random(1, 100000 * :scale)
+INSERT INTO touched VALUES (:kind, :aid);
+EOF</code></pre>
+        </div>
+      </li>
+      <li>
+        <p><code>-s</code> 無しと <code>-s 10</code> 付きで、それぞれ 3000 回実行する。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pgbench -n -f touch.sql -t 3000 -D kind="'no_s'"   bench &gt; /dev/null
+pgbench -n -f touch.sql -t 3000 -D kind="'with_s'" -s 10 bench &gt; /dev/null</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>触られた <code>aid</code> の範囲を比べる。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d bench -c 'SELECT kind, min(aid), max(aid), count(*)
+  FROM touched GROUP BY kind ORDER BY kind;'</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>  kind  | min |  max   | count
+--------+-----+--------+-------
+ no_s   |  30 |  99998 |  3000
+ with_s | 789 | 999968 |  3000
+(2 rows)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>
+<code>-s</code> 無しでは <code>aid</code> が 10 万までしか出ておらず、100 万行のうち
+先頭 10% しか触っていない。テーブル全体ではなく先頭だけを繰り返し読むので、
+その部分だけが共有バッファに乗り、<strong>実際より良い数字が出てしまう</strong>。
+</p>
+
+<div class="pitfall">
+  <strong>⚠️ 最重要の落とし穴</strong>
+  カスタムスクリプトで <code>:scale</code> を使うなら、<code>-s</code> を<strong>必ず明示する</strong>。
+  値は初期化時の <code>-s</code> と揃える。揃っているかどうかは、実行直後の
+  <code>scaling factor:</code> 行で毎回確認する習慣にするとよい。
+</div>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  そもそも <code>:scale</code> に頼らず、範囲を <code>-D</code> で明示的に渡す書き方もある。
+  <code>\set aid random(1, :nrows)</code> と書いて <code>-D nrows=1000000</code> で渡せば、
+  スケールの取り違えは起きない。自前スキーマを測るときはこちらのほうが確実である。
+</div>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>myselect.sql</code> を <code>-f</code> で実行し、<code>10/10</code> 完了を確認した</li>
+    <li>出力の <code>transaction type</code> / <code>scaling factor</code> / <code>tps</code> の意味を説明できる</li>
+    <li><code>-r</code> を付けて、SELECT 行に時間が集中していることを確認した</li>
+    <li><code>-s</code> の有無で <code>max(aid)</code> が 10 倍変わることを自分の環境で再現した</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch02.html"><span class="dir">← 前の章</span><span class="ttl">第2章 準備</span></a>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <a class="next" href="ch04.html"><span class="dir">次の章 →</span><span class="ttl">第4章 変数と式を使いこなす</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgbench カスタムスクリプト実践ガイド — PostgreSQL 18.4 で実行して確認 / 仕様は <a href="https://www.postgresql.org/docs/18/pgbench.html">公式ドキュメント pgbench</a> を参照</footer>
+</body>
+</html>

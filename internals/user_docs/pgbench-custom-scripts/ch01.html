@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第1章 カスタムスクリプトでできること | pgbench カスタムスクリプト実践ガイド — PostgreSQL 18 · 2026-07-29</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgbench カスタムスクリプト実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18 · 2026-07-29</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li class="current">
+    <a class="chap-title" href="ch01.html">第1章 カスタムスクリプトでできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 組み込みスクリプトの限界</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 カスタムスクリプトの構成要素</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 実行の全体像と重み付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バージョンと接続を確認する</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 ベンチマーク用データベースを初期化する</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 作業ディレクトリと実行の基本形</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 最小のカスタムスクリプトを書いて動かす</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 -r でステートメント単位に分解する</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 :scale の罠</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 変数と式を使いこなす</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 \set と式の評価</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 自動変数と -D</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 乱数分布を選ぶ</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 permute() で相関を断つ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 メタコマンドで制御する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 \gset / \aset</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 \if で条件分岐する</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 \sleep / \shell / \setshell</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 パイプラインで往復を減らす</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 実践：現実的なワークロードを組む</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 複数スクリプトを重み付けで混ぜる</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 スクリプト別レポートを読む</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 プロトコルを変えて比較する</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 ログを取って分析する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 エラーの切り分け方</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 起動時に失敗する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 実行中に abort する</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 数字が信用できないとき</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 メタコマンド早見表</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 関数早見表</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 オプション早見表</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 スクリプトを書くときの型</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第1章　カスタムスクリプトでできること</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>組み込みスクリプトで測れること・測れないことを説明できる</li>
+    <li>カスタムスクリプトが「SQL・メタコマンド・変数」の3要素でできていることを理解する</li>
+    <li><code>-f</code> と <code>-b</code>、および重み付けの関係を図で説明できる</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>PostgreSQL 18 の <code>pgbench</code> が使えること（第2章で確認する）</li>
+    <li><code>pgbench -i</code> でテーブルを初期化し、<code>-c</code> / <code>-T</code> で回した経験があること</li>
+  </ul>
+</div>
+
+<h2 id="sec-1-1">1.1　組み込みスクリプトの限界</h2>
+
+<p>
+pgbench には3つの組み込みスクリプトが入っている。<code>-b list</code> で一覧できる。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>pgbench -b list</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>Available builtin scripts:
+      tpcb-like: &lt;builtin: TPC-B (sort of)&gt;
+  simple-update: &lt;builtin: simple update&gt;
+    select-only: &lt;builtin: select only&gt;</code></pre>
+</div>
+
+<p>
+中身は <code>--show-script</code> で読める。既定で使われる <code>tpcb-like</code> は次のとおり。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>pgbench --show-script=tpcb-like</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>-- tpcb-like: &lt;builtin: TPC-B (sort of)&gt;
+\set aid random(1, 100000 * :scale)
+\set bid random(1, 1 * :scale)
+\set tid random(1, 10 * :scale)
+\set delta random(-5000, 5000)
+BEGIN;
+UPDATE pgbench_accounts SET abalance = abalance + :delta WHERE aid = :aid;
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid;
+UPDATE pgbench_tellers SET tbalance = tbalance + :delta WHERE tid = :tid;
+UPDATE pgbench_branches SET bbalance = bbalance + :delta WHERE bid = :bid;
+INSERT INTO pgbench_history (tid, bid, aid, delta, mtime) VALUES (:tid, :bid, :aid, :delta, CURRENT_TIMESTAMP);
+END;</code></pre>
+</div>
+
+<p>
+この出力自体が、カスタムスクリプトの完全なお手本になっている。<code>\set</code> で変数を作り、
+<code>:aid</code> のように SQL へ埋め込み、<code>BEGIN;</code> 〜 <code>END;</code> で1トランザクションにまとめる、
+という構造がそのまま自分のスクリプトでも使える。
+</p>
+
+<p>
+一方で、組み込みスクリプトには次の限界がある。実務で測りたいものはたいていこの外側にある。
+</p>
+
+<table>
+  <thead>
+    <tr><th>測りたいもの</th><th>組み込みで測れるか</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>自分のアプリのテーブル・インデックスに対する負荷</td><td>測れない（<code>pgbench_*</code> 固定）</td></tr>
+    <tr><td>読み 9 : 書き 1 のような現実的な比率</td><td>測れない（1スクリプト固定）</td></tr>
+    <tr><td>ホットスポットのある偏ったアクセス</td><td>測れない（一様乱数のみ）</td></tr>
+    <tr><td>前のクエリの結果を次のクエリに使う多段処理</td><td>測れない</td></tr>
+    <tr><td>クライアントごとに違う振る舞い</td><td>測れない</td></tr>
+    <tr><td>パイプライン（往復削減）の効果</td><td>測れない</td></tr>
+  </tbody>
+</table>
+
+<p>
+これらはすべて、<code>-f</code> でスクリプトファイルを渡すカスタムスクリプトで実現できる。
+本ガイドはその書き方を扱う。
+</p>
+
+<h2 id="sec-1-2">1.2　カスタムスクリプトの構成要素</h2>
+
+<p>
+スクリプトファイルは次の3種類の行でできている。
+</p>
+
+<ol>
+  <li><strong>SQL コマンド</strong> — セミコロンで終端する。複数行にまたがってよい。</li>
+  <li><strong>メタコマンド</strong> — <code>\</code>（バックスラッシュ）で始まり、pgbench 自身が解釈する。
+      <code>\set</code>、<code>\if</code>、<code>\gset</code> など。原則1行で終わる。</li>
+  <li><strong>コメントと空行</strong> — <code>--</code> で始まる行と空行は無視される。</li>
+</ol>
+
+<p>
+そして SQL の中には <code>:変数名</code> の形で変数を埋め込める。図 1.1 のように、
+pgbench はメタコマンドを自分で処理し、SQL だけをサーバへ送る。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    F["スクリプトファイル<br/>(-f で指定)"] --> P["pgbench"]
+    P -->|"メタコマンドは<br/>自分で処理"| V["変数テーブル<br/>:aid, :delta ..."]
+    V -->|":変数 を値に置換"| P
+    P -->|"SQL だけを送信"| S["PostgreSQL サーバ"]
+    S -->|"結果"| P
+    P --> R["レポート<br/>tps / latency"]
+  </pre>
+  <figcaption>図 1.1: メタコマンドは pgbench 側で処理され、SQL だけがサーバへ送られる</figcaption>
+</figure>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  変数名に使えるのは英字（非ラテン文字も可）・数字・アンダースコアで、先頭は数字以外。
+  1つの SQL 文の中で使える変数は最大 255 個まで。
+</div>
+
+<h2 id="sec-1-3">1.3　実行の全体像と重み付け</h2>
+
+<p>
+pgbench にとっての<strong>1トランザクション＝スクリプトファイル1回の実行</strong>である。
+スクリプトの中に <code>BEGIN;</code> / <code>END;</code> が無くても、pgbench は1回の実行を
+1トランザクションとして数える（その場合、各 SQL が個別に自動コミットされる）。
+</p>
+
+<p>
+<code>-f</code> と <code>-b</code> は<strong>何度でも指定でき</strong>、それぞれに
+<code>@数値</code> で重みを付けられる。クライアントは毎回、重みに比例した確率でスクリプトを1本選び、
+それを最後まで実行する。図 1.2 がその流れである。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TD
+    Start["クライアントがトランザクションを開始"] --> Pick{"重みに応じて<br/>スクリプトを1本選ぶ"}
+    Pick -->|"重み 9"| A["ro.sql を最後まで実行"]
+    Pick -->|"重み 1"| B["rw.sql を最後まで実行"]
+    A --> Count["1トランザクションとして計上"]
+    B --> Count
+    Count --> Start
+  </pre>
+  <figcaption>図 1.2: 重み付き複数スクリプトの選択（<code>-f ro.sql@9 -f rw.sql@1</code> の場合）</figcaption>
+</figure>
+
+<p>
+図 1.2 のように重みを付ければ「読み 90% ・書き 10%」といった比率を再現できる。
+重みを省略すると 1 とみなされるので、<code>-f a.sql -f b.sql</code> なら 50:50 になる。
+実際の指定方法と結果の読み方は第6章で扱う。
+</p>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  <code>@</code> の前後に空白を入れてはいけない。<code>-f ro.sql @9</code> のように離すと、
+  <code>@9</code> が接続先データベース名として解釈されてしまう。<code>-f ro.sql@9</code> と続けて書く。
+</div>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>pgbench -b list</code> と <code>pgbench --show-script=tpcb-like</code> が実行できた</li>
+    <li>スクリプトファイルが「SQL・メタコマンド・コメント」で構成されると説明できる</li>
+    <li>「1トランザクション＝スクリプト1回の実行」であることを説明できる</li>
+    <li><code>-f a.sql@9 -f b.sql@1</code> がどういう比率になるか答えられる</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <span class="pager-spacer" aria-hidden="true"></span>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <a class="next" href="ch02.html"><span class="dir">次の章 →</span><span class="ttl">第2章 準備</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgbench カスタムスクリプト実践ガイド — PostgreSQL 18.4 で実行して確認 / 仕様は <a href="https://www.postgresql.org/docs/18/pgbench.html">公式ドキュメント pgbench</a> を参照</footer>
+</body>
+</html>

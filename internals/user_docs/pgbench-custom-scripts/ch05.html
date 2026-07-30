@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第5章 メタコマンドで制御する | pgbench カスタムスクリプト実践ガイド — PostgreSQL 18 · 2026-07-29</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgbench カスタムスクリプト実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18 · 2026-07-29</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 カスタムスクリプトでできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 組み込みスクリプトの限界</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 カスタムスクリプトの構成要素</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 実行の全体像と重み付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バージョンと接続を確認する</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 ベンチマーク用データベースを初期化する</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 作業ディレクトリと実行の基本形</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 最小のカスタムスクリプトを書いて動かす</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 -r でステートメント単位に分解する</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 :scale の罠</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 変数と式を使いこなす</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 \set と式の評価</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 自動変数と -D</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 乱数分布を選ぶ</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 permute() で相関を断つ</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch05.html">第5章 メタコマンドで制御する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 \gset / \aset</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 \if で条件分岐する</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 \sleep / \shell / \setshell</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 パイプラインで往復を減らす</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 実践：現実的なワークロードを組む</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 複数スクリプトを重み付けで混ぜる</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 スクリプト別レポートを読む</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 プロトコルを変えて比較する</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 ログを取って分析する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 エラーの切り分け方</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 起動時に失敗する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 実行中に abort する</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 数字が信用できないとき</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 メタコマンド早見表</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 関数早見表</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 オプション早見表</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 スクリプトを書くときの型</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第5章　メタコマンドで制御する</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li><code>\gset</code> でクエリ結果を変数に取り込み、次のクエリで使える</li>
+    <li><code>\if</code> でトランザクションの中身を条件で切り替えられる</li>
+    <li><code>\sleep</code> / <code>\shell</code> / <code>\setshell</code> の使いどころがわかる</li>
+    <li>パイプラインを使い、往復削減の効果を実測できる</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>第4章までの環境を引き継ぐ（<code>bench</code> データベース、作業ディレクトリ）</li>
+    <li><code>\syncpipeline</code> は PostgreSQL 17 以降で使える。それ以前では
+        <code>\startpipeline</code> と <code>\endpipeline</code> のみ</li>
+  </ul>
+</div>
+
+<h2 id="sec-5-1">5.1　<code>\gset</code> / <code>\aset</code> — クエリ結果を変数に取り込む</h2>
+
+<p>
+ここまでの変数はすべて pgbench 側で作った値だった。<code>\gset</code> を使うと、
+<strong>サーバから返ってきた値</strong>を変数に取り込める。
+「読んだ結果を使って次を決める」という多段の処理が書けるようになる。
+</p>
+
+<p>
+使い方は、SQL の終端のセミコロンを <code>\gset</code> に<strong>置き換える</strong>こと。
+返ってきた行の各列が、列名と同じ名前の変数になる。図 5.1 がその流れである。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    Q["SELECT abalance ... \gset"] -->|"送信"| S["サーバ"]
+    S -->|"1行を返す"| G["\gset が列名で変数を作る"]
+    G --> V[":abalance"]
+    V --> Q2["次の SQL で :abalance を使う"]
+  </pre>
+  <figcaption>図 5.1: <code>\gset</code> はクエリ結果の列を同名の変数にする</figcaption>
+</figure>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 読んだ値を次のクエリに使う</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p><code>gset.sql</code> を作る。SELECT の末尾がセミコロンではなく <code>\gset</code> であることに注意。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>cat &gt; gset.sql &lt;&lt;'EOF'
+\set aid random(1, 100000)
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid \gset
+\set dummy debug(:abalance)
+-- 前段の結果を次のクエリに使う
+SELECT count(*) FROM pgbench_accounts WHERE abalance = :abalance;
+EOF</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>2トランザクション実行する。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pgbench -n -f gset.sql -t 2 --random-seed=42 bench</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力（先頭部分）</span>
+          <pre><code>pgbench: setting random seed to 42
+pgbench (18.4)
+debug(script=0,command=3): int 0
+debug(script=0,command=3): int 0
+transaction type: gset.sql
+scaling factor: 1
+...</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>
+<code>:abalance</code> に 0 が入っている。初期化直後の <code>pgbench_accounts.abalance</code> は
+全行 0 なので、これは期待どおりの結果である。
+</p>
+
+<p>
+列名以外の名前にしたい場合や、複数のクエリをまとめたい場合は次のように書く。
+<code>\;</code> で区切ると複数クエリを1回で送れる。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>cat &gt; aset.sql &lt;&lt;'EOF'
+SELECT 1 \;
+SELECT 2 AS two, 3 AS three \gset p_
+SELECT 4 AS four \; SELECT 5 AS five \aset
+\set dummy debug(:p_two)
+\set dummy debug(:p_three)
+\set dummy debug(:four)
+\set dummy debug(:five)
+EOF
+
+pgbench -n -f aset.sql -t 1 bench</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力（先頭部分）</span>
+  <pre><code>pgbench (18.4)
+debug(script=0,command=3): int 2
+debug(script=0,command=4): int 3
+debug(script=0,command=5): int 4
+debug(script=0,command=6): int 5
+transaction type: aset.sql
+query mode: simple
+...</code></pre>
+</div>
+
+<p>
+この例でわかることは3つある。
+</p>
+<ul>
+  <li><code>\gset p_</code> のように<strong>プレフィックス</strong>を付けると、変数名は
+      <code>:p_two</code> / <code>:p_three</code> になる。</li>
+  <li><code>\gset</code> は <strong>直前のクエリだけ</strong>を対象にする。
+      <code>SELECT 1 \;</code> の結果は捨てられている。</li>
+  <li><code>\aset</code> は <code>\;</code> で連結した<strong>すべてのクエリ</strong>を対象にする。
+      だから <code>:four</code> と <code>:five</code> の両方が取れている。</li>
+</ul>
+
+<table>
+  <thead>
+    <tr><th></th><th><code>\gset</code></th><th><code>\aset</code></th></tr>
+  </thead>
+  <tbody>
+    <tr><td>対象</td><td>直前の1クエリ</td><td>連結されたすべてのクエリ</td></tr>
+    <tr><td>0 行だったとき</td><td><strong>エラーで abort</strong></td><td>代入しない（変数は未定義のまま）</td></tr>
+    <tr><td>複数行だったとき</td><td><strong>エラーで abort</strong></td><td>最後の行が残る</td></tr>
+  </tbody>
+</table>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  <code>\gset</code> は行数に厳格である。0 行でも複数行でも即座に abort する。
+  <div class="example">
+    <span class="example-label out">出力</span>
+    <pre><code>pgbench: error: client 0 script 0 command 0 query 0: expected one row, got 0
+pgbench: error: Run was aborted; the above results are incomplete.</code></pre>
+  </div>
+  必ず 1 行返る保証がないなら、<code>LIMIT 1</code> を付けるか、
+  行が無いこともあり得るなら <code>\aset</code> を使って変数の有無で判定する。
+</div>
+
+<h2 id="sec-5-2">5.2　<code>\if</code> で条件分岐する</h2>
+
+<p>
+<code>\if</code> / <code>\elif</code> / <code>\else</code> / <code>\endif</code> で、
+実行する SQL を条件で切り替えられる。条件式は <code>\set</code> と同じ式が書け、
+0 以外が真、0 と NULL が偽になる。入れ子にもできる。
+</p>
+
+<p>
+これを使うと、1本のスクリプトの中で読み書きの比率を作れる。
+（複数ファイルを重み付けする方法との使い分けは 6.1 節で述べる。）
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>cat &gt; ifelse.sql &lt;&lt;'EOF'
+\set r random(1, 100)
+\if :r &lt;= 80
+  SELECT abalance FROM pgbench_accounts WHERE aid = :r;
+\else
+  UPDATE pgbench_accounts SET abalance = abalance + 1 WHERE aid = :r;
+\endif
+EOF
+
+pgbench -n -f ifelse.sql -t 100 -r --random-seed=42 bench</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力（末尾）</span>
+  <pre><code>tps = 3424.774821 (without initial connection time)
+statement latencies in milliseconds and failures:
+         0.000           0 \set r random(1, 100)
+         0.000           0 \if :r &lt;= 80
+         0.120           0 SELECT abalance FROM pgbench_accounts WHERE aid = :r;
+         0.000           0 \else
+         1.067           0 UPDATE pgbench_accounts SET abalance = abalance + 1 WHERE aid = :r;
+         0.001           0 \endif</code></pre>
+</div>
+
+<p>
+<code>-r</code> の出力には両方の分岐が並ぶ。ここで表示される値は
+<strong>実際に実行されたときだけの平均</strong>である。
+つまり SELECT は 0.120 ms、UPDATE は 1.067 ms で、
+UPDATE のほうが約9倍重いことがわかる。実行されなかった回はこの平均に含まれない。
+</p>
+
+<div class="pitfall">
+  <strong>⚠️ 分岐の実行回数はレポートに出ない</strong>
+  <code>-r</code> はレイテンシと失敗数しか出さないので、
+  「SELECT が何回・UPDATE が何回実行されたか」はこの出力からは読み取れない。
+  比率まで確認したいなら、複数ファイル＋重み付け（6.1 節）にしたほうが、
+  スクリプト別レポートに実行回数と比率が出るぶん確実である。
+</div>
+
+<h2 id="sec-5-3">5.3　<code>\sleep</code> / <code>\shell</code> / <code>\setshell</code></h2>
+
+<p>
+<code>\sleep</code> はクライアントの思考時間（think time）を再現する。
+単位は <code>us</code> / <code>ms</code> / <code>s</code> で、省略すると秒になる。
+待ち時間には整数か、整数値を持つ変数を指定できる。
+</p>
+
+<p>
+<code>\setshell</code> はシェルコマンドを実行して、その<strong>標準出力の整数</strong>を変数に入れる。
+<code>\shell</code> は同じことをして結果を捨てる。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>cat &gt; shell.sql &lt;&lt;'EOF'
+\setshell n expr 10 + 5
+\set dummy debug(:n)
+\shell echo "hello from shell" &gt;&amp;2
+\sleep 10 ms
+SELECT 1;
+EOF
+
+pgbench -n -f shell.sql -t 1 bench</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力（先頭部分）</span>
+  <pre><code>pgbench (18.4)
+debug(script=0,command=2): int 15
+hello from shell
+transaction type: shell.sql
+scaling factor: 1
+query mode: simple
+...</code></pre>
+</div>
+
+<p>
+<code>expr 10 + 5</code> の出力 15 が <code>:n</code> に入っている。
+引数にコロンで始まる文字列を<strong>そのまま</strong>渡したいときは、
+<code>::literal</code> のようにコロンを2つ重ねる。
+</p>
+
+<div class="pitfall">
+  <strong>⚠️ 性能への影響</strong>
+  <code>\setshell</code> / <code>\shell</code> はトランザクションごとにプロセスを起動するため非常に重い。
+  <code>\sleep</code> も、その間クライアントは何もしない。
+  どちらも tps を直接押し下げるので、スループットを測る本番計測では使わないこと。
+  用途はセットアップや、意図的に間隔を空けたい負荷の再現に限る。
+</div>
+
+<h2 id="sec-5-4">5.4　パイプラインで往復を減らす</h2>
+
+<p>
+通常、pgbench は SQL を1つ送るたびに結果を待つ。
+<code>\startpipeline</code> と <code>\endpipeline</code> で囲むと、
+囲まれた SQL を<strong>まとめて送ってから</strong>結果を受け取る。
+ネットワーク往復（RTT）が支配的なワークロードでは効果が大きい。図 5.2 がその違いである。
+</p>
+
+<figure>
+  <pre class="mermaid">
+sequenceDiagram
+    participant C as pgbench
+    participant S as サーバ
+    Note over C,S: パイプラインなし（往復4回）
+    C->>S: SELECT 1
+    S-->>C: 結果
+    C->>S: SELECT 2
+    S-->>C: 結果
+    Note over C,S: パイプラインあり（往復1回）
+    C->>S: SELECT 1, SELECT 2 をまとめて送信
+    S-->>C: 結果をまとめて返す
+  </pre>
+  <figcaption>図 5.2: パイプラインは結果を待たずに次の文を送る</figcaption>
+</figure>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: パイプラインの効果を測る</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>同じ4本の SELECT を、パイプラインなし／ありで用意する。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>cat &gt; nopipe.sql &lt;&lt;'EOF'
+\set aid random(1, 100000)
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid;
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid + 1;
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid + 2;
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid + 3;
+EOF
+
+cat &gt; pipe.sql &lt;&lt;'EOF'
+\set aid random(1, 100000)
+\startpipeline
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid;
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid + 1;
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid + 2;
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid + 3;
+\endpipeline
+EOF</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>両方を <code>-M extended</code> で実行して比べる。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pgbench -n -f nopipe.sql -M extended -c 1 -T 5 bench
+pgbench -n -f pipe.sql   -M extended -c 1 -T 5 bench</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力（該当行を抜粋）</span>
+          <pre><code># nopipe.sql
+latency average = 0.534 ms
+tps = 1871.926382 (without initial connection time)
+
+# pipe.sql
+latency average = 0.230 ms
+tps = 4355.363051 (without initial connection time)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>
+同じ4本の SELECT にもかかわらず、レイテンシが 0.534 ms から 0.230 ms へ、
+tps は約 2.3 倍になった。これは同一ホスト内の接続での結果である。
+ネットワーク越し（RTT が大きい環境）ほど差は広がる。
+</p>
+
+<p>
+パイプラインの途中で同期を取りたいときは <code>\syncpipeline</code>（PostgreSQL 17 以降）を挟む。
+パイプラインを終わらせずに sync メッセージだけを送る。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>cat &gt; sync.sql &lt;&lt;'EOF'
+\startpipeline
+SELECT 1;
+\syncpipeline
+SELECT 2;
+\endpipeline
+EOF
+
+pgbench -n -f sync.sql -M extended -t 1 -r bench</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力（末尾）</span>
+  <pre><code>statement latencies in milliseconds and failures:
+         0.001           0 \startpipeline
+         0.000           0 SELECT 1;
+         0.003           0 \syncpipeline
+         0.000           0 SELECT 2;
+         0.394           0 \endpipeline</code></pre>
+</div>
+
+<p>
+注目すべきは、個々の <code>SELECT</code> が 0.000 ms で、
+<code>\endpipeline</code> に 0.394 ms が計上されている点である。
+パイプライン中の SQL は送信するだけで結果を待たないため、
+<strong>待ち時間はすべて <code>\endpipeline</code> にまとまる</strong>。
+パイプライン内では、どの文が遅いかを <code>-r</code> で切り分けることはできない。
+</p>
+
+<div class="pitfall">
+  <strong>⚠️ パイプラインの2大制約</strong>
+  <p>1つ目。パイプラインは<strong>拡張プロトコルが必須</strong>である。
+  <code>-M simple</code>（既定）のまま実行すると即座に abort する。
+  <code>-M extended</code> か <code>-M prepared</code> を指定する。</p>
+  <div class="example">
+    <span class="example-label out">出力</span>
+    <pre><code>pgbench: error: client 0 aborted in command 1 (startpipeline) of script 0; cannot use pipeline mode with the simple query protocol</code></pre>
+  </div>
+  <p>2つ目。パイプライン内では <code>\gset</code> / <code>\aset</code> が<strong>使えない</strong>。
+  結果を受け取る時点ではまだ値が返っていないためである。</p>
+  <div class="example">
+    <span class="example-label out">出力</span>
+    <pre><code>pgbench: error: client 0 aborted in command 1 (gset) of script 0; \gset is not allowed in pipeline mode</code></pre>
+  </div>
+</div>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>\gset</code> で取り込んだ <code>:abalance</code> を次のクエリで使えた</li>
+    <li><code>\gset</code> と <code>\aset</code> の、0 行・複数行のときの違いを説明できる</li>
+    <li><code>\if</code> の両分岐が <code>-r</code> の出力に並ぶことを確認した</li>
+    <li>パイプラインあり／なしで tps が変わることを自分の環境で再現した</li>
+    <li>パイプラインで <code>-M simple</code> を使うとどうなるか説明できる</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch04.html"><span class="dir">← 前の章</span><span class="ttl">第4章 変数と式を使いこなす</span></a>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <a class="next" href="ch06.html"><span class="dir">次の章 →</span><span class="ttl">第6章 実践：現実的なワークロードを組む</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgbench カスタムスクリプト実践ガイド — PostgreSQL 18.4 で実行して確認 / 仕様は <a href="https://www.postgresql.org/docs/18/pgbench.html">公式ドキュメント pgbench</a> を参照</footer>
+</body>
+</html>

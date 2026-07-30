@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第4章 変数と式を使いこなす | pgbench カスタムスクリプト実践ガイド — PostgreSQL 18 · 2026-07-29</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgbench カスタムスクリプト実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18 · 2026-07-29</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 カスタムスクリプトでできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 組み込みスクリプトの限界</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 カスタムスクリプトの構成要素</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 実行の全体像と重み付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バージョンと接続を確認する</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 ベンチマーク用データベースを初期化する</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 作業ディレクトリと実行の基本形</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 最小のカスタムスクリプトを書いて動かす</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 -r でステートメント単位に分解する</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 :scale の罠</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch04.html">第4章 変数と式を使いこなす</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 \set と式の評価</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 自動変数と -D</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 乱数分布を選ぶ</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 permute() で相関を断つ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 メタコマンドで制御する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 \gset / \aset</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 \if で条件分岐する</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 \sleep / \shell / \setshell</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 パイプラインで往復を減らす</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 実践：現実的なワークロードを組む</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 複数スクリプトを重み付けで混ぜる</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 スクリプト別レポートを読む</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 プロトコルを変えて比較する</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 ログを取って分析する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 エラーの切り分け方</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 起動時に失敗する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 実行中に abort する</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 数字が信用できないとき</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 メタコマンド早見表</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 関数早見表</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 オプション早見表</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 スクリプトを書くときの型</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第4章　変数と式を使いこなす</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li><code>\set</code> の式で計算・比較・条件式を書き、<code>debug()</code> で値を確認できる</li>
+    <li>自動変数（<code>:client_id</code> など）と <code>-D</code> を使い分けられる</li>
+    <li>用途に応じて4つの乱数分布を選べる</li>
+    <li><code>permute()</code> で「偏りは保ったまま、場所の相関だけ壊す」ことができる</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>第3章までの環境（<code>bench</code> データベース、作業ディレクトリ）を引き継ぐ</li>
+    <li>第3章で作った <code>myselect.sql</code> があること</li>
+  </ul>
+</div>
+
+<h2 id="sec-4-1">4.1　<code>\set</code> と式の評価</h2>
+
+<p>
+<code>\set 変数名 式</code> で変数に値を入れる。式には整数・浮動小数・真偽値・<code>NULL</code>、
+変数参照、演算子、関数呼び出し、SQL の <code>CASE</code> 式が書ける。
+評価は<strong>すべて pgbench 側</strong>で行われ、サーバへは送られない。
+</p>
+
+<p>
+式の結果を確かめたいときは <code>debug()</code> 関数を使う。引数をそのまま返しつつ、
+値と型を標準エラー出力へ書き出す。
+</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 式の評価結果を覗く</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>いろいろな式を書いた <code>expr.sql</code> を作る。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>cat &gt; expr.sql &lt;&lt;'EOF'
+\set i 3 + 4 * 2
+\set d double(:i) / 4
+\set b :i &gt; 10
+\set n CASE WHEN :i &gt; 100 THEN 1 ELSE NULL END
+\set dummy debug(:i)
+\set dummy debug(:d)
+\set dummy debug(:b)
+\set dummy debug(:n)
+SELECT 1;
+EOF</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>1トランザクションだけ実行する。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pgbench -n -f expr.sql -t 1 bench</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力（先頭部分）</span>
+          <pre><code>pgbench (18.4)
+debug(script=0,command=5): int 11
+debug(script=0,command=6): double 2.75
+debug(script=0,command=7): boolean true
+debug(script=0,command=8): null
+transaction type: expr.sql
+scaling factor: 1
+...</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>
+<code>command=5</code> はスクリプト内の何番目のコマンドかを示す（1 始まり）。
+型が <code>int</code> / <code>double</code> / <code>boolean</code> / <code>null</code> と
+表示されるので、意図した型になっているかを確認できる。
+<code>3 + 4 * 2</code> が 11 になっていることから、演算子の優先順位が SQL と同じであることもわかる。
+</p>
+
+<p>
+使える演算子は SQL とほぼ同じで、優先順位・結合則も SQL に準じる。
+</p>
+
+<table>
+  <thead>
+    <tr><th>種類</th><th>演算子</th><th>備考</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>算術</td><td><code>+</code> <code>-</code> <code>*</code> <code>/</code> <code>%</code></td>
+        <td>整数同士の <code>/</code> は整数除算。オーバーフローはエラーになる</td></tr>
+    <tr><td>比較</td><td><code>=</code> <code>&lt;&gt;</code> <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code></td>
+        <td>結果は boolean</td></tr>
+    <tr><td>論理</td><td><code>AND</code> <code>OR</code> <code>NOT</code></td><td>—</td></tr>
+    <tr><td>ビット</td><td><code>&amp;</code> <code>|</code> <code>#</code> <code>~</code> <code>&lt;&lt;</code> <code>&gt;&gt;</code></td>
+        <td><code>#</code> は XOR</td></tr>
+    <tr><td>NULL 判定</td><td><code>IS NULL</code> <code>IS NOT NULL</code> <code>ISNULL</code> <code>NOTNULL</code></td><td>—</td></tr>
+  </tbody>
+</table>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  条件判定では<strong>0 以外の数値が真、0 と NULL が偽</strong>として扱われる。
+  <code>\if</code> の条件式もこの規則に従う。
+</div>
+
+<p>
+式が長いときは、行末にバックスラッシュを置いて次の行へ続けられる。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（スクリプト内）</span>
+  <pre><code>\set aid (1021 * random(1, 100000 * :scale)) % \
+           (100000 * :scale) + 1</code></pre>
+</div>
+
+<h2 id="sec-4-2">4.2　自動変数と <code>-D</code></h2>
+
+<p>
+何も設定しなくても、次の4つの変数は最初から使える。
+</p>
+
+<table>
+  <thead>
+    <tr><th>変数</th><th>意味</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>:client_id</code></td><td>クライアントセッションを識別する番号。<strong>0 始まり</strong></td></tr>
+    <tr><td><code>:scale</code></td><td>スケールファクタ。<code>-f</code> では <code>-s</code> を渡さないと 1（3.4 節）</td></tr>
+    <tr><td><code>:default_seed</code></td><td><code>hash()</code> と <code>permute()</code> が既定で使う種</td></tr>
+    <tr><td><code>:random_seed</code></td><td>乱数生成器の種。<code>--random-seed</code> で指定できる</td></tr>
+  </tbody>
+</table>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>cat &gt; vars.sql &lt;&lt;'EOF'
+\set dummy debug(:client_id)
+\set dummy debug(:scale)
+\set dummy debug(:default_seed)
+\set dummy debug(:random_seed)
+SELECT 1;
+EOF
+
+pgbench -n -f vars.sql -t 1 -c 2 -s 10 --random-seed=42 bench</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力（先頭部分）</span>
+  <pre><code>pgbench: setting random seed to 42
+pgbench (18.4)
+debug(script=0,command=1): int 0
+debug(script=0,command=2): int 10
+debug(script=0,command=3): int 4482733528210176216
+debug(script=0,command=4): int 42
+debug(script=0,command=1): int 1
+debug(script=0,command=2): int 10
+debug(script=0,command=3): int 4482733528210176216
+debug(script=0,command=4): int 42</code></pre>
+</div>
+
+<p>
+<code>-c 2</code> なので2クライアント分の出力が出ており、<code>:client_id</code> だけが
+0 と 1 で異なる。<code>:scale</code> は <code>-s 10</code> を渡したので 10 になっている。
+<code>:client_id</code> を使えば、クライアントごとに違うデータ範囲を触らせるといったことができる。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（スクリプト内）</span>
+  <pre><code>-- クライアントごとに担当するテナントを変える
+\set tenant :client_id % 8 + 1</code></pre>
+</div>
+
+<p>
+自分で決めた変数は <code>-D 名前=値</code> でコマンドラインから渡せる。
+これは <code>\set</code> より優先され、自動変数も上書きできる。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>cat &gt; dvar.sql &lt;&lt;'EOF'
+\set dummy debug(:nrows)
+SELECT count(*) FROM pgbench_accounts WHERE aid &lt;= :nrows;
+EOF
+
+pgbench -n -f dvar.sql -t 1 -D nrows=500 bench</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力（先頭部分）</span>
+  <pre><code>pgbench (18.4)
+debug(script=0,command=1): int 500
+transaction type: dvar.sql
+scaling factor: 1
+...</code></pre>
+</div>
+
+<div class="pitfall">
+  <strong>⚠️ 文字列を渡すとき</strong>
+  <code>-D</code> の値は SQL へそのまま埋め込まれる。文字列を渡したいときは
+  <code>-D kind="'no_s'"</code> のように<strong>SQL のクォートを値の中に含める</strong>必要がある。
+  引用符を付け忘れると、識別子とみなされて
+  <code>ERROR:  column "no_s" does not exist</code> になる。
+</div>
+
+<div class="pitfall">
+  <strong>⚠️ セキュリティ上の注意</strong>
+  変数は文字列として SQL に埋め込まれるだけで、エスケープはされない。
+  外部から与えられた信用できない値を <code>-D</code> に渡さないこと。
+</div>
+
+<h2 id="sec-4-3">4.3　乱数分布を選ぶ</h2>
+
+<p>
+アクセス先の選び方は測定結果を大きく左右する。pgbench には4つの分布が用意されている。
+</p>
+
+<table>
+  <thead>
+    <tr><th>関数</th><th>分布</th><th>パラメータ</th><th>向いている場面</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>random(lb, ub)</code></td><td>一様</td><td>なし</td>
+        <td>全体を均等に触る。キャッシュに乗りにくい最悪ケース寄り</td></tr>
+    <tr><td><code>random_exponential(lb, ub, p)</code></td><td>指数</td><td><code>p &gt; 0</code></td>
+        <td>下限側に偏らせる。<code>p</code> が大きいほど急峻</td></tr>
+    <tr><td><code>random_gaussian(lb, ub, p)</code></td><td>正規</td><td><code>p &gt;= 2.0</code></td>
+        <td>中央付近に集中させる</td></tr>
+    <tr><td><code>random_zipfian(lb, ub, p)</code></td><td>Zipf</td><td><code>1.001 &lt;= p &lt;= 1000</code></td>
+        <td>「一部が極端に人気」を再現。実サービスに近いことが多い</td></tr>
+  </tbody>
+</table>
+
+<p>
+図 4.1 を目安に選ぶとよい。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TD
+    Q1{"アクセスに<br/>偏りがあるか"} -->|"ない"| U["random()<br/>一様分布"]
+    Q1 -->|"ある"| Q2{"偏りの形は"}
+    Q2 -->|"少数のキーが<br/>極端に人気"| Z["random_zipfian()"]
+    Q2 -->|"新しいデータほど<br/>よく読まれる"| E["random_exponential()"]
+    Q2 -->|"中央値付近に集中"| G["random_gaussian()"]
+    Z --> P{"人気キーが<br/>物理的に隣接すると<br/>都合が悪いか"}
+    E --> P
+    P -->|"はい"| PM["permute() を重ねる"]
+    P -->|"いいえ"| Done["そのまま使う"]
+  </pre>
+  <figcaption>図 4.1: 乱数分布の選び方</figcaption>
+</figure>
+
+<p>
+分布の違いは、実際に値を記録して数えるのが一番わかりやすい。
+</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 一様分布と Zipf 分布を数えて比べる</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>引いた値を記録するテーブルを作る。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -q -d bench -c 'DROP TABLE IF EXISTS dist_log;
+  CREATE UNLOGGED TABLE dist_log(kind text, v int);'</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>一様分布・Zipf 分布・Zipf + <code>permute()</code> の3本のスクリプトを作る。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>cat &gt; dist_uniform.sql &lt;&lt;'EOF'
+\set v random(1, 100)
+INSERT INTO dist_log VALUES ('uniform', :v);
+EOF
+
+cat &gt; dist_zipfian.sql &lt;&lt;'EOF'
+\set v random_zipfian(1, 100, 1.5)
+INSERT INTO dist_log VALUES ('zipfian', :v);
+EOF
+
+cat &gt; dist_permuted.sql &lt;&lt;'EOF'
+\set r random_zipfian(1, 100, 1.5)
+\set v 1 + permute(:r, 100)
+INSERT INTO dist_log VALUES ('permuted', :v);
+EOF</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>それぞれ 10000 回実行する。種を固定して再現性を持たせる。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>for k in uniform zipfian permuted; do
+  pgbench -n -f dist_$k.sql -t 10000 --random-seed=42 bench &gt; /dev/null
+done</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>それぞれの上位5値と出現回数を数える。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d bench -c "
+SELECT kind, v, count(*) AS n
+FROM dist_log
+WHERE (kind, v) IN (
+  SELECT kind, v FROM (
+    SELECT kind, v, count(*),
+           row_number() OVER (PARTITION BY kind ORDER BY count(*) DESC) rn
+    FROM dist_log GROUP BY kind, v) t WHERE rn &lt;= 5)
+GROUP BY kind, v ORDER BY kind, n DESC;"</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>   kind   | v  |  n
+----------+----+------
+ permuted | 48 | 4108
+ permuted | 20 | 1423
+ permuted | 75 |  803
+ permuted | 11 |  498
+ permuted | 26 |  379
+ uniform  | 16 |  123
+ uniform  | 39 |  122
+ uniform  | 40 |  116
+ uniform  | 65 |  116
+ uniform  | 57 |  116
+ zipfian  |  1 | 4108
+ zipfian  |  2 | 1423
+ zipfian  |  3 |  803
+ zipfian  |  4 |  498
+ zipfian  |  5 |  379
+(15 rows)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>
+読み方は次のとおり。<code>uniform</code> は 10000 回 ÷ 100 種 = 100 回前後に揃っており、
+どの値も同じくらい出ている。<code>zipfian</code> は値 1 だけで 4108 回、
+つまり全体の 41% を占め、以降 1423 → 803 → 498 と急速に減っている。
+</p>
+
+<h2 id="sec-4-4">4.4　<code>permute()</code> で相関を断つ</h2>
+
+<p>
+前節の出力で <code>zipfian</code> と <code>permuted</code> を見比べてほしい。
+出現回数の列は <strong>4108 / 1423 / 803 / 498 / 379 と完全に同じ</strong>である。
+違うのは、その回数を受け取る値が
+<code>1, 2, 3, 4, 5</code> から <code>48, 20, 75, 11, 26</code> へ散らばっている点だけである。
+</p>
+
+<p>
+これが <code>permute(i, size [, seed])</code> の働きである。
+<code>0</code> 以上 <code>size</code> 未満の整数を疑似ランダムに並べ替え、
+<code>i</code> がその並べ替え後で何番目に来るかを返す。ハッシュ関数と違い
+<strong>衝突も抜けもない</strong>ため、偏りの度合いはそのままに、
+どの値が人気になるかだけを変えられる。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    R["random_zipfian(1, size, 1.07)<br/>1 に強く偏った値"] --> PM["permute(:r, size)"]
+    PM --> K["散らばった値<br/>偏りの度合いは同じ"]
+    K --> SQL["WHERE id = :k"]
+  </pre>
+  <figcaption>図 4.2: 偏りを保ったまま、アクセス先の位置だけを散らす</figcaption>
+</figure>
+
+<p>
+なぜこれが必要か。<code>random_zipfian(1, 1000000, 1.07)</code> をそのまま主キーに使うと、
+人気の行は <code>id</code> が 1, 2, 3… の行、つまり<strong>物理的に先頭に固まっている行</strong>になる。
+主キーが連番で挿入順と一致していれば、人気行は同じページに集まり、
+現実にはあり得ないほどキャッシュ効率が良くなってしまう。
+図 4.2 のように <code>permute()</code> を挟むと、人気行がテーブル全体へ散る。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（スクリプト内）</span>
+  <pre><code>-- 一部のアカウントに負荷が集中する、SNS 的なワークロード
+\set size 1000000
+\set r random_zipfian(1, :size, 1.07)
+\set k 1 + permute(:r, :size)
+SELECT abalance FROM pgbench_accounts WHERE aid = :k;</code></pre>
+</div>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  <code>permute()</code> の並べ替えは <code>seed</code> で決まり、既定は <code>:default_seed</code>。
+  同じ種なら毎回同じ並びになるので、実行間で結果を比較できる。
+  逆に、独立した複数の偏りが欲しいときは
+  <code>permute(:r, :size, :default_seed + 1)</code> のように種をずらす。
+</div>
+
+<div class="pitfall">
+  <strong>⚠️ 添字のずれに注意</strong>
+  <code>permute()</code> が返すのは <code>[0, size)</code> の値である。
+  主キーが 1 始まりなら <code>1 + permute(...)</code> と <strong>+1 が要る</strong>。
+  忘れると <code>aid = 0</code> を引き続けて 0 行ヒットになり、
+  「速いが何も読んでいない」測定になる。
+</div>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>debug()</code> で式の値と型を確認できた</li>
+    <li><code>:client_id</code> が <code>-c 2</code> のとき 0 と 1 になることを確認した</li>
+    <li>一様分布と Zipf 分布で、上位値の出現回数がまったく違うことを再現した</li>
+    <li><code>permute()</code> が「出現回数は同じまま値だけ散らす」ことを出力で確認した</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch03.html"><span class="dir">← 前の章</span><span class="ttl">第3章 まず動かす（最短ルート）</span></a>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <a class="next" href="ch05.html"><span class="dir">次の章 →</span><span class="ttl">第5章 メタコマンドで制御する</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgbench カスタムスクリプト実践ガイド — PostgreSQL 18.4 で実行して確認 / 仕様は <a href="https://www.postgresql.org/docs/18/pgbench.html">公式ドキュメント pgbench</a> を参照</footer>
+</body>
+</html>

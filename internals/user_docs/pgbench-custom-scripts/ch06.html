@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第6章 実践：現実的なワークロードを組む | pgbench カスタムスクリプト実践ガイド — PostgreSQL 18 · 2026-07-29</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgbench カスタムスクリプト実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 18 · 2026-07-29</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 カスタムスクリプトでできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 組み込みスクリプトの限界</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 カスタムスクリプトの構成要素</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 実行の全体像と重み付け</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 バージョンと接続を確認する</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 ベンチマーク用データベースを初期化する</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 作業ディレクトリと実行の基本形</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす（最短ルート）</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 最小のカスタムスクリプトを書いて動かす</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 -r でステートメント単位に分解する</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 :scale の罠</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 変数と式を使いこなす</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 \set と式の評価</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 自動変数と -D</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 乱数分布を選ぶ</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 permute() で相関を断つ</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 メタコマンドで制御する</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 \gset / \aset</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 \if で条件分岐する</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 \sleep / \shell / \setshell</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 パイプラインで往復を減らす</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch06.html">第6章 実践：現実的なワークロードを組む</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 複数スクリプトを重み付けで混ぜる</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 スクリプト別レポートを読む</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 プロトコルを変えて比較する</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 ログを取って分析する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 つまずきポイントと対処</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 エラーの切り分け方</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 起動時に失敗する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 実行中に abort する</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 数字が信用できないとき</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 まとめとチートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 メタコマンド早見表</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 関数早見表</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 オプション早見表</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 スクリプトを書くときの型</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第6章　実践：現実的なワークロードを組む</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>複数スクリプトを重み付けで混ぜ、読み書き比率を再現できる</li>
+    <li>スクリプト別レポートを読み、狙った比率になったか検証できる</li>
+    <li><code>-M</code> でプロトコルを変えて比較できる</li>
+    <li>ログを取り、後から分布や時系列を分析できる</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>第5章までの環境を引き継ぐ</li>
+    <li><code>bench</code> は <code>-s 10</code> で初期化済み。以降 <code>-s 10</code> を明示して実行する</li>
+  </ul>
+</div>
+
+<h2 id="sec-6-1">6.1　複数スクリプトを重み付けで混ぜる</h2>
+
+<p>
+現実のワークロードは「読みが大半、書きが少し」であることが多い。
+これを再現するには、読み用と書き用のスクリプトを別ファイルにして、
+<code>-f ファイル@重み</code> で比率を指定する。
+</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 読み 9 : 書き 1 のワークロード</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>読み取り専用のスクリプトを作る。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>cat &gt; ro.sql &lt;&lt;'EOF'
+\set aid random(1, 100000 * :scale)
+SELECT abalance FROM pgbench_accounts WHERE aid = :aid;
+EOF</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>更新用のスクリプトを作る。<code>\gset</code> で更新後の残高を受け取り、
+           それを履歴に記録する多段処理にしてある。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>cat &gt; rw.sql &lt;&lt;'EOF'
+\set aid random(1, 100000 * :scale)
+\set delta random(-5000, 5000)
+BEGIN;
+UPDATE pgbench_accounts SET abalance = abalance + :delta WHERE aid = :aid
+  RETURNING abalance \gset
+INSERT INTO pgbench_history (tid, bid, aid, delta, mtime)
+  VALUES (1, 1, :aid, :delta, CURRENT_TIMESTAMP);
+END;
+EOF</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>9 : 1 の重みで 10 秒間実行する。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pgbench -n -f ro.sql@9 -f rw.sql@1 -s 10 -c 4 -j 2 -T 10 -r bench</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<div class="tip">
+  <strong>💡 <code>\if</code> と重み付けの使い分け</strong>
+  1本のスクリプト内で <code>\if</code> を使っても比率は作れる（5.2 節）。
+  違いは<strong>レポートの粒度</strong>である。ファイルを分けて重みを付けると、
+  スクリプトごとに実行回数・比率・レイテンシ・tps が個別に出る。
+  比率そのものを検証したいなら、ファイルを分けるほうがよい。
+  一方、同じトランザクションの中で分岐したい場合（例: 在庫があれば購入、なければ何もしない）は
+  <code>\if</code> でなければ書けない。
+</div>
+
+<h2 id="sec-6-2">6.2　スクリプト別レポートを読む</h2>
+
+<p>
+複数スクリプトを指定すると、全体のサマリの後にスクリプトごとの内訳が続く。
+図 6.1 のように、レポートは3階層になっている。
+</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TD
+    Run["pgbench -f ro.sql@9 -f rw.sql@1 -r"] --> All["全体サマリ<br/>合計 tps / 平均レイテンシ"]
+    All --> S1["SQL script 1: ro.sql<br/>重み・実測比率・tps・レイテンシ"]
+    All --> S2["SQL script 2: rw.sql<br/>重み・実測比率・tps・レイテンシ"]
+    S1 --> D1["-r による<br/>ステートメント別レイテンシ"]
+    S2 --> D2["-r による<br/>ステートメント別レイテンシ"]
+  </pre>
+  <figcaption>図 6.1: 複数スクリプト実行時のレポート構造</figcaption>
+</figure>
+
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>pgbench (18.4)
+transaction type: multiple scripts
+scaling factor: 10
+query mode: simple
+number of clients: 4
+number of threads: 2
+maximum number of tries: 1
+duration: 10 s
+number of transactions actually processed: 128323
+number of failed transactions: 0 (0.000%)
+latency average = 0.312 ms
+initial connection time = 4.882 ms
+tps = 12832.788929 (without initial connection time)
+SQL script 1: ro.sql
+ - weight: 9 (targets 90.0% of total)
+ - 115594 transactions (90.1% of total)
+ - number of transactions actually processed: 115594 (tps = 11559.840430)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 0.156 ms
+ - latency stddev = 0.091 ms
+ - statement latencies in milliseconds and failures:
+         0.001           0 \set aid random(1, 100000 * :scale)
+         0.156           0 SELECT abalance FROM pgbench_accounts WHERE aid = :aid;
+SQL script 2: rw.sql
+ - weight: 1 (targets 10.0% of total)
+ - 12718 transactions (9.9% of total)
+ - number of transactions actually processed: 12718 (tps = 1271.848457)
+ - number of failed transactions: 0 (0.000%)
+ - latency average = 1.646 ms
+ - latency stddev = 2.083 ms
+ - statement latencies in milliseconds and failures:
+         0.001           0 \set aid random(1, 100000 * :scale)
+         0.000           0 \set delta random(-5000, 5000)
+         0.089           0 BEGIN;
+         0.184           0 UPDATE pgbench_accounts SET abalance = abalance + :delta WHERE aid = :aid
+         0.144           0 INSERT INTO pgbench_history (tid, bid, aid, delta, mtime)
+         1.228           0 END;</code></pre>
+</div>
+
+<p>
+読みどころは次の3点である。
+</p>
+
+<ul>
+  <li><strong><code>weight: 9 (targets 90.0% of total)</code> と実測の <code>90.1%</code> が一致している。</strong>
+      狙った比率で動いたことがここで検証できる。ずれが大きいときは実行時間が短すぎる。</li>
+  <li><strong>レイテンシはスクリプトごとに大きく違う。</strong>
+      読みは 0.156 ms、書きは 1.646 ms で約10倍。全体平均の 0.312 ms は
+      両者を混ぜた値なので、これだけ見ても実態はわからない。内訳を見ることが重要である。</li>
+  <li><strong><code>rw.sql</code> では <code>END;</code>（コミット）が 1.228 ms で最も重い。</strong>
+      UPDATE 自体は 0.184 ms なので、時間の大半は WAL の書き出しに使われている。
+      ここが支配的なら、チューニングすべきはクエリではなくストレージや
+      <code>synchronous_commit</code> といった設定である。</li>
+</ul>
+
+<div class="pitfall">
+  <strong>⚠️ ステートメントの表示は1行目だけ</strong>
+  上の <code>rw.sql</code> の内訳で <code>UPDATE ... WHERE aid = :aid</code> や
+  <code>INSERT INTO pgbench_history (tid, bid, aid, delta, mtime)</code> が
+  途中で切れているのは、複数行にまたがる SQL の<strong>先頭行だけが表示される</strong>ためである。
+  レポートを見やすくしたいなら、1文を1行に収めて書くとよい。
+</div>
+
+<h2 id="sec-6-3">6.3　プロトコルを変えて比較する</h2>
+
+<p>
+<code>-M</code> で、SQL の送り方を3つから選べる。
+同じスクリプトでも結果が変わるため、アプリの実装に合わせて選ぶ必要がある。
+</p>
+
+<table>
+  <thead>
+    <tr><th>モード</th><th>動作</th><th>対応するアプリ実装</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>simple</code>（既定）</td><td>変数を展開した SQL 文字列をそのまま送る</td>
+        <td>文字列を組み立てて実行するだけの実装</td></tr>
+    <tr><td><code>extended</code></td><td>パラメータを分離して送る。毎回パースされる</td>
+        <td>プレースホルダを使うが文を再利用しない実装</td></tr>
+    <tr><td><code>prepared</code></td><td>1回だけ prepare し、以降は再利用する</td>
+        <td>プリペアドステートメントをキャッシュする実装</td></tr>
+  </tbody>
+</table>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>for m in simple extended prepared; do
+  echo "== $m"
+  pgbench -n -f ro.sql -s 10 -M $m -c 4 -j 2 -T 8 bench | grep -E '^tps|^latency average'
+done</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力（整形して抜粋）</span>
+  <pre><code>simple    latency average = 0.153 ms   tps = 26084.337402
+extended  latency average = 0.163 ms   tps = 24478.960416
+prepared  latency average = 0.109 ms   tps = 36568.177193</code></pre>
+</div>
+
+<p>
+はっきりしているのは <code>prepared</code> が速いことで、
+<code>simple</code> の約 1.4 倍の tps が出ている。毎回のパースとプラン作成が省けるためである。
+</p>
+
+<p>
+一方、<code>simple</code> と <code>extended</code> の差はこの程度のクエリでは小さく、
+<strong>実行するたびに順位が入れ替わる</strong>。手元で同じ計測を繰り返したところ、
+<code>extended</code> が <code>simple</code> をわずかに上回る回もあった。
+この2つの優劣を判断するには、より長い計測時間と複数回の試行が要る。
+逆に言えば、<code>prepared</code> の差はそうした試行を経ても揺るがないほど大きい、ということである。
+</p>
+
+<div class="pitfall">
+  <strong>⚠️ 数字の比較はプロトコルを揃えて</strong>
+  <code>-M</code> の違いだけで tps は 1.5 倍変わり得る。
+  設定変更やバージョン間の比較をするときは、必ず同じ <code>-M</code> で測る。
+  そして、報告するときはどのモードで測ったかを併記する。
+  パイプラインを使うスクリプトでは <code>-M simple</code> が使えないので（5.4 節）、
+  比較対象も <code>extended</code> 以上に揃える必要がある。
+</div>
+
+<h2 id="sec-6-4">6.4　ログを取って分析する</h2>
+
+<p>
+<code>-P 秒</code> を付けると、実行中の進捗が定期的に表示される。
+長時間の計測でウォームアップの終わりを見極めるのに使う。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>pgbench -n -f ro.sql -s 10 -c 2 -T 4 -P 1 bench</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力（進捗行のみ）</span>
+  <pre><code>progress: 1.0 s, 14777.1 tps, lat 0.126 ms stddev 0.432, 0 failed
+progress: 2.0 s, 15210.3 tps, lat 0.122 ms stddev 0.043, 0 failed
+progress: 3.0 s, 14782.0 tps, lat 0.126 ms stddev 0.034, 0 failed
+progress: 4.0 s, 13874.5 tps, lat 0.133 ms stddev 0.087, 0 failed</code></pre>
+</div>
+
+<p>
+1秒目の stddev だけ 0.432 と大きい。接続直後でキャッシュが温まっていないためである。
+この区間を計測から外したいなら、実行時間を長くして相対的な影響を薄める。
+</p>
+
+<p>
+<code>-l</code> を付けると、1トランザクション1行のログファイルが作られる。
+ファイル名は <code>pgbench_log.<em>PID</em></code>（<code>--log-prefix</code> で変更可）。
+<code>-j</code> が2以上なら、スレッドごとに
+<code>pgbench_log.<em>PID</em>.<em>連番</em></code> が追加で作られる。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>pgbench -n -f ro.sql@9 -f rw.sql@1 -s 10 -c 2 -T 3 -l --log-prefix=mix_log bench
+head -5 mix_log.*</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>0 1 2350 0 1785332426 296009
+1 1 2320 0 1785332426 296024
+0 2 221 0 1785332426 296246
+1 2 191 0 1785332426 296249
+0 3 165 0 1785332426 296415</code></pre>
+</div>
+
+<table>
+  <thead>
+    <tr><th>列</th><th>名前</th><th>意味</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td><code>client_id</code></td><td>クライアント番号</td></tr>
+    <tr><td>2</td><td><code>transaction_no</code></td><td>そのクライアントの何番目のトランザクションか</td></tr>
+    <tr><td>3</td><td><code>time</code></td><td>所要時間（<strong>マイクロ秒</strong>）</td></tr>
+    <tr><td>4</td><td><code>script_no</code></td><td><strong>使われたスクリプト番号（0 始まり）</strong></td></tr>
+    <tr><td>5</td><td><code>time_epoch</code></td><td>完了時刻（Unix 時刻・秒）</td></tr>
+    <tr><td>6</td><td><code>time_us</code></td><td>完了時刻の秒未満（マイクロ秒）</td></tr>
+  </tbody>
+</table>
+
+<p>
+第4列の <code>script_no</code> があるので、スクリプト別にレイテンシ分布を出せる。
+上の出力の1行目は <code>script_no = 0</code>、所要時間 2350 マイクロ秒（2.35 ms）である。
+</p>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  <code>--rate</code> を付けると <code>schedule_lag</code> 列が、
+  <code>--max-tries</code> を 1 以外にすると <code>retries</code> 列が末尾に増える。
+  列位置を決め打ちで解析するときは、実行に使ったオプションとセットで管理する。
+</div>
+
+<p>
+1行ずつでは多すぎる場合は <code>--aggregate-interval=秒</code> を使う。
+指定秒ごとに1行へ集約される。
+</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>pgbench -n -f ro.sql -s 10 -c 2 -T 5 -l --aggregate-interval=1 --log-prefix=agg_log bench
+cat agg_log.*</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>1785332429 10111 1301812 183985372 63 2079 0 0 0 0 0 0 0 0 0
+1785332430 15426 1859925 242831475 62 2014 0 0 0 0 0 0 0 0 0
+1785332431 16234 1861686 225733800 62 1296 0 0 0 0 0 0 0 0 0
+1785332432 15147 1853918 244925040 61 2112 0 0 0 0 0 0 0 0 0
+1785332433 15277 1852031 246182137 62 2183 0 0 0 0 0 0 0 0 0</code></pre>
+</div>
+
+<p>
+先頭から順に <code>interval_start</code>（Unix 時刻）、<code>num_transactions</code>、
+<code>sum_latency</code>、<code>sum_latency_2</code>（レイテンシの二乗和）、
+<code>min_latency</code>、<code>max_latency</code>、以降は <code>--rate</code> 用の遅延と
+失敗・再試行のカウンタが続く。
+平均レイテンシは <code>sum_latency / num_transactions</code> で求まる。
+2行目なら 1859925 / 15426 ≒ 120 マイクロ秒である。
+</p>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>-f ro.sql@9 -f rw.sql@1</code> を実行し、実測比率が 90% 前後になった</li>
+    <li>スクリプト別レポートで、読みと書きのレイテンシ差を確認した</li>
+    <li><code>-M prepared</code> が <code>-M simple</code> より速いことを再現した</li>
+    <li><code>-l</code> のログを開き、第4列でスクリプトを見分けられた</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch05.html"><span class="dir">← 前の章</span><span class="ttl">第5章 メタコマンドで制御する</span></a>
+        <a class="up" href="index.html"><span class="dir">↑ 目次</span><span class="ttl">トップページ</span></a>
+        <a class="next" href="ch07.html"><span class="dir">次の章 →</span><span class="ttl">第7章 つまずきポイントと対処</span></a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgbench カスタムスクリプト実践ガイド — PostgreSQL 18.4 で実行して確認 / 仕様は <a href="https://www.postgresql.org/docs/18/pgbench.html">公式ドキュメント pgbench</a> を参照</footer>
+</body>
+</html>
