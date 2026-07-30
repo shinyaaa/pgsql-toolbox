@@ -1,0 +1,608 @@
+/* db-patch-docs : パッチ解説ドキュメント用スタイル（バイオレットテーマ） ------
+   db-internals-docs のレイアウト・ヘッダ・コード表示をそのまま踏襲し、色を
+   バイオレット系に変えたうえで、コミット解説に必要な部品（差分メタ情報、
+   採用／見送りカード、端末実行例、落とし穴／テストのリスト、理解度チェック）
+   を追加している。このファイルは編集せずそのまま css/style.css にコピーする。 */
+:root {
+  --accent: #7c3aed;        /* violet-600 */
+  --accent-dark: #5b21b6;   /* violet-800（ヘッダ背景） */
+  --accent-soft: #ede9fe;   /* violet-100 */
+  --warn: #b45309;          /* amber-700（落とし穴） */
+  --warn-soft: #fef6e7;
+  --ok: #15803d;            /* green-700（テスト・正解） */
+  --ok-soft: #ecfdf3;
+  --text: #1a202c;
+  --muted: #4a5568;
+  --border: #e2e8f0;
+  --bg: #ffffff;
+  --bg-alt: #faf8ff;
+  --code-bg: #f5f4f8;
+  --sidebar-w: 290px;
+  --content-w: 820px;
+  --header-h: 52px;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  color: var(--text);
+  background: var(--bg);
+  font-family: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+    "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif;
+  font-size: 16px;
+  line-height: 1.85;
+}
+
+/* ヘッダー -------------------------------------------------------------- */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  background: var(--accent-dark);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+.site-header .docs-home {
+  margin-right: 16px;
+  padding: 3px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 20px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.8rem;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.site-header .docs-home:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.55);
+  color: #fff;
+}
+.site-header .site-title {
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.05rem;
+  text-decoration: none;
+  letter-spacing: 0.02em;
+}
+.version-badge {
+  margin-left: 14px;
+  padding: 2px 9px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  color: rgba(255, 255, 255, 0.85);
+  white-space: nowrap;
+}
+
+/* レイアウト ------------------------------------------------------------ */
+.layout {
+  display: flex;
+  align-items: flex-start;
+  max-width: calc(var(--sidebar-w) + var(--content-w) + 80px);
+  margin: 0 auto;
+}
+
+/* サイドバー TOC -------------------------------------------------------- */
+.sidebar {
+  position: sticky;
+  top: var(--header-h);
+  flex: 0 0 var(--sidebar-w);
+  width: var(--sidebar-w);
+  height: calc(100vh - var(--header-h));
+  overflow-y: auto;
+  padding: 22px 18px 60px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-alt);
+  font-size: 0.9rem;
+}
+.sidebar ol { list-style: none; margin: 0; padding: 0; }
+.sidebar > ol > li { margin-bottom: 6px; }
+.sidebar .chap-title {
+  display: block;
+  padding: 4px 8px;
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+  border-radius: 4px;
+}
+.sidebar .chap-title:hover { background: var(--accent-soft); color: var(--accent-dark); }
+.sidebar .sect { list-style: none; margin: 2px 0 8px; padding-left: 14px; }
+.sidebar .sect a {
+  display: block;
+  padding: 2px 8px;
+  color: var(--muted);
+  text-decoration: none;
+  border-radius: 4px;
+  line-height: 1.5;
+}
+.sidebar .sect a:hover { color: var(--accent); background: var(--accent-soft); }
+.sidebar li.current > .chap-title { color: var(--accent-dark); background: var(--accent-soft); }
+.sidebar .sect a.current { color: var(--accent-dark); font-weight: 600; }
+
+/* 本文 ----------------------------------------------------------------- */
+.content {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: var(--content-w);
+  padding: 30px 40px 80px;
+}
+.content h1 {
+  font-size: 1.85rem;
+  line-height: 1.4;
+  margin: 0 0 0.8em;
+  padding-bottom: 0.4em;
+  border-bottom: 3px solid var(--accent);
+}
+.content h2 {
+  font-size: 1.4rem;
+  margin: 2em 0 0.7em;
+  padding-left: 10px;
+  border-left: 5px solid var(--accent);
+}
+.content h3 { font-size: 1.15rem; margin: 1.6em 0 0.5em; color: var(--accent-dark); }
+.content p { margin: 0.8em 0; }
+.content a { color: var(--accent); }
+.content ul, .content ol { padding-left: 1.6em; }
+.content li { margin: 0.3em 0; }
+
+/* 図 (Mermaid) --------------------------------------------------------- */
+figure {
+  margin: 1.8em 0;
+  padding: 18px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: center;
+}
+figure .mermaid { display: flex; justify-content: center; }
+figure figcaption {
+  margin-top: 12px;
+  font-size: 0.9rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* コード --------------------------------------------------------------- */
+code {
+  font-family: "SFMono-Regular", Menlo, Consolas, "Courier New", monospace;
+  font-size: 0.88em;
+  background: var(--code-bg);
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+}
+pre {
+  background: #1e2430;
+  color: #e6e9ef;
+  padding: 16px 18px;
+  border-radius: 8px;
+  overflow-x: auto;
+  line-height: 1.6;
+  font-size: 0.86rem;
+}
+pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+
+/* SQL / シェル例のラベル付きブロック */
+.example { margin: 1.5em 0; }
+.example .example-label {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 4px 4px 0 0;
+}
+.example pre { margin-top: 0; border-top-left-radius: 0; }
+
+/* テーブル ------------------------------------------------------------- */
+table { border-collapse: collapse; width: 100%; margin: 1.4em 0; font-size: 0.92rem; }
+th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+th { background: var(--bg-alt); font-weight: 700; }
+
+/* 補足ボックス --------------------------------------------------------- */
+.note, .info, .warn {
+  margin: 1.4em 0;
+  padding: 12px 16px;
+  border-radius: 6px;
+  border-left: 4px solid;
+  font-size: 0.95rem;
+}
+.note { background: var(--accent-soft); border-color: var(--accent); }
+.info { background: #f0fff4; border-color: #38a169; }
+.warn { background: #fffaf0; border-color: #dd6b20; }
+.note strong, .info strong, .warn strong { display: block; margin-bottom: 4px; }
+
+/* 前後ナビ ------------------------------------------------------------- */
+.pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 50px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.pager a {
+  flex: 1 1 0;
+  max-width: 48%;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--bg-alt);
+}
+.pager a:hover { border-color: var(--accent); background: var(--accent-soft); }
+.pager .dir { display: block; font-size: 0.78rem; color: var(--muted); }
+.pager .ttl { font-weight: 600; color: var(--accent-dark); }
+.pager .next { text-align: right; }
+.pager .up { flex: 0 1 auto; max-width: none; text-align: center; }
+.pager-spacer { flex: 1 1 0; max-width: 48%; }
+
+/* フッター ------------------------------------------------------------- */
+.site-footer {
+  padding: 24px 40px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* トップページ TOC ------------------------------------------------------ */
+.toc-hero { padding: 40px 0 10px; }
+.toc-hero h1 { font-size: 2.2rem; border: none; margin-bottom: 0.2em; }
+.toc-hero .version-hero {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  color: var(--accent);
+  margin-bottom: 0.5em;
+}
+.toc-hero .lead { color: var(--muted); font-size: 1.05rem; }
+.toc-grid { display: grid; gap: 16px; margin-top: 24px; }
+.toc-card {
+  display: block;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--bg);
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.toc-card:hover { border-color: var(--accent); box-shadow: 0 4px 14px rgba(124, 58, 237, 0.14); }
+.toc-card .num { color: var(--accent); font-weight: 700; font-size: 0.85rem; }
+.toc-card .title { display: block; font-size: 1.15rem; font-weight: 700; margin: 2px 0 6px; }
+.toc-card .desc { color: var(--muted); font-size: 0.9rem; }
+
+/* レスポンシブ ---------------------------------------------------------- */
+@media (max-width: 900px) {
+  .layout { flex-direction: column; }
+  .sidebar {
+    position: static;
+    width: 100%;
+    flex-basis: auto;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .content { padding: 24px 20px 60px; max-width: 100%; }
+}
+
+@media (max-width: 600px) {
+  .site-header {
+    height: auto;
+    min-height: var(--header-h);
+    padding: 8px 14px;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .version-badge { font-size: 0.68rem; margin-left: 0; }
+}
+
+/* ======================================================================
+   ここから下がパッチ解説ドキュメント固有の部品
+   ====================================================================== */
+
+/* ドキュメント種別バッジ（ヘッダ右） ------------------------------------ */
+.doc-kind-badge {
+  margin-left: 12px;
+  padding: 2px 9px;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 20px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #fff;
+  white-space: nowrap;
+}
+
+/* パッチ見出し ---------------------------------------------------------- */
+.patch { padding-top: 8px; }
+.patch + .patch { margin-top: 3.5em; padding-top: 2.5em; border-top: 1px solid var(--border); }
+.eyebrow {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin: 0 0 6px;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.eyebrow .seq { color: var(--accent); font-weight: 700; }
+.eyebrow .sep { opacity: 0.45; }
+.patch > h2 {
+  font-size: 1.55rem;
+  line-height: 1.45;
+  margin: 0 0 0.5em;
+  padding-left: 12px;
+  border-left: 5px solid var(--accent);
+}
+.patch .lead { font-size: 1.02rem; margin: 0 0 1.4em; }
+
+/* 差分メタ情報 ---------------------------------------------------------- */
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 16px;
+  margin: 0 0 2em;
+  padding: 14px 18px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.88rem;
+}
+.facts > div { display: contents; }
+.facts dt {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+.facts dd {
+  margin: 0;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.facts .plus { color: var(--ok); }
+.facts .minus { color: var(--warn); }
+
+/* 節見出し（問題／設計／仕組み／落とし穴／テスト） ------------------------ */
+.content h3.step {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 2.2em 0 0.7em;
+  font-size: 1.12rem;
+  color: var(--text);
+}
+.step-mark {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+/* 採用と見送り ---------------------------------------------------------- */
+.choices { display: grid; gap: 14px; margin: 1.2em 0 1.8em; }
+.choice {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 14px 18px;
+}
+.choice p { margin: 0 0 0.6em; }
+.choice p:last-child { margin-bottom: 0; }
+.choice .take { font-weight: 700; }
+.choice .drop {
+  margin-top: 0.7em;
+  padding-top: 0.7em;
+  border-top: 1px dashed var(--border);
+  color: var(--muted);
+  font-size: 0.94rem;
+}
+.tag {
+  display: inline-block;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  margin-right: 10px;
+  vertical-align: 0.08em;
+  white-space: nowrap;
+}
+.tag-take { background: var(--accent-soft); color: var(--accent-dark); }
+.tag-drop { background: #edf1f5; color: var(--muted); }
+
+/* 端末実行例 ------------------------------------------------------------ */
+figure.term {
+  margin: 1.4em 0 0.6em;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1e2430;
+  text-align: left;
+}
+figure.term figcaption {
+  margin: 0;
+  padding: 7px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: #9aa6b8;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: left;
+}
+figure.term pre { margin: 0; border-radius: 0; }
+figure.term pre code { color: #cfe6da; }
+
+/* コード断片のキャプションと解説 ----------------------------------------- */
+figure.code {
+  margin: 1.4em 0 0.6em;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1e2430;
+  text-align: left;
+}
+figure.code figcaption {
+  margin: 0;
+  padding: 7px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  color: #9aa6b8;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+figure.code pre { margin: 0; border-radius: 0; }
+.code-note { margin: 0.7em 0 1.8em; }
+
+/* 落とし穴とテスト ------------------------------------------------------- */
+.notes { list-style: none; margin: 1.1em 0 1.8em; padding: 0; display: grid; gap: 12px; }
+.notes li { margin: 0; padding: 2px 0 2px 16px; border-left: 3px solid var(--border); }
+.notes.warn-list li { border-left-color: var(--warn); }
+.notes.ok-list li { border-left-color: var(--ok); }
+.notes h4 { margin: 0 0 0.25em; font-size: 0.98rem; }
+.notes p { margin: 0; font-size: 0.95rem; }
+
+/* 理解度チェック -------------------------------------------------------- */
+.quiz { margin-top: 3.5em; padding-top: 2.5em; border-top: 1px solid var(--border); }
+.scorebar {
+  position: sticky;
+  top: var(--header-h);
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  align-items: center;
+  margin: 1.4em 0 1.8em;
+  padding: 10px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+.scorebar .score { font-weight: 700; }
+.scorebar .track {
+  flex: 1 1 8rem;
+  min-width: 6rem;
+  height: 6px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.scorebar .fill { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.25s ease; }
+.scorebar .remain { color: var(--muted); }
+.scorebar button {
+  font: inherit;
+  font-size: 0.76rem;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.scorebar button:hover { border-color: var(--accent); color: var(--accent); }
+
+.q {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 18px 20px 14px;
+  margin: 0 0 16px;
+}
+.q-meta {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  margin: 0 0 0.5em;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.74rem;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.q-meta .q-no { color: var(--accent); font-weight: 700; }
+.q h4 { font-size: 1rem; margin: 0 0 0.9em; }
+.opts { display: grid; gap: 7px; }
+.opt {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.opt:hover:not(:disabled) { border-color: var(--accent); }
+.opt:disabled { cursor: default; }
+.opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.opt .opt-key {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--muted);
+  padding-top: 2px;
+}
+.opt.correct { border-color: var(--ok); background: var(--ok-soft); }
+.opt.correct .opt-key { color: var(--ok); }
+.opt.wrong { border-color: var(--warn); background: var(--warn-soft); }
+.opt.wrong .opt-key { color: var(--warn); }
+.q-feedback { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.q-feedback p { margin: 0; }
+.verdict {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.45em !important;
+}
+.verdict.ok { color: var(--ok); }
+.verdict.ng { color: var(--warn); }
+.why { font-size: 0.95rem; }
+.result {
+  margin-top: 24px;
+  padding: 18px 20px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+.result h4 { margin: 0 0 0.4em; font-size: 1.05rem; }
+.result p { margin: 0 0 0.4em; }
+.result ul { margin: 0.3em 0 0; padding-left: 1.4em; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+  html { scroll-behavior: auto; }
+}

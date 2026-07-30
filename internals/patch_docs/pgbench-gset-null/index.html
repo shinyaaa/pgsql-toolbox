@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="patch">
+  <title>pgbench \gset の SQL NULL 修正 精読ノート — PostgreSQL 20devel · 8f191a79617 · 2026-07-30</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ede9fe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#7c3aed',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#faf8ff',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f5f3ff',
+        clusterBorder:     '#c4b5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgbench \gset の SQL NULL 修正 精読ノート</a>
+    <span class="doc-kind-badge">パッチ解説</span>
+    <span class="version-badge">PostgreSQL 20devel · 8f191a79617 · 2026-07-30</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li>
+          <a class="chap-title" href="#p-gset-null">0001 \gset の SQL NULL</a>
+          <ol class="sect">
+            <li><a href="#p-gset-null-problem">問題</a></li>
+            <li><a href="#p-gset-null-design">設計</a></li>
+            <li><a href="#p-gset-null-code">仕組み</a></li>
+            <li><a href="#p-gset-null-gotchas">注意</a></li>
+            <li><a href="#p-gset-null-tests">検証</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="#quiz">理解度チェック</a>
+        </li>
+
+      </ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>pgbench \gset の SQL NULL 修正 精読ノート</h1>
+        <p class="version-hero">postgres / src/bin/pgbench — patch 0001 (single commit)</p>
+        <p class="lead">pgbench の \gset と \aset が SQL NULL を空文字列として格納していたため、その変数を式で使った瞬間にクライアントが恒久停止していた。1 コミットの修正だが、直せる範囲と直さない範囲の線引きに判断が集中している。このノートはその線引きを、コミットと実機の挙動で裏づけて解き明かす。</p>
+      </div>
+
+      <h2>このドキュメントの読み方</h2>
+      <p>パッチは 1 本で、機能変更は readCommandResponse() の格納ループ 1 か所だけである。したがって読みどころは差分の量ではなく、なぜ null 値を入れるのが正しく、なぜ文字列 "NULL" を入れるのでは足りないのか、そしてなぜ空文字列と拡張プロトコルのバインドには手を出さないのかという 3 つの判断にある。 全編を通じて頭に置いておく土台が 2 つある。1 つは変数の二重表現で、Variable は文字列側の svalue と値側の value を持ち、value.type == PGBT_NO_VALUE のあいだは未変換を意味する。式で初めて使われたときに makeVariableValue() が svalue から value を作り、この変換が失敗するとメタコマンドが失敗する。もう 1 つはクライアント状態機械で、メタコマンドの失敗は advanceConnectionState() の中で executeMetaCommand() が CSTATE_ABORTED を返すことで決まり、SQL 側のエラーとは通る経路が違う。</p>
+      <table><tr><th>ベースコミット</th><td>8f191a79617</td></tr><tr><th>パッチ本数</th><td>1 (235eaa3b7d0)</td></tr><tr><th>総差分</th><td>3 ファイル, 111 行追加, 3 行削除</td></tr><tr><th>機能変更の範囲</th><td>readCommandResponse() の格納ループのみ</td></tr><tr><th>TAP テスト</th><td>700 passed, 0 failed (001: 493 / 002: 207)</td></tr><tr><th>ネガティブ検証</th><td>pgbench.c だけ修正前に戻すと 001 が 13 件失敗</td></tr><tr><th>バックパッチ判断</th><td>master のみ (挙動変化を伴う)</td></tr></table>
+
+
+      <section class="patch" id="p-gset-null">
+        <p class="eyebrow"><span class="seq">0001</span><span class="sep">/</span><span>\gset の SQL NULL</span></p>
+        <h2>\gset と \aset が SQL NULL を null 値として格納する</h2>
+        <p class="lead">readCommandResponse() の格納ループは全列を無条件に PQgetvalue() で取り出していた。PQgetvalue() は SQL NULL に空文字列を返し、空文字列は pgbench の式言語では値として不正なので、その変数を初めて式で使ったところでクライアントが恒久停止していた。PQgetisnull() で判定し、NULL 列だけ setNullValue() と putVariableValue() で入れることで、\set varname NULL が作る表現と一致させる。空文字列と拡張プロトコルのパラメータバインドは意図的に触っていない。</p>
+        <dl class="facts"><div><dt>コミット</dt><dd>235eaa3b7d0</dd></div><div><dt>件名</dt><dd>Make pgbench \gset and \aset store SQL NULL as the null value</dd></div><div><dt>差分</dt><dd>3 files <span class="plus">+111</span> <span class="minus">&minus;3</span></dd></div></dl>
+
+<h3 class="step" id="p-gset-null-problem"><span class="step-mark">問題</span>何が足りなかったか</h3>
+        <p>壊れ方は関数名でつながる一本の連鎖である。PQgetvalue() は SQL NULL に対して空文字列を返すので、格納ループは svalue = "" と value.type = PGBT_NO_VALUE の変数を作る。その変数を初めて式で使うと makeVariableValue() が呼ばれ、slen == 0 の枝でメッセージを何も出さずに false を返す。false は evaluateExpr() を経て executeMetaCommand() の META_SET 分岐に届き、commandFailed() でログを出したうえで CSTATE_ABORTED をそのまま返す。呼び出し元は st-&gt;estatus に ESTATUS_META_COMMAND_ERROR を記録するだけなので、救済の述語は一度も評価されない。長時間の負荷試験では、NULL を踏んだクライアントが 1 本ずつ静かに消えていき、残ったクライアントで測り続けた tps だけが報告される。</p>
+<figure class="term">
+<figcaption>実行例</figcaption>
+<pre><code>$ cat work/tmp/null.sql
+SELECT NULL AS nv \gset
+\set i debug(:nv)
+$ pgbench -n -t 1 -f work/tmp/null.sql postgres
+pgbench (20devel)
+pgbench: error: client 0 aborted in command 1 (set) of script 0; evaluation of meta-command failed
+transaction type: work/tmp/null.sql
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+number of transactions per client: 1
+number of transactions actually processed: 0/1
+pgbench: error: Run was aborted; the above results are incomplete.
+$ pgbench -n -t 1 --max-tries=10 --continue-on-error -f work/tmp/null.sql postgres
+pgbench: error: client 0 aborted in command 1 (set) of script 0; evaluation of meta-command failed
+number of transactions actually processed: 0/1
+pgbench: error: Run was aborted; the above results are incomplete.</code></pre>
+</figure>
+<p class="code-note">メッセージは command 1 の \set を指しており、NULL にも \gset にも触れていない。原因が前の行の格納にあることは出力からは読み取れない。2 つ目の実行は救済オプションを両方付けたもので、結果が 1 つ目と 1 行も違わない。パッチ後は同じスクリプトが debug(script=0,command=2): null を出して processed: 1/1 で終わる。</p>
+
+<h3 class="step" id="p-gset-null-design"><span class="step-mark">設計</span>採った道と捨てた道</h3>
+        <div class="choices"><div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>PQgetisnull() が真の列だけ setNullValue() で null 値を作り、putVariableValue() で格納する。非 NULL 列は従来どおり putVariable() に PQgetvalue() の結果を渡す。</p>
+<p>putVariableValue() は svalue を free して NULL にし、value に渡された値をそのまま代入する。\set varname NULL も同じ putVariableValue() を通って PGBT_NULL の値を入れるので、\gset で作られる変数の内部表現が \set varname NULL の作るものと一致する。式言語側には PGBT_NULL、IS NULL、三値論理がすでに実装済みなので、表現をそろえるだけで追加の対応は要らない。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>文字列 "NULL" を putVariable() で入れる案。式の上は動いてしまう。makeVariableValue() には pg_strcasecmp(var-&gt;svalue, "null") == 0 の枝があり、そこで setNullValue() が呼ばれるからである。しかしこの案は SQL NULL とサーバが返した 4 文字のテキスト 'NULL' を区別できなくする。実機確認: SELECT 'NULL'::text AS s \gset に続けて \set i debug(:s) を実行すると debug(script=0,command=2): null が出る。つまり空文字列と NULL の混同を解消する代わりに、'NULL' と NULL の混同を持ち込むだけになる。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>判定するセルを PQgetisnull(res, ntuples - 1, fld) にして、値を取り出す PQgetvalue(res, ntuples - 1, fld) と同じセルを指させる。</p>
+<p>この格納ループは \gset と \aset で共有されている。\gset は ntuples != 1 を手前でエラーにするので ntuples - 1 は常に 0 だが、\aset は行数を制限せず最終行を採る仕様なので ntuples - 1 が 0 でない。判定と格納が同じセルを指していないと、変数に入った値と NULL 判定が別の行のものになる。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>行 0 を見る案。\gset では ntuples が 1 なので 0 と ntuples - 1 が一致し、\gset のテストは全部通ってしまう。壊れるのは \aset で複数行が返るときだけである。実機確認: PQgetisnull の行指定を 0 に変えてビルドすると、001_pgbench_with_server.pl のうち "pgbench aset command with NULL" の 4 アサーションだけが落ち、\gset 側は 1 件も落ちない。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>空文字列の扱いは変えない。PQgetisnull() が偽なら従来どおり putVariable() を通るので、makeVariableValue() の slen == 0 で false を返す枝はそのまま残る。</p>
+<p>サーバが返した空文字列を null 値にしてしまうと、このパッチが復元したばかりの「NULL と空文字列の区別」を再び潰すことになる。空文字列を式で使えるようにするかどうかは makeVariableValue() 側の設計問題で、\gset の格納とは独立している。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>slen == 0 も null 値として扱う案。1 行で書けるうえに再現手順のもう半分も直るので誘惑があるが、区別の復元という目的そのものを打ち消す。加えて \gset を経由しない \set v '' のような経路にも影響が及び、バグ修正のスコープを超える。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>拡張および prepared モードのパラメータバインドは変えず、ドキュメントに制限として書くだけにする。</p>
+<p>getQueryParams() は getVariable() の戻り値をそのまま libpq に渡し、getVariable() は value.type == PGBT_NULL を 4 文字の文字列 "NULL" にレンダリングする。したがって NULL 値の変数は文字列 'NULL' としてバインドされる。これは \set varname NULL の既存挙動そのもので、本修正が持ち込む退行ではない。実機確認: \set nv NULL と \gset 経由の NULL のどちらでも、-M prepared で TEXT 列に入れた結果は 4 文字の 'NULL' になる。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>同じパッチで本物の SQL null をバインドする案。getVariable() か getQueryParams() を変えることになるので \set varname NULL の既存挙動も同時に変わり、互換性の議論を呼ぶ。さらに未定義変数だけは getVariable() が NULL ポインタを返すため、すでに本物の SQL NULL がバインドされるという非対称がある。実機確認: 未定義変数を -M prepared で TEXT 列に INSERT すると、その行は v IS NULL が真になる。この非対称も一緒に整理しないと中途半端になるので、独立したパッチに分ける。</p>
+</div>
+</div>
+
+<h3 class="step" id="p-gset-null-code"><span class="step-mark">仕組み</span>コードを読む</h3>
+<figure>
+<pre class="mermaid">flowchart TD
+  A["gset / aset の格納ループ"] --> B{"PQgetisnull(res, ntuples - 1, fld)"}
+  B -- "真 (SQL NULL)" --> C["setNullValue() + putVariableValue()&lt;br/>svalue = NULL, value.type = PGBT_NULL"]
+  B -- "偽" --> D["putVariable()&lt;br/>svalue = 文字列, value.type = PGBT_NO_VALUE"]
+  C --> K["null 値として式で使える&lt;br/>IS NULL と三値論理が働く"]
+  D --> E["式で初めて使われる → makeVariableValue()"]
+  E --> F{"slen == 0"}
+  F -- "偽" --> J["int / double / boolean / null へ変換"]
+  F -- "真 (空文字列)" --> G["メッセージなしで false を返す"]
+  G --> H["executeMetaCommand() が CSTATE_ABORTED を返す&lt;br/>estatus は理由の記録のみ"]
+  H --> I["クライアント恒久停止 (finishCon)"]</pre>
+</figure>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / readCommandResponse() — 格納ループ (パッチの唯一の機能変更点)</figcaption>
+<pre><code>					for (int fld = 0; fld &lt; PQnfields(res); fld++)
+					{
+						char	   *varname = PQfname(res, fld);
+						bool		ok;
+
+						/* allocate varname only if necessary, freed below */
+						if (*varprefix != &#x27;\0&#x27;)
+							varname = psprintf(&quot;%s%s&quot;, varprefix, varname);
+
+						/*
+						 * Store the last row&#x27;s value: SQL NULL becomes the
+						 * null value, so that it can be tested for and used
+						 * in expressions, and anything else becomes a string.
+						 */
+						if (PQgetisnull(res, ntuples - 1, fld))
+						{
+							PgBenchValue nullval;
+
+							setNullValue(&amp;nullval);
+							ok = putVariableValue(&amp;st-&gt;variables, context,
+												  varname, &amp;nullval);
+						}
+						else
+							ok = putVariable(&amp;st-&gt;variables, context, varname,
+											 PQgetvalue(res, ntuples - 1, fld));</code></pre>
+</figure>
+<p class="code-note">判定と格納が同じ (ntuples - 1, fld) を指していることがこの片の要点である。ループの手前で context を 1 つの const char * に束ねているので、NULL 側と非 NULL 側で同じ文字列が渡り、両方の結果を bool ok に集めて既存の「error storing into variable」分岐を共有できる。NULL 側で PgBenchValue をローカルに置いているのは、putVariableValue() が受け取った値を var-&gt;value に構造体コピーするからで、呼び出しが返った後にこのローカルが消えても問題ない。varname の psprintf と pfree はループ内に閉じているので、どちらの経路を通っても解放は 1 回である。</p>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / makeVariableValue() — 冒頭 (パッチが触っていない、壊れていた判定)</figcaption>
+<pre><code>/* Try to convert variable to a value; return false on failure */
+static bool
+makeVariableValue(Variable *var)
+{
+	size_t		slen;
+
+	if (var-&gt;value.type != PGBT_NO_VALUE)
+		return true;			/* no work */
+
+	slen = strlen(var-&gt;svalue);
+
+	if (slen == 0)
+		/* what should it do on &quot;&quot;? */
+		return false;
+
+	if (pg_strcasecmp(var-&gt;svalue, &quot;null&quot;) == 0)
+	{
+		setNullValue(&amp;var-&gt;value);
+	}</code></pre>
+</figure>
+<p class="code-note">パッチ前に停止していたのは slen == 0 の枝である。コメントが「what should it do on ""?」で止まっているとおり、空文字列に何を割り当てるべきかが決まっていないまま false になる。ここで重要なのは冒頭の早期 return で、value.type != PGBT_NO_VALUE なら何もせず true を返す。putVariableValue() で入れた PGBT_NULL の変数はこの早期 return を素通りするので、パッチは slen == 0 の枝に一切近づかない。pg_strcasecmp(var-&gt;svalue, "null") の枝が存在することが、文字列 "NULL" を入れる案が「動いてしまう」理由でもある。</p>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / putVariableValue() — 全体 (パッチが依存する既存関数)</figcaption>
+<pre><code>/* Assign a value to a variable, creating it if need be */
+/* Returns false on failure (bad name) */
+static bool
+putVariableValue(Variables *variables, const char *context, char *name,
+				 const PgBenchValue *value)
+{
+	Variable   *var;
+
+	var = lookupCreateVariable(variables, context, name);
+	if (!var)
+		return false;
+
+	free(var-&gt;svalue);
+	var-&gt;svalue = NULL;
+	var-&gt;value = *value;
+
+	return true;
+}</code></pre>
+</figure>
+<p class="code-note">svalue を free して NULL にしたうえで value を代入する 3 行が、内部表現の一致を保証している。svalue が NULL になるので getVariable() は「文字列形式を持っていない」経路に入り、そこで PGBT_NULL を 4 文字の "NULL" にレンダリングする。この関数は \set varname NULL の実行時にも同じ形で呼ばれるため、\gset 由来の NULL 変数と \set 由来の NULL 変数は以降の全経路で区別が付かない。表現をそろえることが目的だったので、putVariable() で文字列を入れる案では svalue が残ってしまい目標を外す。</p>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / advanceConnectionState() — メタコマンドの dispatch (パッチが触っていない)</figcaption>
+<pre><code>					/*-----
+					 * Possible state changes when executing meta commands:
+					 * - on errors CSTATE_ABORTED
+					 * - on sleep CSTATE_SLEEP
+					 * - else CSTATE_END_COMMAND
+					 */
+					st-&gt;state = executeMetaCommand(st, &amp;now);
+					if (st-&gt;state == CSTATE_ABORTED)
+						st-&gt;estatus = ESTATUS_META_COMMAND_ERROR;</code></pre>
+</figure>
+<p class="code-note">救済オプションが効かない理由がここにある。executeMetaCommand() は式評価の失敗時に CSTATE_ABORTED を返し、呼び出し元はそれを見てから st-&gt;estatus に理由を記録する。つまり状態はすでに確定しており、canRetryError() も canContinueOnError() もこの経路では一度も呼ばれない。estatus は報告と集計のために設定されるだけである。\gset 自体の行数エラーは readCommandResponse() が estatus を立てて CSTATE_WAIT_RESULT 側へ戻るので、そちらでは救済の述語が評価される。同じ ESTATUS_META_COMMAND_ERROR でも通る経路が違う。</p>
+<figure class="code">
+<figcaption>src/bin/pgbench/pgbench.c / canRetryError(), canContinueOnError() — 全体 (パッチが触っていない)</figcaption>
+<pre><code>/*
+ * Returns true if this type of error can be retried.
+ */
+static bool
+canRetryError(EStatus estatus)
+{
+	return (estatus == ESTATUS_SERIALIZATION_ERROR ||
+			estatus == ESTATUS_DEADLOCK_ERROR);
+}
+
+/*
+ * Returns true if --continue-on-error is specified and this error allows
+ * processing to continue.
+ */
+static bool
+canContinueOnError(EStatus estatus)
+{
+	return (continue_on_error &amp;&amp;
+			estatus == ESTATUS_OTHER_SQL_ERROR);
+}</code></pre>
+</figure>
+<p class="code-note">述語が列挙している状態に ESTATUS_META_COMMAND_ERROR は含まれていない。したがって仮に前の片の dispatch が救済の述語を通る形だったとしても、結論は CSTATE_ABORTED のままである。この 2 つの述語を広げて救済する案を採らなかったのは、NULL の格納は誤りであって再試行や継続の対象ではないからである。同じ NULL を引き直しても結果は同じで、リトライは無限に失敗する。この 2 関数を引用したのは、パッチが「回復手段を足す」方向を選ばなかったことを読者が確認できるようにするためである。</p>
+
+<h3 class="step" id="p-gset-null-gotchas"><span class="step-mark">注意</span>落とし穴</h3>
+        <ul class="notes warn-list"><li><h4>救済オプションが存在しない停止だった</h4><p>--max-tries も --continue-on-error も効かない。canRetryError() が真を返すのは ESTATUS_SERIALIZATION_ERROR と ESTATUS_DEADLOCK_ERROR だけ、canContinueOnError() が扱うのは ESTATUS_OTHER_SQL_ERROR だけである。さらに \set の式評価失敗の経路では、そもそもこの 2 つの述語が評価されない。実機確認: --max-tries=10 --continue-on-error を両方付けても出力は素の実行と 1 行も違わない。</p></li>
+<li><h4>空文字列は直っていない</h4><p>サーバが返した空文字列を式で使うと、パッチ後も同じ理由で停止する。実機確認: SELECT ''::text AS es \gset に続けて \set i debug(:es) を実行すると、パッチ後のバイナリでも client 0 aborted in command 1 (set) と processed: 0/1 になる。これは makeVariableValue() の slen == 0 の枝が残っているためで、意図的にスコープ外にしてある。</p></li>
+<li><h4>拡張と prepared モードでは 4 文字の文字列 'NULL' がバインドされる</h4><p>NULL 値の変数を SQL に埋めると、simple モードでは無引用の NULL がテキストとして展開されて SQL NULL になるが、拡張と prepared モードでは getVariable() がレンダリングした 4 文字の文字列がパラメータとして渡る。実機確認: -M prepared で TEXT 列に INSERT すると v = 'NULL' かつ length(v) = 4 になる。\set nv NULL でも同じ結果なので、これは本修正の退行ではない。</p></li>
+<li><h4>未定義変数だけは本物の SQL NULL がバインドされる</h4><p>getVariable() は変数が見つからないと NULL ポインタを返し、それがそのまま libpq のパラメータになるので SQL NULL としてバインドされる。実機確認: 未定義変数を -M prepared で TEXT 列に INSERT すると、その行は v IS NULL が真になる。つまり「NULL 値の変数」と「存在しない変数」で結果が逆になるという非対称が残っている。別パッチの案件である。</p></li>
+<li><h4>テキスト補間の結果が黙って変わる互換性の穴</h4><p>パッチ前に NULL を捕まえてテキスト補間していたスクリプトは、空文字列ではなく NULL が埋まるようになる。無引用の位置なら以前は SQL 構文エラーになっていたので気づけるが、引用符の中に埋めていた場合はエラーにならない。実機確認: パッチ前のバイナリで INSERT INTO t VALUES (':nv'); を実行すると length 0 の空文字列が入り、processed: 1/1 で正常終了する。パッチ後は同じスクリプトが 4 文字の 'NULL' を入れる。この黙った値の変化が、バックパッチを master のみと判断した理由である。</p></li>
+<li><h4>行が無いことと、行はあるが NULL であることは別物</h4><p>\aset で結果が 0 行のときは格納ループの手前で break するので、変数はそもそも作られない。その変数を式で使うと undefined variable のエラーになり、これも CSTATE_ABORTED である。パッチはこの経路を変えていない。\gset の場合は 0 行が expected one row, got 0 のエラーになる。どちらも「NULL が格納される」ケースとは別の失敗であり、本パッチでは直らない。</p></li>
+<li><h4>もっともらしく動いてしまう実装ミスが 2 種類ある</h4><p>レビューで疑うべき点はこの 2 つである。1 つは判定セルを行 0 にすること。\gset のテストは全部通るので、\aset の複数行ケースを試すまで気づけない。もう 1 つは文字列 "NULL" を putVariable() で入れること。makeVariableValue() の pg_strcasecmp の枝があるので式は正しく動き、IS NULL も通る。どちらも「エラーが出ない」形で間違うので、出力を見ただけでは判別できない。</p></li>
+</ul>
+
+<h3 class="step" id="p-gset-null-tests"><span class="step-mark">検証</span>テストが固定していること</h3>
+        <ul class="notes ok-list"><li><h4>NULL を捕まえた変数が式で使えて、IS NULL が真になる</h4><p>src/bin/pgbench/t/001_pgbench_with_server.pl の "pgbench gset command with NULL"。SELECT NULL AS nv \gset に \set i debug(:nv) と \set i debug(:nv IS NULL) を続け、終了コード 0、stdout に processed: 1/1、stderr に command=2.: null と command=3.: boolean true を要求する。PQgetisnull() を見ない実装に戻すと command=2 に到達する前に abort するので、stderr の 2 本と終了コードが同時に落ちる。</p></li>
+<li><h4>NULL と空文字列が補間で区別される</h4><p>同ファイルの "pgbench gset NULL interpolation" と、続く 2 つの is()。UNLOGGED テーブル gset_null_tab に SELECT NULL AS nv, ''::text AS es \gset の結果を 2 行 INSERT し、safe_psql で id = 1 の t IS NULL が t、id = 2 の t = '[]' が t であることを検証する。空文字列も null 値として扱う実装にすると 2 つ目の is() が落ちる。</p></li>
+<li><h4>prepared モードでは文字列 'NULL' がバインドされる</h4><p>同ファイルの "pgbench gset NULL as query parameter" と、続く is()。-M prepared で NULL 値の変数を TEXT 列に INSERT し、safe_psql で t = 'NULL' が t であることを検証する。将来 getQueryParams() を変えて本物の SQL null をバインドするなら、意図的な変更としてこのテストを直すことになる。逆に言えば、この非互換を無自覚に持ち込むことはできない。</p></li>
+<li><h4>\aset で判定セルと格納セルが一致している</h4><p>同ファイルの "pgbench aset command with NULL"。VALUES (1), (NULL) を ORDER BY 1 NULLS LAST と NULLS FIRST の 2 通りで \aset し、stderr に command=2.: null と command=4.: int 1 を要求する。実測: PQgetisnull の行指定を ntuples - 1 から 0 に変えると、このケースの 4 アサーションだけが落ち、\gset 側は 1 件も落ちない。この 2 通りを 1 つのスクリプトに入れてあるので、判定を固定側の行に寄せる実装ミスはどちらかで必ず露見する。</p></li>
+<li><h4>0 行では変数が作られないという既存の境界が保たれている</h4><p>同ファイルの既存ケース "pgbench aset command with empty result"。0 行を返す \aset のあとに \set i debug(:i8) を置き、終了コード 2、stderr に undefined variable "i8" と evaluation of meta-command failed を要求する。パッチはこのケースに手を入れていないので、0 行を NULL として扱う方向に踏み込んだ実装はここで落ちる。</p></li>
+</ul>
+      </section>
+
+
+      <section class="quiz" id="quiz">
+        <h2>理解度チェック</h2>
+        <p>全 4 問。選ぶと即座に正誤と解説が出る。間違えた節は最後にまとめて示すので、そこだけ読み返せばよい。</p>
+        <div class="scorebar">
+          <span class="score" id="score">0 / 4 正解</span>
+          <span class="track"><span class="fill" id="fill"></span></span>
+          <span class="remain" id="remain">未回答 4</span>
+          <button type="button" id="reset">最初からやり直す</button>
+        </div>
+        <article class="q" data-answer="0" data-anchor="p-gset-null" data-patch="\gset の SQL NULL">
+          <p class="q-meta"><span class="q-no">Q01</span><a href="#p-gset-null">0001 \gset の SQL NULL</a></p>
+          <h4>格納ループの NULL 判定に PQgetisnull(res, ntuples - 1, fld) を使い、行番号を 0 にしない理由として正しいものはどれか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="0" data-o="0"><span class="opt-key">A</span><span class="opt-text">このループは \aset と共有されており、\aset は行数を制限せず最終行を採るので、行 0 では判定と値が別の行を指すことがある</span></button>
+<button type="button" class="opt" data-q="0" data-o="1"><span class="opt-key">B</span><span class="opt-text">PQgetisnull は先頭行に対してだけ結果をキャッシュしないので、行 0 を渡すと毎回サーバへ問い合わせが飛ぶ</span></button>
+<button type="button" class="opt" data-q="0" data-o="2"><span class="opt-key">C</span><span class="opt-text">列の順序と行の順序が PQnfields で入れ替わるため、行番号は列数から逆算しなければならない</span></button>
+<button type="button" class="opt" data-q="0" data-o="3"><span class="opt-key">D</span><span class="opt-text">\gset は ntuples != 1 をエラーにするため、行 0 を渡すと ntuples が 1 のときに範囲外アクセスになる</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">\gset だけを見ると ntuples は必ず 1 なので 0 と ntuples - 1 は同じ値になり、行 0 でも通ってしまう。差が出るのは行数を制限しない \aset のときだけである。実測でも、行指定を 0 に変えると落ちるのは "pgbench aset command with NULL" の 4 アサーションだけで、\gset のケースは 1 件も落ちない。選択肢 D が最も誘惑的で、\gset が行数を検査するという前提は正しいが、そこから導かれるのは「\gset では 0 と ntuples - 1 が一致する」であって範囲外アクセスではない。B は PQgetisnull が PGresult 上のローカル操作である事実に反する。D は行と列を取り違えている。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="2" data-anchor="p-gset-null" data-patch="\gset の SQL NULL">
+          <p class="q-meta"><span class="q-no">Q02</span><a href="#p-gset-null">0001 \gset の SQL NULL</a></p>
+          <h4>NULL 列に対して setNullValue() + putVariableValue() ではなく、文字列 "NULL" を putVariable() で格納する案を採ったとすると、何が起きるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="1" data-o="0"><span class="opt-key">A</span><span class="opt-text">svalue が設定されないため getVariable() が NULL ポインタを返し、SQL への補間がその場で失敗する</span></button>
+<button type="button" class="opt" data-q="1" data-o="1"><span class="opt-key">B</span><span class="opt-text">IS NULL が偽になるため、三値論理を使うスクリプトが黙って別の分岐に入る</span></button>
+<button type="button" class="opt" data-q="1" data-o="2"><span class="opt-key">C</span><span class="opt-text">式の評価は正しく動くが、SQL NULL とサーバが返したテキスト 'NULL' を区別できなくなる</span></button>
+<button type="button" class="opt" data-q="1" data-o="3"><span class="opt-key">D</span><span class="opt-text">makeVariableValue() が "NULL" を整数として解釈しようとして、strtoint64 のオーバーフロー検査で失敗する</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">makeVariableValue() には pg_strcasecmp(var-&gt;svalue, "null") == 0 の枝があり、そこで setNullValue() が呼ばれるので式の上は動く。この「動いてしまう」ことが厄介で、代わりに SQL NULL とテキストの 'NULL' が同じ表現になる。実機でも SELECT 'NULL'::text AS s \gset のあと debug(:s) は null を出す。選択肢 B が最も誘惑的だが、いま述べた pg_strcasecmp の枝があるので IS NULL は真になる。B は同じ枝が整数解釈より先に来るので成り立たない。D は putVariable() が svalue を必ず設定するので逆で、svalue が NULL になるのは putVariableValue() を使う採用案の側である。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="1" data-anchor="p-gset-null" data-patch="\gset の SQL NULL">
+          <p class="q-meta"><span class="q-no">Q03</span><a href="#p-gset-null">0001 \gset の SQL NULL</a></p>
+          <h4>パッチ適用後のバイナリで、SELECT ''::text AS es \gset に続けて \set i debug(:es) を実行すると何が起きるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="2" data-o="0"><span class="opt-key">A</span><span class="opt-text">空文字列は長さ 0 の文字列値として扱われ、debug が空の値を出して正常終了する</span></button>
+<button type="button" class="opt" data-q="2" data-o="1"><span class="opt-key">B</span><span class="opt-text">makeVariableValue() の slen == 0 の枝で false が返り、パッチ前と同じくクライアントが停止する</span></button>
+<button type="button" class="opt" data-q="2" data-o="2"><span class="opt-key">C</span><span class="opt-text">空文字列も PQgetisnull が真と報告するため、null 値として格納され debug が null を出す</span></button>
+<button type="button" class="opt" data-q="2" data-o="3"><span class="opt-key">D</span><span class="opt-text">格納ループの手前で break するため変数が作られず、undefined variable のエラーになる</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">PQgetisnull() は空文字列に対して偽を返すので、この列は従来どおり putVariable() の経路を通る。makeVariableValue() の slen == 0 の枝は意図的に残してあるため、停止の仕組みはパッチ前と変わらない。実機確認でもパッチ後のバイナリで processed: 0/1 になる。選択肢 C が最も誘惑的だが、PQgetvalue() が NULL と空文字列の両方に "" を返すことと、PQgetisnull() が両者を区別することは別の話である。C は pgbench の式言語に文字列型が無いので成り立たない。D は結果が 1 行返っているので break の条件を満たさない。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-gset-null" data-patch="\gset の SQL NULL">
+          <p class="q-meta"><span class="q-no">Q04</span><a href="#p-gset-null">0001 \gset の SQL NULL</a></p>
+          <h4>\gset で NULL を捕まえた変数を -M prepared で SQL に埋めた場合、サーバに渡るものはどれか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="3" data-o="0"><span class="opt-key">A</span><span class="opt-text">PGBT_NULL 型のバイナリパラメータとして渡り、列の型に応じて null に解釈される</span></button>
+<button type="button" class="opt" data-q="3" data-o="1"><span class="opt-key">B</span><span class="opt-text">無引用の NULL がクエリ本文に展開され、サーバ側で SQL null として解釈される</span></button>
+<button type="button" class="opt" data-q="3" data-o="2"><span class="opt-key">C</span><span class="opt-text">svalue が NULL なので libpq に NULL ポインタが渡り、SQL null としてバインドされる</span></button>
+<button type="button" class="opt" data-q="3" data-o="3"><span class="opt-key">D</span><span class="opt-text">getVariable() がレンダリングした 4 文字の文字列 'NULL' がパラメータとして渡る</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">getQueryParams() は getVariable() の戻り値をそのまま libpq に渡し、getVariable() は svalue が NULL のとき value.type == PGBT_NULL を "NULL" という文字列にレンダリングする。実機でも TEXT 列に length 4 の 'NULL' が入る。これは \set varname NULL の既存挙動と同じで、本修正の退行ではない。選択肢 C が最も誘惑的で、putVariableValue() が svalue を NULL にするのは事実だが、getVariable() はその場合に文字列形式を作って返すので NULL ポインタは外に出ない。NULL ポインタが渡るのは変数そのものが未定義のときだけである。C は simple モードの挙動で、モードを取り違えている。D は pgbench が全パラメータをテキスト形式で送るので成り立たない。</p>
+          </div>
+        </article>
+
+        <div class="result" id="result" hidden>
+          <h4 id="result-title"></h4>
+          <p id="result-body"></p>
+          <ul id="result-list"></ul>
+        </div>
+      </section>
+    </main>
+  </div>
+  <footer class="site-footer">ブランチ fix-pgbench-gset-null。パッチは work/fix-pgbench-gset-null/v1-0001-*.patch (base 8f191a79617)。</footer>
+
+  <script>
+  (function () {
+    var total = 4;
+    var answered = 0, correct = 0, wrong = {};
+    var scoreEl = document.getElementById('score');
+    var fillEl = document.getElementById('fill');
+    var remainEl = document.getElementById('remain');
+    var resultEl = document.getElementById('result');
+    var resultTitle = document.getElementById('result-title');
+    var resultBody = document.getElementById('result-body');
+    var resultList = document.getElementById('result-list');
+
+    function refresh() {
+      scoreEl.textContent = correct + ' / ' + total + ' 正解';
+      fillEl.style.width = (answered ? (correct / total) * 100 : 0) + '%';
+      remainEl.textContent = answered < total ? ('未回答 ' + (total - answered)) : '回答完了';
+      if (answered === total) {
+        var names = Object.keys(wrong);
+        resultTitle.textContent = correct + ' / ' + total + ' 正解';
+        if (names.length === 0) {
+          resultBody.textContent = '全問正解。各パッチの設計判断と落とし穴を押さえられている。';
+          resultList.innerHTML = '';
+        } else {
+          resultBody.textContent = '取りこぼしのあった節を読み返すと効率がよい。';
+          resultList.innerHTML = names.map(function (a) {
+            return '<li><a href="#' + a + '">' + wrong[a].label + '</a>（' + wrong[a].count + ' 問）</li>';
+          }).join('');
+        }
+        resultEl.hidden = false;
+      } else {
+        resultEl.hidden = true;
+      }
+    }
+
+    document.querySelectorAll('.q').forEach(function (q) {
+      var answer = parseInt(q.dataset.answer, 10);
+      q.querySelectorAll('.opt').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          if (q.dataset.done) return;
+          q.dataset.done = '1';
+          var picked = parseInt(btn.dataset.o, 10);
+          var ok = picked === answer;
+          answered++;
+          if (ok) {
+            correct++;
+          } else {
+            var key = q.dataset.anchor;
+            if (!wrong[key]) wrong[key] = { label: q.dataset.patch, count: 0 };
+            wrong[key].count++;
+          }
+          q.querySelectorAll('.opt').forEach(function (b) {
+            var idx = parseInt(b.dataset.o, 10);
+            b.disabled = true;
+            if (idx === answer) b.classList.add('correct');
+            else if (idx === picked) b.classList.add('wrong');
+          });
+          var fb = q.querySelector('.q-feedback');
+          var verdict = fb.querySelector('.verdict');
+          verdict.textContent = ok ? '正解' : '不正解 — 正解は ' + String.fromCharCode(65 + answer);
+          verdict.className = 'verdict ' + (ok ? 'ok' : 'ng');
+          fb.hidden = false;
+          refresh();
+        });
+      });
+    });
+
+    document.getElementById('reset').addEventListener('click', function () {
+      answered = 0; correct = 0; wrong = {};
+      document.querySelectorAll('.q').forEach(function (q) {
+        delete q.dataset.done;
+        q.querySelector('.q-feedback').hidden = true;
+        q.querySelectorAll('.opt').forEach(function (b) {
+          b.disabled = false;
+          b.classList.remove('correct', 'wrong');
+        });
+      });
+      refresh();
+      document.getElementById('quiz').scrollIntoView({ block: 'start' });
+    });
+
+    refresh();
+  })();
+  </script>
+</body>
+</html>
