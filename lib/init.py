@@ -17,6 +17,7 @@ from typing import Dict, Optional
 
 from lib.config import (
     CLAUDE_BUSY_TIMEOUT,
+    CLAUDE_RC_TIMEOUT,
     CLAUDE_STARTUP_BUFFER,
     CLAUDE_STARTUP_POLL_INTERVAL,
     CLAUDE_STARTUP_TIMEOUT,
@@ -541,14 +542,20 @@ _CLAUDE_COMMAND = "claude"
 _SESSION_URL_RE = re.compile(r"https://claude\.ai/code/\S+")
 
 
+def _pane_session_urls(session: str) -> list:
+    """Return every Claude Code session URL visible in the pane, in order."""
+    return _SESSION_URL_RE.findall(_capture_pane(session))
+
+
 def _claude_session_url(session: str) -> str:
     """Extract the Claude Code session URL from the tmux pane.
 
     Claude Code prints this URL on startup when /remote-control is active;
-    returns "" when it is not shown.
+    returns "" when it is not shown. The last one wins: a pane can hold
+    several, and the most recently printed is the current session.
     """
-    match = _SESSION_URL_RE.search(_capture_pane(session))
-    return match.group(0) if match else ""
+    urls = _pane_session_urls(session)
+    return urls[-1] if urls else ""
 
 
 def _send_keys(session: str, *keys: str, literal: bool = False):
@@ -685,40 +692,69 @@ def _rename_claude_session(session: str, branch: str, attempts: int = 3) -> bool
     return False
 
 
-def _enable_remote_control(session: str, attempts: int = 3) -> str:
-    """Send /rc to enable Remote Control and return the session URL.
+def _wait_for_new_session_url(session: str, before: list) -> str:
+    """Wait for a session URL that the pane did not already show.
 
-    Teleported sessions start without Remote Control, so Claude Code prints
-    no session URL. The /rc (/remote-control) command enables it, at which
-    point the canonical https://claude.ai/code/... URL appears in the pane.
-    Returns that URL, or "" if it never showed up.
+    `before` is the URL list captured just before the Remote Control command
+    was submitted. A URL counts as new when one more is on screen than before,
+    or when the list changed (an older URL scrolled off as the new one was
+    printed). Returns the newest URL, or "" on timeout.
+    """
+    deadline = time.monotonic() + CLAUDE_RC_TIMEOUT
+    while True:
+        urls = _pane_session_urls(session)
+        if urls and (len(urls) > len(before) or urls != before):
+            return urls[-1]
+        if time.monotonic() >= deadline:
+            return ""
+        time.sleep(CLAUDE_STARTUP_POLL_INTERVAL)
+
+
+def _enable_remote_control(session: str, attempts: int = 3) -> str:
+    """Enable Remote Control and return the URL Claude Code prints for it.
+
+    Sessions that were not started from the cloud have Remote Control off, so
+    Claude Code prints no session URL. /remote-control (alias /rc) enables it,
+    at which point the canonical https://claude.ai/code/... URL appears in the
+    pane. Returns that URL, or "" if it never showed up.
+
+    Only a URL printed *after* the command is submitted is accepted. A URL
+    already on screen proves nothing: a pane that has been running a while can
+    still show the URL of a Remote Control session that has since dropped —
+    exactly the state the resume path is called in. Returning that stale URL
+    is what makes the dashboard link to a session claude.ai reports as
+    offline, so each attempt records what is on screen first and waits for
+    something new.
     """
     for attempt in range(1, attempts + 1):
-        # If Remote Control is already active (e.g. from a prior attempt), the
-        # URL is already on screen; return it rather than toggling /rc again.
-        url = _claude_session_url(session)
-        if url:
-            return url
+        before = _pane_session_urls(session)
         # Clear any leftover input from a previous attempt.
         _send_keys(session, "C-u")
         time.sleep(0.5)
-        _send_keys(session, "/rc", literal=True)
-        time.sleep(CLAUDE_STARTUP_BUFFER)
-        # /rc takes no argument, so the slash-command autocomplete popup may
-        # still be open: the first Enter closes it (or selects the command),
-        # the second submits. A redundant Enter on an empty prompt is a no-op,
-        # so this is safe whichever way the popup behaves.
-        _send_keys(session, "Enter")
-        time.sleep(0.5)
-        _send_keys(session, "Enter")
-        # Give Claude Code a moment to connect and print the URL.
-        for _ in range(6):
-            time.sleep(1)
-            url = _claude_session_url(session)
-            if url:
-                return url
+        if attempt == 1:
+            # /rc takes no argument, so the slash-command autocomplete popup
+            # may still be open: the first Enter closes it (or selects the
+            # command), the second submits. A redundant Enter on an empty
+            # prompt is a no-op, so this is safe whichever way it behaves.
+            _send_keys(session, "/rc", literal=True)
+            time.sleep(CLAUDE_STARTUP_BUFFER)
+            _send_keys(session, "Enter")
+            time.sleep(0.5)
+            _send_keys(session, "Enter")
+        else:
+            # Retry with the command spelled out and terminated by a space,
+            # which closes the popup outright (the trick /rename relies on),
+            # so a single Enter submits it. This also covers a release where
+            # the /rc alias no longer matches.
+            _send_keys(session, "/remote-control ", literal=True)
+            time.sleep(CLAUDE_STARTUP_BUFFER)
+            _send_keys(session, "Enter")
+        url = _wait_for_new_session_url(session, before)
+        if url:
+            return url
         logger.info(
-            f"  /rc attempt {attempt}/{attempts} produced no URL; retrying"
+            f"  Remote Control attempt {attempt}/{attempts} printed no new "
+            f"session URL; pane tail:\n{_pane_tail(session)}"
         )
     return ""
 
@@ -950,8 +986,10 @@ def resume_claude_session(branch: str) -> tuple:
             logger.warning(f"Could not store Claude Code session URL: {e}")
     else:
         logger.warning(
-            "Could not confirm Remote Control; "
-            f"enable it manually in the session with: /rc"
+            "Could not confirm Remote Control: no new session URL was printed. "
+            "Any CC link the dashboard still shows is from an earlier session "
+            "and claude.ai will report it offline. Enable it manually in the "
+            f"session with: /rc  (tmux attach -t {session})"
         )
 
     if reused:

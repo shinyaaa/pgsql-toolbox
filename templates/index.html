@@ -1530,9 +1530,15 @@ async function resumeClaude(name) {
     const resp = await fetch(`/api/branches/${encodeURIComponent(name)}/claude/resume`, { method: 'POST' });
     const data = await resp.json();
     if (data.ok) {
-      const rc = data.url ? ' — Remote Control enabled' : ' — Remote Control unconfirmed (run /rc in the session)';
       const what = data.reused ? 'Claude Code already running, reconnected' : 'Claude Code resumed';
-      showToast(`${name}: ${what}${rc}`, 'success', 6000);
+      if (data.url) {
+        showToast(`${name}: ${what} — Remote Control enabled`, 'success', 6000);
+      } else {
+        // No new session URL means Remote Control never reconnected, so the CC
+        // link (if any) still points at the dropped session and claude.ai
+        // shows it as offline.
+        showToast(`${name}: ${what}, but Remote Control did not reconnect — run /rc in the session (tmux attach -t ${name})`, 'error', 10000);
+      }
     } else {
       showToast(`${name}: Claude resume failed - ${data.error}`, 'error', 8000);
     }
