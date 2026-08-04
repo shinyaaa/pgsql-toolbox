@@ -1,0 +1,1113 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="patch">
+  <title>oldest xmin blocker 2案 精読ノート — PostgreSQL 20devel · d007800f02a · 2026-08-04</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ede9fe',
+        primaryTextColor:  '#1a202c',
+        primaryBorderColor:'#7c3aed',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#faf8ff',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#f5f3ff',
+        clusterBorder:     '#c4b5fd',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">oldest xmin blocker 2案 精読ノート</a>
+    <span class="doc-kind-badge">パッチ解説</span>
+    <span class="version-badge">PostgreSQL 20devel · d007800f02a · 2026-08-04</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+        <li>
+          <a class="chap-title" href="#p-v9-infra">v9-0001 ブロッカー特定基盤</a>
+          <ol class="sect">
+            <li><a href="#p-v9-infra-problem">問題</a></li>
+            <li><a href="#p-v9-infra-design">設計</a></li>
+            <li><a href="#p-v9-infra-code">仕組み</a></li>
+            <li><a href="#p-v9-infra-gotchas">注意</a></li>
+            <li><a href="#p-v9-infra-tests">検証</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="#p-v9-log">v9-0002 blocker のログ報告</a>
+          <ol class="sect">
+            <li><a href="#p-v9-log-problem">問題</a></li>
+            <li><a href="#p-v9-log-design">設計</a></li>
+            <li><a href="#p-v9-log-code">仕組み</a></li>
+            <li><a href="#p-v9-log-gotchas">注意</a></li>
+            <li><a href="#p-v9-log-tests">検証</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="#p-v1-inloop">v1-0001 v1: ループ内捕捉</a>
+          <ol class="sect">
+            <li><a href="#p-v1-inloop-problem">問題</a></li>
+            <li><a href="#p-v1-inloop-design">設計</a></li>
+            <li><a href="#p-v1-inloop-code">仕組み</a></li>
+            <li><a href="#p-v1-inloop-gotchas">注意</a></li>
+            <li><a href="#p-v1-inloop-tests">検証</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="#p-v1-warning">v1-0002 WARNING の実名化</a>
+          <ol class="sect">
+            <li><a href="#p-v1-warning-problem">問題</a></li>
+            <li><a href="#p-v1-warning-design">設計</a></li>
+            <li><a href="#p-v1-warning-code">仕組み</a></li>
+            <li><a href="#p-v1-warning-gotchas">注意</a></li>
+            <li><a href="#p-v1-warning-tests">検証</a></li>
+          </ol>
+        </li>
+        <li>
+          <a class="chap-title" href="#quiz">理解度チェック</a>
+        </li>
+
+      </ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>oldest xmin blocker 2案 精読ノート</h1>
+        <p class="version-hero">postgres / VACUUM · procarray — Shinya v9 (0001–0002) と Bharath v1 (0001–0002) の対比</p>
+        <p class="lead">VACUUM が「dead but not yet removable」を残したとき、何が oldest xmin horizon を握っているのかをログに出す機能に、pgsql-hackers 上で 2 つの実装案が出ている。このノートは同じベースコミットに両案を適用し、4 コミットを「問題 → 設計 → 仕組み → 落とし穴 → テスト」の順に読み解く。両案の分かれ目は、ブロッカーを ComputeXidHorizons() のループ内で拾うか、確定した horizon への等値スキャンで後から特定するかの一点にある。</p>
+      </div>
+
+      <h2>このドキュメントの読み方</h2>
+      <p>章は 2 系列 4 本で、v9-0001 と v9-0002 が Shinya Kato の案（スレッド本流、CF 6188）、v1-0001 と v1-0002 が Bharath Rupireddy の対案（2026-07-14 投稿）である。どの章も土台は同じ 2 つで、まず ComputeXidHorizons() がループ内で xmin = TransactionIdOlder(xmin, xid) と xid と xmin を 1 つの値に折り畳んで min-reduction を回すこと、そして最終的な horizon はスロット由来の xmin をループ後に適用するまで確定しないことを頭に置くと迷わない。v9 はこの性質を理由に「確定した horizon に等値一致する候補を全部集めて後からランク付けする」別スキャン（GetXidHorizonBlockers()）を建て、v1 は「ループが既に ProcArrayLock を握っているのだからその場の argmin で拾う」ことを選ぶ。同着（複数の proc が同じ値で horizon に並ぶ）をどう扱うかが両設計の分水嶺で、本文の実行例はすべて本日この 2 つのビルドで実測したものである。</p>
+      <table><tr><th>ベースコミット</th><td>d007800f02a (PostgreSQL 20devel)</td></tr><tr><th>v9 シリーズ</th><td>2 本 · 8 ファイル · +1,048 / −21 行 (4d87d9bfc82, d3c0335967f)</td></tr><tr><th>v1 シリーズ</th><td>2 本 · 16 ファイル · +651 / −10 行 (git am 適用: b1b14e555db, 4062f17a355)</td></tr><tr><th>TAP テスト</th><td>v9: 015_log_vacuum_blockers.pl 9 subtests pass · v1: 055_vacuum_oldest_xmin_blocker.pl 8 subtests pass</td></tr><tr><th>検証</th><td>クリーンな d007800f02a に両案を別ツリーでビルドし、端末出力はすべて実測 (2026-08-04)</td></tr></table>
+
+
+      <section class="patch" id="p-v9-infra">
+        <p class="eyebrow"><span class="seq">v9-0001</span><span class="sep">/</span><span>ブロッカー特定基盤</span></p>
+        <h2>xid horizon を止めている犯人を特定する走査基盤</h2>
+        <p class="lead">VACUUM の removable cutoff がなぜその値で止まっているかに答えるための走査基盤を procarray.c に導入する。確定した horizon を引数に取る GetXidHorizonBlockers() が ProcArray と replication slot をもう 1 周走査し、xid か xmin が horizon と一致する候補を全て集め、GetXidHorizonBlocker() が XidHorizonBlockerType の優先順位で根本原因 1 件を選抜する。名前解決 (GID、slot 名、application_name) は候補収集から分離し、全ロック解放後に FillXidHorizonBlocker() が報告対象 1 件だけ行う。この commit 自体には in-tree の呼び出し元が無く、0002 が VACUUM のログ出力に接続する。</p>
+        <dl class="facts"><div><dt>コミット</dt><dd>4d87d9bfc82</dd></div><div><dt>件名</dt><dd>Add infrastructure to identify what holds back the xid horizon</dd></div><div><dt>差分</dt><dd>5 files <span class="plus">+532</span> <span class="minus">&minus;21</span></dd></div></dl>
+
+<h3 class="step" id="p-v9-infra-problem"><span class="step-mark">問題</span>何が足りなかったか</h3>
+        <p>VACUUM は removal cutoff (GetOldestNonRemovableTransactionId() が返す horizon) より新しい削除済みタプルを残し、ログには「N are dead but not yet removable」と cutoff の XID だけを出す。この horizon は ComputeXidHorizons() が全 PGPROC の xid と xmin、さらに replication slot の xmin の集約値を TransactionIdOlder() で 1 つの TransactionId に畳み込んだ結果であり、誰の値が採用されたかはその時点で失われている。犯人が prepared transaction のときは最悪で、pid 0 の dummy PGPROC には pg_stat_activity の行が無く、DBA が最初に見る場所が構造的に空になる。カテゴリと識別子 (GID や pid) の対をサーバ自身が答えない限り、dead tuple の滞留は XID の突き合わせという手作業でしか説明できない。</p>
+<figure class="term">
+<figcaption>実行例</figcaption>
+<pre><code>$ psql -Xc &#x27;VACUUM (VERBOSE) t&#x27;
+INFO:  vacuuming &quot;postgres.public.t&quot;
+INFO:  finished vacuuming &quot;postgres.public.t&quot;: index scans: 0
+pages: 0 removed, 89 remain, 89 scanned (100.00% of total), 0 eagerly scanned
+tuples: 0 removed, 20000 remain, 10000 are dead but not yet removable
+removable cutoff: 661012, which was 2 XIDs old when operation ended</code></pre>
+</figure>
+<p class="code-note">... (残りの統計行) ... VACUUM $ psql -Xc "SELECT pid, state, backend_xid, backend_xmin FROM pg_stat_activity WHERE backend_type = 'client backend'" pid   | state  | backend_xid | backend_xmin ---------+--------+-------------+-------------- 3084442 | active |             |       661012 (1 row) $ psql -Xc 'SELECT gid, transaction AS xid FROM pg_prepared_xacts' gid  |  xid -------+-------- stuck | 661012 (1 row) pg_stat_activity に見える唯一の行は照会を実行している psql 自身である。cutoff 661012 を握っているのは gid 'stuck' の prepared transaction だが、その対応は pg_prepared_xacts を XID で突き合わせて初めて見える。0002 適用後は同じ VACUUM VERBOSE に「oldest xmin blocker: prepared transaction (gid = stuck)」の 1 行が加わる。</p>
+
+<h3 class="step" id="p-v9-infra-design"><span class="step-mark">設計</span>採った道と捨てた道</h3>
+        <div class="choices"><div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>犯人の特定を ComputeXidHorizons() の外に出す。確定済みの horizon を引数に取る GetXidHorizonBlockers() が、ProcArray と replication slot をもう 1 周走査し、xid か xmin が horizon と等しいものを探す。</p>
+<p>horizon が確定値なので、等値比較だけで帰属が正確に決まる。コストは VACUUM 1 回につき ProcArrayLock 共有の走査が 1 回増えるだけで、スレッドでも Laurenz Albe が 2026-05-23 に許容範囲と判断している。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>ComputeXidHorizons() のループ内で「現時点の最小値の持ち主」を記録する案。スレッドの v1 が実際にこの形だった。ループは各 proc の xid と xmin を TransactionIdOlder() で畳み込みながら進み、slot の xmin に至ってはループの後で畳み込まれるため、どの反復時点の暫定持ち主も最終 horizon の持ち主である保証が無い。Sami Imseih が 2026-01-05 に別の PID が報告される再現を示し、v2 でこの分離走査に再設計された。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>候補を 1 件に絞りながら走査するのではなく、一致する候補を全て配列に集めてから、XidHorizonBlockerType の小さい順 (xid 一致が xmin 一致より上位) に選抜する。</p>
+<p>xmin 一致の proc は根本原因の xid を snapshot 越しに見ているだけで、それを排除しても horizon は 1 XID も進まない。xid 一致の proc または prepared transaction を解消したときだけ cutoff が動くので、xid 一致を必ず上位に報告する。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>最初に見つかった一致をそのまま報告する形。スレッドの初期版 (ループ内捕捉) がこの形で、Fujii Masao が 2025-11-04 に、hot_standby_feedback と prepared transaction が同じ xmin を共有する構成で「hot standby feedback」と報告される (真の根本原因は prepared transaction) ことを報告した。何が報告されるかが状況の本質ではなく走査順という無関係な条件で決まる。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>名前解決 (prepared transaction の GID、slot 名、standby の application_name) を候補収集から切り離し、全ロック解放後に FillXidHorizonBlocker() が報告対象 1 件だけ解決する。</p>
+<p>候補は XidHorizonBlockerCandidate として小さく保てるので、最悪 maxProcs + slot 数ぶんの配列をロック獲得前に palloc できる。また active と idle in transaction の判別は PGPROC では不可能 (どちらも WAIT_EVENT_CLIENT_READ で待つ) で、pg_stat_activity と同じ PgBackendStatus を引く必要があり、これもロック外に置くしかない。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>ProcArrayLock を保持したまま slot 名まで確定する形。slot.c の ReplicationSlotsComputeRequiredXmin() の冒頭コメントが「It is crucial that the caller first acquires the ReplicationSlotControlLock, followed by the ProcArrayLock」と獲得順を明文化しており、ProcArrayLock 保持中に ReplicationSlotControlLock を取ると逆順になって検出不能な deadlock の条件を作る。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>ComputeXidHorizons() が使っていた per-database の対象フィルタを ProcAffectsDataHorizon() として切り出し、horizon を計算する側と説明する側の両方が同じ関数を呼ぶ。</p>
+<p>対象判定 (databaseId 一致、MyDatabaseId 未設定、PROC_AFFECTS_ALL_HORIZONS、recovery) が 2 か所に複製されると、片方だけ更新されたときに説明走査が horizon の実際の構成要素と食い違う。切り出した関数のコメント自身が、この 2 呼び出し元が「cannot drift apart」であることを目的として明記している。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>同じ条件式を GetXidHorizonBlockers() に直書きする形。ComputeXidHorizons() 側にフィルタ条件が追加された場合に説明側が黙って古い条件のまま残り、犯人を見落とすか無関係の backend を犯人にする。壊れ方が「もっともらしい別の答えが出る」形なのでテストでも捕まえにくい。</p>
+</div>
+</div>
+
+<h3 class="step" id="p-v9-infra-code"><span class="step-mark">仕組み</span>コードを読む</h3>
+<figure>
+<pre class="mermaid">flowchart TD
+  A["GetXidHorizonBlocker(rel, horizon)"] --> B{"horizon の種別が&lt;br/>VISHORIZON_TEMP か"}
+  B -- "真" --> C["false を返す&lt;br/>自 backend 以外の犯人はいない"]
+  B -- "偽" --> D["GetXidHorizonBlockers() で候補収集"]
+  D --> E["ProcArrayLock 共有で走査&lt;br/>xid == horizon か xmin == horizon の&lt;br/>PGPROC を全て収集"]
+  D --> F["ReplicationSlotControlLock 共有で走査&lt;br/>effective_xmin が一致する slot を収集"]
+  E --> G["ロック解放後に PgBackendStatus で&lt;br/>active と idle in transaction を判別"]
+  F --> G
+  G --> H["type 最小の候補を選抜&lt;br/>xid 一致が xmin 一致に必ず勝つ"]
+  H --> I["FillXidHorizonBlocker() で&lt;br/>GID / slot 名 / application_name を解決"]</pre>
+</figure>
+<figure class="code">
+<figcaption>src/include/storage/procarray.h / XidHorizonBlockerType — 優先順位そのものを並びで表す列挙 (本 commit の中核データ構造)</figcaption>
+<pre><code>/*
+ * Type of blocker that is holding back the xid horizon.
+ * Listed in priority order from highest to lowest.  Blockers whose xid
+ * matches the horizon (the root cause) are listed before blockers whose
+ * xmin matches (held back by the root cause).  Within each group, active
+ * transactions are listed first because they are the most actionable for
+ * the DBA (the running query can be identified and cancelled).
+ */
+typedef enum XidHorizonBlockerType
+{
+	/* xid-match types (horizon == proc&#x27;s xid) */
+	XHB_ACTIVE_TRANSACTION,		/* backend running a statement */
+	XHB_IDLE_IN_TRANSACTION,	/* backend idle in transaction */
+	XHB_PREPARED_TRANSACTION,	/* prepared (two-phase) transaction */
+	/* xmin-match types (horizon == proc&#x27;s xmin or slot&#x27;s xmin) */
+	XHB_XMIN_ACTIVE_TRANSACTION,	/* backend running a statement */
+	XHB_XMIN_IDLE_IN_TRANSACTION,	/* backend idle in transaction */
+	XHB_HOT_STANDBY_FEEDBACK,	/* connected standby with hot_standby_feedback */
+	XHB_PHYSICAL_REPLICATION_SLOT,	/* physical slot reserving xmin (no
+									 * connected standby) */
+	XHB_LOGICAL_REPLICATION_SLOT,	/* logical replication slot */
+} XidHorizonBlockerType;</code></pre>
+</figure>
+<p class="code-note">この並びがそのまま選抜規則である。GetXidHorizonBlocker() は候補の type を数値の小なり比較で選ぶだけなので、優先順位の定義はコードではなくこの列挙の順序に一本化されている。前半 3 つが xid 一致 (根本原因)、後半 5 つが xmin 一致 (根本原因に引きずられている側) で、各群の中では「クエリを特定して cancel できる」active が先頭に来る。優先順位を変更するレビューはこの enum の並び替えとして現れ、比較コードには一切手が入らない。</p>
+<figure class="code">
+<figcaption>src/backend/storage/ipc/procarray.c / GetXidHorizonBlockers() — ProcArray 走査の型判定 (xid 一致と xmin 一致の振り分け)</figcaption>
+<pre><code>		if (TransactionIdEquals(proc_xid, horizon))
+		{
+			/* This proc&#x27;s xid matches the horizon (the root cause) */
+			if (proc-&gt;pid == 0)
+				type = XHB_PREPARED_TRANSACTION;
+			else
+				type = XHB_ACTIVE_TRANSACTION;
+		}
+		else if (TransactionIdEquals(proc_xmin, horizon))
+		{
+			/* This proc&#x27;s xmin matches the horizon (held back by the above) */
+			if (statusFlags &amp; PROC_AFFECTS_ALL_HORIZONS)
+				type = XHB_HOT_STANDBY_FEEDBACK;
+			else
+				type = XHB_XMIN_ACTIVE_TRANSACTION;
+		}
+		else
+			continue;</code></pre>
+</figure>
+<p class="code-note">判定が等値比較で足りるのは、引数の horizon が確定値だからである (設計節の第 1 ブロック)。pid == 0 で prepared transaction と分かるのは、prepared transaction が dummy PGPROC を占有し実プロセスを持たないためで、問題節で pg_stat_activity に行が無かったのと同じ性質をここでは逆手に取っている。xmin 一致側の PROC_AFFECTS_ALL_HORIZONS は walsender が hot_standby_feedback を PGPROC に保持するときに立つフラグである。backend はここでは暫定的に active と記録される。idle in transaction かどうかは PGPROC では判別できないため、全ロック解放後に PgBackendStatus を引いて振り替える。</p>
+<figure class="code">
+<figcaption>src/backend/storage/ipc/procarray.c / ProcAffectsDataHorizon() — 計算側と説明側が共有する対象フィルタ (既存条件の切り出し)</figcaption>
+<pre><code>static inline bool
+ProcAffectsDataHorizon(PGPROC *proc, int8 statusFlags, bool in_recovery)
+{
+	return proc-&gt;databaseId == MyDatabaseId ||
+		MyDatabaseId == InvalidOid ||
+		(statusFlags &amp; PROC_AFFECTS_ALL_HORIZONS) ||
+		in_recovery;
+}</code></pre>
+</figure>
+<p class="code-note">本体は ComputeXidHorizons() のループ内にあった既存条件そのままで、この commit は関数として切り出しただけである。直前のコメントが「ComputeXidHorizons(), which uses it to compute the horizons, and GetXidHorizonBlockers(), which uses it to explain them, cannot drift apart」と切り出しの目的を明記している。説明走査側は kind != VISHORIZON_SHARED のときだけこれを呼び、in_recovery には常に false を渡す。recovery は関数冒頭の Assert(!RecoveryInProgress()) で排除済みだからである。</p>
+<figure class="code">
+<figcaption>src/backend/storage/ipc/procarray.c / GetXidHorizonBlocker() — 優先順位による選抜と早期打ち切り (唯一の公開入口)</figcaption>
+<pre><code>	blockers = GetXidHorizonBlockers(horizon, kind, &amp;nblockers);
+	for (int i = 0; i &lt; nblockers; i++)
+	{
+		if (best == NULL || blockers[i].type &lt; best-&gt;type)
+		{
+			best = &amp;blockers[i];
+
+			/*
+			 * xid-match types are the highest priority (the root cause
+			 * holding the horizon), so nothing can outrank them; stop once we
+			 * find one.
+			 */
+			if (best-&gt;type &lt;= XHB_PREPARED_TRANSACTION)
+				break;
+		}
+	}
+
+	/* Resolve the name only for the blocker we actually report. */
+	if (best != NULL)
+		FillXidHorizonBlocker(best, blocker);
+
+	pfree(blockers);
+
+	return (best != NULL);
+}</code></pre>
+</figure>
+<p class="code-note">選抜は type の小なり比較だけで、enum の並びが唯一の優先順位定義になっている。早期 break の条件 type &lt;= XHB_PREPARED_TRANSACTION は「enum の先頭 3 つが xid 一致型」という並びに依存しており、enum に型を挿入するレビューではここが連動して壊れないかを見る。名前解決が best の 1 件に限定されているのは、候補配列を小さく保つ設計 (次のコード片) の裏返しである。この関数の冒頭では VISHORIZON_TEMP を先に弾いている。temp テーブルの horizon を止められるのは自 backend だけで、走査は自分自身をスキップするため、報告できる犯人が定義上存在しないからである。</p>
+<figure class="code">
+<figcaption>src/backend/storage/ipc/procarray.c / FillXidHorizonBlocker() — 全ロック解放後の名前解決 (報告対象 1 件のみ)</figcaption>
+<pre><code>	switch (cand-&gt;type)
+	{
+		case XHB_PREPARED_TRANSACTION:
+			GetPreparedTransactionGid(cand-&gt;xid, blocker-&gt;name);
+			break;
+
+		case XHB_HOT_STANDBY_FEEDBACK:
+			{
+				PgBackendStatus *beentry;
+
+				beentry = pgstat_get_beentry_by_proc_number(cand-&gt;proc_number);
+				if (beentry != NULL &amp;&amp; beentry-&gt;st_procpid == cand-&gt;pid &amp;&amp;
+					beentry-&gt;st_appname != NULL &amp;&amp; beentry-&gt;st_appname[0] != &#x27;\0&#x27;)
+					strlcpy(blocker-&gt;name, beentry-&gt;st_appname,
+							sizeof(blocker-&gt;name));
+				break;
+			}</code></pre>
+</figure>
+<p class="code-note">この関数が走査と別段階に置かれているのは、GID の解決に TwoPhaseStateLock、slot 名の解決に ReplicationSlotControlLock が要り、走査中のロックと重ねられないからである (設計節の第 3 ブロック)。application_name の照合が proc_number と st_procpid の二重チェックなのは、走査からここまでの間に PGPROC が別プロセスに再利用された場合に他人の名前を報告しないためで、pid だけの照合では pid 再利用に騙される。この後に続く slot の case は ReplicationSlotName(cand-&gt;slot_index, ...) で名前を引くが、これは落とし穴節の TOCTOU 項目の現場である。</p>
+
+<h3 class="step" id="p-v9-infra-gotchas"><span class="step-mark">注意</span>落とし穴</h3>
+        <ul class="notes warn-list"><li><h4>ループ内捕捉が返した「もっともらしい別人の PID」(スレッド v1 の欠陥)</h4><p>症状は、正しい形式の blocker 報告に実在する別セッションの PID が載ることである。原因は設計節の見送り案のとおり、畳み込み途中の暫定最小値の持ち主を最終 horizon の持ち主と取り違えることにある。PID は実在してコマンドも成功するため、DBA がそのセッションを終了させても cutoff が進まず、そこで初めて誤報と分かる。Sami Imseih が 2026-01-05 にこの再現を示し、本 commit の分離走査はその再設計の産物である。Jacob Champion も 2026-06-03 に、ループ内追跡は利用者としては好みだが「leads to a collision issue」でありこの問題でパッチを一旦置いたと書いている。</p></li>
+<li><h4>xmin 側を排除しても horizon は進まない</h4><p>実機確認: prepared transaction 'stuck' と repeatable read の bystander (pid 3093739) が同じ xmin を共有する構成で VACUUM VERBOSE を実行し、出力は「oldest xmin blocker: prepared transaction (gid = stuck)」だった。pg_stat_activity に見えるのは bystander だけなので、xid 一致優先の選抜が無ければ DBA は無関係のセッションを疑うことになる。bystander を終了させても prepared transaction が全員の xmin を固定し続けるため、cutoff は 1 XID も進まない。</p></li>
+<li><h4>ReplicationSlotName() の取り直しは TOCTOU (v9 未修正)</h4><p>FillXidHorizonBlocker() は走査時に記録した slot_index から ReplicationSlotName() で名前を引くが、この関数は ReplicationSlotControlLock を改めて獲得する。走査と解決の間に slot が drop されると in_use が偽になり、名前は空文字列のまま報告される。関数自身のコメントも「obvious TOCTOU issues」と明記している。v9 では未修正である。</p></li>
+<li><h4>slot xmin の参照元が計算側と説明側で異なる (v9 未修正)</h4><p>ComputeXidHorizons() は procArray-&gt;replication_slot_xmin (ReplicationSlotsComputeRequiredXmin() が集約したキャッシュ) を畳み込むのに対し、GetXidHorizonBlockers() は各 slot の s-&gt;effective_xmin を直接読む。集約の再計算タイミングによって両者は食い違いうるので、その瞬間の走査は horizon と等しい slot を見つけられず、blocker 無しという答えになりうる。v9 では未修正である。</p></li>
+<li><h4>track_activities = off だと idle が active と報告される</h4><p>active と idle in transaction の判別は pgstat_get_beentry_by_proc_number() が返す st_state に依存する。track_activities が無効だと pgstat_report_activity() が st_state を STATE_DISABLED に落とすため、idle への振り替えが発火せず、暫定の active 型のまま報告される。またこの lookup は初回に全 backend の状態を process-local に snapshot するので、走査 1 回ぶんの追加コストもここに乗る。v9 では未修正である。</p></li>
+<li><h4>hot standby feedback か physical slot かは走査時点の active_proc で決まる</h4><p>physical slot の xmin 予約は、走査時に standby が接続中 (active_proc が有効) なら XHB_HOT_STANDBY_FEEDBACK、切断済みなら XHB_PHYSICAL_REPLICATION_SLOT と報告される。horizon の計算と走査の間に standby が切断すると、同じ予約のラベルが変わる。逆に言えばこの区別ができるのは、走査が ComputeXidHorizons() の外にあって slot の active_proc を読めるからであり、畳み込まれた xmin しか見えないループ内捕捉 (対案の v1 系) には原理的にできない。なお horizon 計算後に真の犯人が commit していた場合、別の候補や候補無しが返る best-effort 仕様であることも関数コメントに明記されている。</p></li>
+<li><h4>recovery 中は対象外 (両系列共通)</h4><p>GetXidHorizonBlockers() は Assert(!RecoveryInProgress()) で recovery 中の呼び出しを拒否する。recovery 中の horizon は KnownAssignedXids に由来しうるが、この走査はそれを見ないうえ、per-database フィルタも無効化する必要がある。スタンバイでも使える SQL ビューを将来作るならその追加実装が要ることを、関数冒頭のコメントが呼び出し元の宿題として明記している。</p></li>
+</ul>
+
+<h3 class="step" id="p-v9-infra-tests"><span class="step-mark">検証</span>テストが固定していること</h3>
+        <ul class="notes ok-list"><li><h4>この commit 自体はテストを追加しない</h4><p>in-tree の呼び出し元が無い基盤のみの commit である。実行経路は 0002 が追加する src/test/modules/test_misc/t/015_log_vacuum_blockers.pl が固定しており、以下の各ケースが本 commit のコードを直接落とす。</p></li>
+<li><h4>xid 一致が xmin 一致に勝つ選抜</h4><p>ケース 'VACUUM VERBOSE preferred xid owner over xmin match'。xid を持つ idle セッションと、その xid を backend_xmin に持つ長時間クエリを併走させ、ログが xid 側の pid を報告することを要求する。GetXidHorizonBlocker() の type 比較を「最初に見つけた候補を返す」に変えると、xmin holder が ProcArray 上で先に並んだときにこのケースが落ちる。</p></li>
+<li><h4>pid == 0 の dummy PGPROC の分類と GID の解決</h4><p>ケース 'VACUUM VERBOSE reported prepared transaction as oldest xmin blocker' が「prepared transaction (gid = gx_vacuum_xmin)」の文言を要求する。走査の pid == 0 分岐を抜くと active transaction 扱いになり、FillXidHorizonBlocker() の GetPreparedTransactionGid() 呼び出しを抜くと gid が空になり、どちらでも落ちる。</p></li>
+<li><h4>physical slot 経由の hot standby feedback の帰属</h4><p>ケース 'VACUUM VERBOSE reported slot-based hot standby feedback as oldest xmin blocker' が standby name (application_name) と walsender の pid の両方を要求する。slot 走査の active_proc 分岐を抜いて XHB_PHYSICAL_REPLICATION_SLOT に落とすと文言が変わって落ちる。この予約は walsender の PGPROC ではなく slot に保持されるため、ProcArray 走査だけの実装でも落ちる。</p></li>
+<li><h4>PgBackendStatus による idle in transaction の判別</h4><p>ケース 'VACUUM VERBOSE reported idle in transaction holding snapshot as oldest xmin blocker'。ロック解放後の振り替えループを削ると、同じ状況が active transaction holding snapshot と報告されて落ちる。serializable 版のケース 'VACUUM VERBOSE reported serializable transaction as oldest xmin blocker' も同じ経路を固定している。</p></li>
+</ul>
+      </section>
+      <section class="patch" id="p-v9-log">
+        <p class="eyebrow"><span class="seq">v9-0002</span><span class="sep">/</span><span>blocker のログ報告</span></p>
+        <h2>VACUUM ログに oldest xmin blocker の行を追加する</h2>
+        <p class="lead">0001 が用意した GetXidHorizonBlocker() に最初の呼び出し元を与える。VACUUM (VERBOSE) と autovacuum のログで "N are dead but not yet removable" の直後に、その原因である oldest xmin blocker を pid や GID や slot 名つきで 1 行追記する。報告は recently_dead_tuples &gt; 0 のときだけ行い、照合にはその vacuum 自身が使った cutoffs.OldestXmin を渡す。451 行の TAP テストが 8 種の blocker 型のうち 7 種の出力文言を固定する。</p>
+        <dl class="facts"><div><dt>コミット</dt><dd>d3c0335967f</dd></div><div><dt>件名</dt><dd>Report oldest xmin blocker when VACUUM cannot remove tuples</dd></div><div><dt>差分</dt><dd>3 files <span class="plus">+516</span> <span class="minus">&minus;0</span></dd></div></dl>
+
+<h3 class="step" id="p-v9-log-problem"><span class="step-mark">問題</span>何が足りなかったか</h3>
+        <p>0001 は GetXidHorizonBlocker() までの経路を用意しただけで、コミットメッセージにあるとおりツリー内に呼び出し元が無い。ベースの VACUUM は、cutoffs.OldestXmin より新しい削除を HeapTupleSatisfiesVacuum() が HEAPTUPLE_RECENTLY_DEAD と分類して vacrel-&gt;recently_dead_tuples に数え、ログには "N are dead but not yet removable" と件数だけを出す。原因に辿り着くには removable cutoff の xid を pg_stat_activity、pg_prepared_xacts、pg_replication_slots、pg_stat_replication と手作業で突き合わせるしかない。特に prepared transaction はセッションを持たないため pg_stat_activity に現れず、最初に見る場所には手掛かりが無い。</p>
+<p>GID 'stuck' の prepared transaction に oldest xid を握らせたまま 1 万行を DELETE し、ベース d007800f02a と本パッチ適用後のビルドでそれぞれ VACUUM (VERBOSE) を実行した。</p>
+<figure class="term">
+<figcaption>実行例</figcaption>
+<pre><code>$ ./repro.sh base
+### VACUUM VERBOSE (base)
+INFO:  vacuuming &quot;postgres.public.t&quot;
+INFO:  finished vacuuming &quot;postgres.public.t&quot;: index scans: 0
+tuples: 0 removed, 20000 remain, 10000 are dead but not yet removable
+removable cutoff: 661012, which was 2 XIDs old when operation ended
+... (集計出力) ...
+### pg_stat_activity
+   pid   | state  | backend_xid | backend_xmin 
+---------+--------+-------------+--------------
+ 3084442 | active |             |       661012
+(1 row)
+### pg_prepared_xacts
+  gid  |  xid   
+-------+--------
+ stuck | 661012
+(1 row)
+$ ./repro.sh v9
+##### CASE A: prepared xact + repeatable-read bystander (same as v1 CASE 3)
+bystander pid = 3093739
+tuples: 0 removed, 20000 remain, 10000 are dead but not yet removable
+oldest xmin blocker: prepared transaction (gid = stuck)
+##### CASE B: idle-in-transaction snapshot holder alone
+holder pid = 3093756
+tuples: 0 removed, 20000 remain, 10000 are dead but not yet removable
+oldest xmin blocker: idle in transaction holding snapshot (pid = 3093756)</code></pre>
+</figure>
+<p class="code-note">ベースでは removable cutoff の 661012 を pg_prepared_xacts の xid と突き合わせて初めて 'stuck' に辿り着ける。パッチ後は同じログに blocker 行が 1 行加わり、CASE A と同一の状況で対案 v1 が "oldest xmin held back by: running transaction" と誤った分類を出した場面でも gid まで正しく特定する。</p>
+
+<h3 class="step" id="p-v9-log-design"><span class="step-mark">設計</span>採った道と捨てた道</h3>
+        <div class="choices"><div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>ログ組み立ての途中、"dead but not yet removable" の行を追記した直後に vacrel-&gt;recently_dead_tuples &gt; 0 を検査し、0 なら GetXidHorizonBlocker() を呼びもしない。</p>
+<p>recently_dead_tuples は cutoffs.OldestXmin と同じ値で HEAPTUPLE_RECENTLY_DEAD と分類された行の数であり、この条件が真のときだけ「この vacuum は実際に horizon に妨げられた」と言える。ゲートによって blocker 行の意味が「直前の行の件数の原因」に固定される。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>blocker を見つけたことだけを条件に出力する形。対案 v1-0001 がこの形で、horizon はテーブルごとではなく database 単位で共有なので、古い snapshot が 1 本あるだけで同じ database の無関係なテーブルのログにも行が付く。実測では dead tuple が 1 件も無いテーブルの vacuum で "tuples: 0 removed, 1000 remain, 0 are dead but not yet removable" の直後に "oldest xmin held back by: running transaction" が出力された。妨げられていない vacuum にまで行が付くと、読者が行を無視する習慣がつく。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>報告は vacuum 終了時のログ出力時に、その vacuum が使った vacrel-&gt;cutoffs.OldestXmin をそのまま GetXidHorizonBlocker() に渡して行う。照合は TransactionIdEquals() の完全一致である。</p>
+<p>同じログに数えた recently_dead_tuples はこの OldestXmin で分類された行そのもので、完全一致照合により「その行を残させた当の対象」だけが報告される。終了時に horizon を再計算して渡すと、報告対象がログ上の件数と無関係になる。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>ComputeXidHorizons() のループ内で捕捉する形。スレッドの v1 と対案 v1 がこの形である。ループは accumulator を厳密に改善したプロセスを上書きで 1 つ覚えるだけなので、同じ xmin を共有する候補が複数あると配列順で先に見えた側に帰属する。実測では prepared transaction 'stuck' (xid 661027) と repeatable read の傍観者 (backend_xmin 661027) の共存で "running transaction" と報告された。実行中のトランザクションはどのセッションにも無い。Sami Imseih は 2026-01-05 にこの形が誤った pid を報告することを実演し、それが v2 で別スキャン形へ設計変更された記録上の理由である。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>スキャンはログを実際に書く経路 (VERBOSE またはログ閾値を満たした vacuum) の内側にだけ置く。走る場合も ProcArrayLock の LW_SHARED 取得 1 回で proc array を 1 周し、候補配列はロック取得前に確保する。slot の走査は ProcArrayLock 解放後に ReplicationSlotControlLock を別途取って行う。</p>
+<p>黙って終わる大多数の vacuum には命令 1 つ分のコストも足さない。走る場合の追加コストは vacuum 1 回あたり proc array スキャン 1 回で、Laurenz Albe が 2026-05-23 にこれを許容できると判断している。</p>
+</div>
+</div>
+
+<h3 class="step" id="p-v9-log-code"><span class="step-mark">仕組み</span>コードを読む</h3>
+<figure>
+<pre class="mermaid">flowchart TD
+	A{"ログ出力ブロックに入るか&lt;br/>verbose または log_vacuum_min_duration 条件"} -- "入らない" --> Z["報告なし&lt;br/>スキャンも走らない"]
+	A -- "入る" --> B{"recently_dead_tuples は 0 より大きいか"}
+	B -- "0" --> Z
+	B -- "大きい" --> C["GetXidHorizonBlocker(rel, cutoffs.OldestXmin)"]
+	C -- "false" --> Y["blocker 行なし&lt;br/>blocker 消滅 または 一時テーブル"]
+	C -- "true" --> D["blocker.type で switch&lt;br/>8 種の書式から選択"]
+	D --> E["tuples 行の直後に oldest xmin blocker 行を追記"]</pre>
+</figure>
+<figure class="code">
+<figcaption>src/backend/access/heap/vacuumlazy.c / heap_vacuum_rel() — recently_dead_tuples ゲートと GetXidHorizonBlocker() 呼び出し (本パッチの機能変更点)</figcaption>
+<pre><code>			appendStringInfo(&amp;buf,
+							 _(&quot;tuples: %&quot; PRId64 &quot; removed, %&quot; PRId64 &quot; remain, %&quot; PRId64 &quot; are dead but not yet removable\n&quot;),
+							 vacrel-&gt;tuples_deleted,
+							 (int64) vacrel-&gt;new_rel_tuples,
+							 vacrel-&gt;recently_dead_tuples);
+			if (vacrel-&gt;recently_dead_tuples &gt; 0)
+			{
+				XidHorizonBlocker blocker;
+
+				if (GetXidHorizonBlocker(vacrel-&gt;rel,
+										 vacrel-&gt;cutoffs.OldestXmin,
+										 &amp;blocker))
+				{
+					switch (blocker.type)
+					{
+						case XHB_ACTIVE_TRANSACTION:
+							appendStringInfo(&amp;buf,
+											 _(&quot;oldest xmin blocker: active transaction (pid = %d)\n&quot;),
+											 blocker.pid);
+							break;</code></pre>
+</figure>
+<p class="code-note">追記位置が "dead but not yet removable" の行の直後なのは、blocker 行を直前の件数の説明として読ませるためで、cap_v9 の実出力でも 2 行が連続する。ゲートに使う recently_dead_tuples と照合に渡す cutoffs.OldestXmin は同じ分類判定の両面で、ゲートが真なら照合先の xid を horizon に固定した誰かが存在したことになる。ブロック全体が instrument 分岐 (次のコード片) の内側にあるため、行を出さない vacuum ではスキャン自体が走らない。switch に default を置かないので、0001 の XidHorizonBlockerType に型を足すとここがコンパイラ警告で追従漏れとして検出される。</p>
+<figure class="code">
+<figcaption>src/backend/access/heap/vacuumlazy.c / heap_vacuum_rel() — prepared transaction と hot standby feedback の書式分岐</figcaption>
+<pre><code>						case XHB_PREPARED_TRANSACTION:
+							if (blocker.name[0] != &#x27;\0&#x27;)
+								appendStringInfo(&amp;buf,
+												 _(&quot;oldest xmin blocker: prepared transaction (gid = %s)\n&quot;),
+												 blocker.name);
+							else
+								appendStringInfo(&amp;buf,
+												 _(&quot;oldest xmin blocker: prepared transaction\n&quot;));
+							break;
+						case XHB_HOT_STANDBY_FEEDBACK:
+							if (blocker.name[0] != &#x27;\0&#x27;)
+								appendStringInfo(&amp;buf,
+												 _(&quot;oldest xmin blocker: hot standby feedback (standby name = %s, pid = %d)\n&quot;),
+												 blocker.name,
+												 blocker.pid);
+							else
+								appendStringInfo(&amp;buf,
+												 _(&quot;oldest xmin blocker: hot standby feedback (pid = %d)\n&quot;),
+												 blocker.pid);
+							break;</code></pre>
+</figure>
+<p class="code-note">名前は 0001 の FillXidHorizonBlocker() が ProcArrayLock 解放後に TwoPhaseStateLock などの下で解決するので、スキャンと解決の間に prepared transaction が COMMIT PREPARED で消えると name が空文字列で返ることがある。この分岐はその場合に gid 付きの書式から gid 無しの書式へ落とす。消えた対象の古い識別子を出すより情報を減らす側に倒す設計で、hot standby feedback の case も application_name が引けなければ pid だけを出す同じ構造を持つ。</p>
+<figure class="code">
+<figcaption>src/backend/storage/ipc/procarray.c / GetXidHorizonBlockers() — 候補判定の完全一致照合 (0001 側の依存部分)</figcaption>
+<pre><code>		if (TransactionIdEquals(proc_xid, horizon))
+		{
+			/* This proc&#x27;s xid matches the horizon (the root cause) */
+			if (proc-&gt;pid == 0)
+				type = XHB_PREPARED_TRANSACTION;
+			else
+				type = XHB_ACTIVE_TRANSACTION;
+		}
+		else if (TransactionIdEquals(proc_xmin, horizon))
+		{
+			/* This proc&#x27;s xmin matches the horizon (held back by the above) */
+			if (statusFlags &amp; PROC_AFFECTS_ALL_HORIZONS)
+				type = XHB_HOT_STANDBY_FEEDBACK;
+			else
+				type = XHB_XMIN_ACTIVE_TRANSACTION;
+		}
+		else
+			continue;</code></pre>
+</figure>
+<p class="code-note">本パッチが依存する 0001 側の核である。照合は不等号ではなく TransactionIdEquals() で、渡された horizon と xid か xmin が一致するプロセスだけを候補にする。だから呼び出し側は「その vacuum の cutoff そのもの」を渡す必要があり、終了時に horizon を計算し直して渡すと、一致する候補が居なくなるか、ログの件数と無関係な対象に一致してしまう。xid 一致は根本原因 (その xid の所有者)、xmin 一致は「その xid に阻まれている側」で、GetXidHorizonBlocker() は型の順位で前者を優先して 1 件に絞る。</p>
+<figure class="code">
+<figcaption>src/backend/access/heap/vacuumlazy.c / heap_vacuum_rel() — instrument 分岐 (パッチが意図的に触っていない既存コード)</figcaption>
+<pre><code>		if (verbose || params-&gt;log_vacuum_min_duration == 0 ||
+			TimestampDifferenceExceeds(starttime, endtime,
+									   params-&gt;log_vacuum_min_duration))
+		{</code></pre>
+</figure>
+<p class="code-note">blocker 報告のコードはこの既存分岐の内側にしか無い。VERBOSE でも閾値超過でもない vacuum は blocker のスキャンを一度も行わず、これが設計項のコスト形状の実体である。同時に、閾値未満で終わり続ける多数の短時間 autovacuum では一度も報告されないというカバレッジの穴の実体でもある (落とし穴参照)。パッチはこの条件に手を入れていないので、ログが出るかどうかの判断は従来と 1 ビットも変わらない。</p>
+
+<h3 class="step" id="p-v9-log-gotchas"><span class="step-mark">注意</span>落とし穴</h3>
+        <ul class="notes warn-list"><li><h4>長時間 vacuum の末尾では行ごと消える</h4><p>照合に使う cutoffs.OldestXmin は vacuum 開始時に確定した値で、スキャンが走るのは終了時のログ出力時である。数時間級の vacuum の間に blocker が commit して消えると、完全一致する候補が無く GetXidHorizonBlocker() は false を返し、blocker 行は 1 行も出ない。妨げられた事実 (recently_dead_tuples) はログに残るのに原因欄だけが消え、機能が無い状態と見分けがつかない。commit message はこの挙動を best-effort と明記している。Bharath Rupireddy は 2026-06-29 に、数時間級の vacuum では終了後に知っても遅く、horizon 計算時に捕捉して早期に報告する方が有用だと主張しており、終了時報告への不満は対案側の設計動機になっている。 スレッド上でも、ループ内追跡の実装を自作した Jacob Champion が 2026-06-03 に、データベースの答えが「I don't know, you better run VACUUM again」になることへの不満を利用者視点で述べており、この沈黙はその形そのものである。</p></li>
+<li><h4>行が出るのは instrument された vacuum だけ</h4><p>報告コードは verbose または log_vacuum_min_duration 条件を満たしたログ出力ブロックの内側にある。閾値未満で終わり続ける短時間の autovacuum が多数を占めるワークロードでは、horizon がずっと止まっていても一度も報告されない。Sami Imseih が 2026-07-14 にこのカバレッジ欠落を指摘している。対案 v1 は pg_stat_progress_vacuum の列というログ以外の出口を持つが、v9 の出口はログだけである。</p></li>
+<li><h4>レビューで出た欠陥: 同一 xmin 共有時の誤帰属と、その修正</h4><p>症状は、prepared transaction が真因なのに同じ xmin を持つ別の候補が blocker として報告されることである。Fujii Masao は 2025-11-04 に、hot standby feedback が prepared transaction の代わりに報告される形を初期の in-loop 版に対して報告した。原因は、xmin の一致だけを見ると「阻まれている側」も候補になり、初期版はループ順で先に見えた候補を採ったことにある。単独 blocker の試験ではどの実装でも正しい答えが出るため気づきにくく、同じ xmin を共有する 2 者を並べて初めて破綻する。0001 の型順位 (xid 一致が xmin 一致に優先) と GetXidHorizonBlocker() の優先選択で修正された。実機確認: prepared xact 'stuck' と repeatable read の傍観者を共存させて VACUUM VERBOSE を実行し、"oldest xmin blocker: prepared transaction (gid = stuck)" が出力された (問題節の CASE A)。</p></li>
+<li><h4>一時テーブルでは決して出ない</h4><p>GetXidHorizonBlocker() は GlobalVisHorizonKindForRel() が VISHORIZON_TEMP を返すと即座に false を返す。一時テーブルの horizon を止めるのは自分自身のバックエンドだけで、スキャンは MyProc を除外するため、報告できる外部 blocker がそもそも存在しない。一時テーブルの VACUUM VERBOSE で recently_dead_tuples が出ているのに blocker 行が無いのは仕様である。</p></li>
+<li><h4>同じ standby でも接続状態で表示カテゴリが変わる</h4><p>physical slot 越しに hot_standby_feedback を送る standby は、接続中は "hot standby feedback (standby name = ..., pid = ...)"、切断後に slot だけが xmin を握り続けると "physical replication slot (slot name = ...)" と報告される。判定は slot の active_proc が有効かどうかで、xmin を握る主体 (slot) は同じでも表示が変わる。ログ文字列を固定的に grep する監視は、standby 断線の瞬間にカテゴリが変わって検知を取り逃す。TAP の連続する 2 ケースがこの遷移を固定している。</p></li>
+</ul>
+
+<h3 class="step" id="p-v9-log-tests"><span class="step-mark">検証</span>テストが固定していること</h3>
+        <ul class="notes ok-list"><li><h4>同一 xmin を共有する 2 候補の優先順位 (xid 所有者が xmin 保持者に勝つ)</h4><p>src/test/modules/test_misc/t/015_log_vacuum_blockers.pl の "VACUUM VERBOSE preferred xid owner over xmin match"。xid を取って idle になったセッションと、その xid を backend_xmin に写した長時間クエリを並べ、stderr に xid 所有者の pid での "idle in transaction (pid = ...)" を要求する。GetXidHorizonBlocker() の順位選択を外して配列順の先頭候補を返す実装にすると、どちらが報告されるかが配列順任せになり、xmin 保持者側の pid が出た時点でこのケースが落ちる。対案 v1 型の誤帰属をそのまま検出する構図である。</p></li>
+<li><h4>prepared transaction の GID 解決</h4><p>同ファイルの "VACUUM VERBOSE reported prepared transaction as oldest xmin blocker" が "prepared transaction (gid = gx_vacuum_xmin)" の一致を要求する。FillXidHorizonBlocker() から GetPreparedTransactionGid() への解決が壊れて name が空になると、gid 無しの書式に落ちて正規表現が一致しない。</p></li>
+<li><h4>カタログ horizon 経由の logical slot 検出</h4><p>同ファイルの "VACUUM VERBOSE reported logical replication slot as oldest xmin source"。logical slot を作ってから pg_class を VACUUM する。カタログの horizon は slot の effective_catalog_xmin に止められるので、GetXidHorizonBlockers() の catalog_xmin 照合 (VISHORIZON_SHARED と VISHORIZON_CATALOG のときだけ有効) を落とすとこのケースが落ちる。データテーブルだけで試験していては到達しない分岐である。</p></li>
+<li><h4>slot 経由 feedback の接続中と切断後のカテゴリ分岐</h4><p>同ファイルの "VACUUM VERBOSE reported slot-based hot standby feedback as oldest xmin blocker" と "VACUUM VERBOSE reported physical replication slot as oldest xmin blocker" の対。同じ physical_slot を、standby 接続中は standby 名付きの hot standby feedback として、walsender 退出後は physical replication slot として要求する。active_proc の分岐を欠くと前者が physical slot と表示されて落ち、slot の xmin 照合を欠くと後者で行自体が出ない。</p></li>
+<li><h4>active と idle in transaction の状態解決</h4><p>同ファイルの "VACUUM VERBOSE reported active transaction holding snapshot as oldest xmin blocker" (pg_sleep(60) を実行中) と "VACUUM VERBOSE reported idle in transaction holding snapshot as oldest xmin blocker" (repeatable read で SELECT 後に放置) の対。0001 は候補を一旦 active として記録し、ロック解放後に backend 状態で idle 系へ振り直す。この振り直しを欠くと idle のケースが active の文言で出て落ちる。なお 8 種の blocker 型のうち専用ケースが無いのは XHB_ACTIVE_TRANSACTION だけである。</p></li>
+</ul>
+      </section>
+      <section class="patch" id="p-v1-inloop">
+        <p class="eyebrow"><span class="seq">v1-0001</span><span class="sep">/</span><span>v1: ループ内捕捉</span></p>
+        <h2>ループ内捕捉: ComputeXidHorizons() にブロッカー分類を相乗りさせる</h2>
+        <p class="lead">VACUUM が死タプルを残した原因のカテゴリを、ComputeXidHorizons() が proc 配列を走査するループの中で捕捉する。ProcArrayLock を追加で取らず再走査もせず、既存の TransactionIdOlder() による min() 畳み込みの直前に TransactionIdPrecedes() の厳密比較による採用判定を挿し込む。結果は VACUUM (VERBOSE) と autovacuum ログの新しい行、既存 WARNING の DETAIL、そして pg_stat_progress_vacuum の新列 oldest_xmin_blocker に出る。引き換えに、同点での誤分類、累算器の種との同点による偽陰性、死タプル 0 件でも行が出るノイズという 3 つの実測できる歪みを抱える。</p>
+        <dl class="facts"><div><dt>コミット</dt><dd>b1b14e555db</dd></div><div><dt>件名</dt><dd>Report what holds back the oldest xmin horizon during VACUUM</dd></div><div><dt>差分</dt><dd>12 files <span class="plus">+446</span> <span class="minus">&minus;14</span></dd></div></dl>
+
+<h3 class="step" id="p-v1-inloop-problem"><span class="step-mark">問題</span>何が足りなかったか</h3>
+        <p>VACUUM は消せなかった死タプルを「dead but not yet removable」という数字で出すだけで、その原因を出さない。原因の特定は removable cutoff の XID を pg_stat_activity、pg_prepared_xacts、pg_replication_slots と手作業で突き合わせる仕事になり、prepared transaction はそもそも pg_stat_activity に現れない。Bharath が 2026-07-14 のメールとコミットメッセージで挙げた動機は 2 つで、数時間かかる VACUUM の終了時に知っても手遅れであること、そして horizon 計算が既にこの情報を持っているのでほぼ無料で出せる、という主張である。基準は 3 つ、早く報告する、ホットなロックに競合を足さない、行動につながる最小限の詳細で足りる。</p>
+<p>ベースコミット d007800f02a での採取。死タプルを 10000 行抱えたテーブル t に VACUUM を実行し、prepared transaction 'stuck' が最古の xid を保持している。</p>
+<figure class="term">
+<figcaption>実行例</figcaption>
+<pre><code>$ psql -d postgres -c &quot;VACUUM (VERBOSE) t&quot;
+INFO:  vacuuming &quot;postgres.public.t&quot;
+INFO:  finished vacuuming &quot;postgres.public.t&quot;: index scans: 0
+pages: 0 removed, 89 remain, 89 scanned (100.00% of total), 0 eagerly scanned
+tuples: 0 removed, 20000 remain, 10000 are dead but not yet removable
+removable cutoff: 661012, which was 2 XIDs old when operation ended
+new relfrozenxid: 661011, which is 1 XIDs ahead of previous value
+... (集計出力) ...
+VACUUM
+$ psql -d postgres -c &quot;SELECT pid, state, backend_xid, backend_xmin FROM pg_stat_activity WHERE backend_type = &#x27;client backend&#x27;&quot;
+   pid   | state  | backend_xid | backend_xmin 
+---------+--------+-------------+--------------
+ 3084442 | active |             |       661012
+(1 row)
+$ psql -d postgres -c &quot;SELECT gid, transaction AS xid FROM pg_prepared_xacts&quot;
+  gid  |  xid   
+-------+--------
+ stuck | 661012
+(1 row)</code></pre>
+</figure>
+<p class="code-note">10000 行を消せない理由は出力のどこにも無い。pg_stat_activity に見えるのは問い合わせ中の自セッションだけで、removable cutoff の 661012 を pg_prepared_xacts の xid と突き合わせて初めて 'stuck' に行き着く。0001 適用後は同じ状況で removable cutoff の直後に「oldest xmin held back by: prepared transaction」の 1 行が加わる。</p>
+
+<h3 class="step" id="p-v1-inloop-design"><span class="step-mark">設計</span>採った道と捨てた道</h3>
+        <div class="choices"><div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>ブロッカーの分類を ComputeXidHorizons() のループ内で行う。同関数は既に ProcArrayLock を LW_SHARED で取って全 PGPROC を走査し、スロットの xmin を畳み込んでいるので、追加のロック取得も再走査も発生しない。</p>
+<p>本人の 3 基準を同時に満たす形である。捕捉は VACUUM 開始時の vacuum_get_cutoffs() で行われるため、数時間かかる VACUUM でも開始直後から pg_stat_progress_vacuum で見える。分類の追加コストは proc 1 つあたり分岐数個で、ロックの保持時間はほぼ変わらない。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>最終 horizon の確定後に proc 配列をもう一度走査する事後スキャン (競合シリーズ v9 が v2 以降で採る形)。Bharath の見送り理由は、数百から数千接続のシステムで ProcArrayLock の競合を増やすことへの懸念である。ただしこの懸念には実測の反証がある。追加スキャンは VACUUM 1 回につき LW_SHARED の取得 1 回と数マイクロ秒の走査で、Laurenz Albe は 2026-05-23 に autovacuum 1 回あたり 1 スキャンなら許容できると判断した。一方でループ内捕捉が引き換えに失う正確さは、落とし穴の実機確認 3 件で示す。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>ループ内ではカテゴリ (enum OldestXminBlocker の 5 値) だけを確定し、GID・スロット名・pid という個体の特定は 0002 に分離した。</p>
+<p>カテゴリは PGPROC 自身から導ける。pid == 0 なら prepared xact のダミー PGPROC、statusFlags の PROC_AFFECTS_ALL_HORIZONS ならスロット無しの hot_standby_feedback を運ぶ walsender、それ以外は実行中トランザクションで、共有メモリの追加参照が要らない。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>ProcArrayLock 保持中の名前解決。slot.c の ReplicationSlotsComputeRequiredXmin() は ReplicationSlotControlLock を ProcArrayLock より先に取る順序を明文化しており、逆順の取得はこの規約に反する。だからスロット名は ProcArrayLock の中では引けない。GID も TwoPhaseStateLock の保護下にある。0002 は ProcArrayLock を放した後に各ロックを正順で取って個体を解決する。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>採用判定は TransactionIdPrecedes(xmin, 累算器) の厳密比較とし、既存の TransactionIdOlder() による畳み込みの直前に置く。累算器の種は既存コードの latestCompletedXid + 1 をそのまま使う。</p>
+<p>畳み込みが累算器を更新した後に比較すると自分の値との比較になり常に偽になるから、位置は畳み込みの直前しかない。厳密比較なので同点では最初に最小値を立てた proc の分類が残り、候補リストの保存も第 2 パスも不要で proc 1 つあたり比較 1 回で済む。この first-tied-wins の性質と種との同点の帰結は落とし穴 1 と 3 で実測する。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>XminHorizonBlockers は ComputeXidHorizonsResult に入れず、NULL 許容の独立した out 引数 b にした。既存の呼び出し元 (GlobalVisUpdate() など) はすべて NULL を渡す。</p>
+<p>b が NULL なら分類は if (b) で丸ごと飛ばされ、スナップショット計算のたびに走る経路にコストが乗らない。非 NULL を渡すのは vacuum_get_cutoffs() から呼ばれる新設の GetOldestNonRemovableTransactionIdExt() だけである。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>ComputeXidHorizonsResult へのフィールド追加。procarray.h の構造体コメントが「common callers that only want the horizons neither carry nor compute this」と明記して退けている。入れると horizon だけが欲しい全呼び出し元が分類の分岐を常時払い、ホットな経路に触れないという本人の基準 (1 番目の判断) と矛盾する。</p>
+</div>
+</div>
+
+<h3 class="step" id="p-v1-inloop-code"><span class="step-mark">仕組み</span>コードを読む</h3>
+<figure>
+<pre class="mermaid">flowchart TD
+	A["ComputeXidHorizons() 開始&lt;br/>累算器を latestCompletedXid + 1 で初期化"] --> B["proc 配列を pgprocnos 昇順に走査"]
+	B --> C["xmin = TransactionIdOlder(xmin, xid)"]
+	C --> D["カテゴリ分類&lt;br/>pid == 0 なら prepared xact&lt;br/>PROC_AFFECTS_ALL_HORIZONS なら standby feedback&lt;br/>それ以外は running xact"]
+	D --> E{"TransactionIdPrecedes(xmin, 累算器)"}
+	E -- "真 (厳密に古い)" --> F["b の該当 horizon に this_blocker を採用"]
+	E -- "偽 (同点を含む)" --> G["採用しない&lt;br/>先に走査された proc の分類が残る"]
+	F --> H["TransactionIdOlder() で累算器を更新"]
+	G --> H
+	H -- "次の proc" --> B
+	H -- "走査終了" --> I["slot_xmin を同じ厳密判定で畳み込み&lt;br/>REPLICATION_SLOT"]
+	I --> J["slot_catalog_xmin は catalog と shared のみ&lt;br/>LOGICAL_SLOT"]
+	J --> K["GetOldestNonRemovableTransactionIdExt() が&lt;br/>relation の horizon 種別に対応する blocker を返す"]</pre>
+</figure>
+<figure class="code">
+<figcaption>src/backend/storage/ipc/procarray.c / ComputeXidHorizons() — 累算器の種 (パッチが依存する未変更の既存コード)</figcaption>
+<pre><code>	/*
+	 * We initialize the MIN() calculation with latestCompletedXid + 1. This
+	 * is a lower bound for the XIDs that might appear in the ProcArray later,
+	 * and so protects us against overestimating the result due to future
+	 * additions.
+	 */
+	{
+		TransactionId initial;
+
+		initial = XidFromFullTransactionId(h-&gt;latest_completed);
+		Assert(TransactionIdIsValid(initial));
+		TransactionIdAdvance(initial);
+
+		h-&gt;oldest_considered_running = initial;
+		h-&gt;shared_oldest_nonremovable = initial;
+		h-&gt;data_oldest_nonremovable = initial;</code></pre>
+</figure>
+<p class="code-note">パッチはこのブロックに触れていない。種の latestCompletedXid + 1 は「今後 proc 配列に現れうる XID の下限」で、horizon の過大評価を防ぐための値である。採用判定はこの累算器との厳密比較なので、性質がそのまま遺伝する。xmin がちょうど種と一致する proc は厳密には古くならず、horizon をその値に留めていても一度も採用されない。この帰結が落とし穴 3 の偽陰性で、v1 のテストが各ケースの前に XID を 5 つ進めるのも同じ理由である (テスト節)。</p>
+<figure class="code">
+<figcaption>src/backend/storage/ipc/procarray.c / ComputeXidHorizons() — ループ内の分類と採用判定 (shared horizon 分)</figcaption>
+<pre><code>		if (b)
+		{
+			if (proc-&gt;pid == 0)
+				this_blocker = OLDEST_XMIN_BLOCKER_PREPARED_XACT;
+			else if (statusFlags &amp; PROC_AFFECTS_ALL_HORIZONS)
+				this_blocker = OLDEST_XMIN_BLOCKER_STANDBY_FEEDBACK;
+			else
+				this_blocker = OLDEST_XMIN_BLOCKER_RUNNING_XACT;
+
+			if (TransactionIdPrecedes(xmin, h-&gt;shared_oldest_nonremovable))
+				b-&gt;shared = this_blocker;
+		}
+
+		/* shared tables need to take backends in all databases into account */
+		h-&gt;shared_oldest_nonremovable =
+			TransactionIdOlder(h-&gt;shared_oldest_nonremovable, xmin);</code></pre>
+</figure>
+<p class="code-note">TransactionIdPrecedes() が TransactionIdOlder() の前にある理由は位置そのものにある。畳み込みの後では累算器が既に xmin を吸収していて比較が常に偽になる。ここに来る xmin はループ前段の xmin = TransactionIdOlder(xmin, xid) を通過済みなので、実 xid を持つ prepared xact とスナップショットしか持たない idle セッションが同じ候補値で並びうる。分類は pid と statusFlags しか見ず、xid と xmin のどちらが min() を勝ったかは失われている。data の horizon はループ内の後続の畳み込みで同じ厳密判定と this_blocker を再利用する。catalog はループ内では扱われず、ループ後に b-&gt;catalog = b-&gt;data として data の分類を引き継ぐ。</p>
+<figure class="code">
+<figcaption>src/backend/storage/ipc/procarray.c / ComputeXidHorizons() — ループ後のスロット畳み込み</figcaption>
+<pre><code>	/*
+	 * Check whether there are replication slots requiring an older xmin. A
+	 * slot&#x27;s xmin backs up both the shared and data horizons.
+	 */
+	if (b &amp;&amp; TransactionIdIsValid(h-&gt;slot_xmin))
+	{
+		if (TransactionIdPrecedes(h-&gt;slot_xmin, h-&gt;shared_oldest_nonremovable))
+			b-&gt;shared = OLDEST_XMIN_BLOCKER_REPLICATION_SLOT;
+		if (TransactionIdPrecedes(h-&gt;slot_xmin, h-&gt;data_oldest_nonremovable))
+			b-&gt;data = OLDEST_XMIN_BLOCKER_REPLICATION_SLOT;
+	}
+	h-&gt;shared_oldest_nonremovable =
+		TransactionIdOlder(h-&gt;shared_oldest_nonremovable, h-&gt;slot_xmin);
+	h-&gt;data_oldest_nonremovable =
+		TransactionIdOlder(h-&gt;data_oldest_nonremovable, h-&gt;slot_xmin);</code></pre>
+</figure>
+<p class="code-note">スロットの xmin は PGPROC ではなく procArray-&gt;replication_slot_xmin にあり、ループでは現れないから畳み込みはループの後になる。判定と畳み込みの順序はループ内と同じで、厳密比較が先に立つ。この順序の帰結として、スロットが proc の xmin と同点なら先に確定した proc 側の分類が残る。slot_catalog_xmin はこの後さらに shared と catalog だけに畳み込まれるので、OLDEST_XMIN_BLOCKER_LOGICAL_SLOT が通常のユーザテーブルの犯人になることはない。</p>
+<figure class="code">
+<figcaption>src/backend/storage/ipc/procarray.c / GetOldestNonRemovableTransactionIdExt() — horizon 種別と blocker の対応 (VISHORIZON_DATA まで抜粋)</figcaption>
+<pre><code>TransactionId
+GetOldestNonRemovableTransactionIdExt(Relation rel, OldestXminBlocker *blocker)
+{
+	ComputeXidHorizonsResult horizons;
+	XminHorizonBlockers blockers;
+
+	ComputeXidHorizons(&amp;horizons, &amp;blockers);
+
+	switch (GlobalVisHorizonKindForRel(rel))
+	{
+		case VISHORIZON_SHARED:
+			*blocker = blockers.shared;
+			return horizons.shared_oldest_nonremovable;
+		case VISHORIZON_CATALOG:
+			*blocker = blockers.catalog;
+			return horizons.catalog_oldest_nonremovable;
+		case VISHORIZON_DATA:
+			*blocker = blockers.data;
+			return horizons.data_oldest_nonremovable;</code></pre>
+</figure>
+<p class="code-note">blocker は必ず、返す xid と同じ horizon から取る。この対応があるから、logical slot の catalog_xmin は catalog と shared の relation にしか責任を問われない (テスト節の対のケースが固定する)。呼び出し元は vacuum_get_cutoffs() で、OldestXmin を決めるのと同じ 1 回の計算で VacuumCutoffs.oldest_xmin_blocker が埋まる。ログ行、WARNING の DETAIL、progress 列はすべてこの同一時点の値を写す。非 NULL の blockers を渡す呼び出しはツリー内でここだけである。</p>
+<figure class="code">
+<figcaption>src/backend/access/heap/vacuumlazy.c / heap_vacuum_rel() — VERBOSE 出力のゲート</figcaption>
+<pre><code>			diff = (int32) (ReadNextTransactionId() -
+							vacrel-&gt;cutoffs.OldestXmin);
+			appendStringInfo(&amp;buf,
+							 _(&quot;removable cutoff: %u, which was %d XIDs old when operation ended\n&quot;),
+							 vacrel-&gt;cutoffs.OldestXmin, diff);
+			if (vacrel-&gt;cutoffs.oldest_xmin_blocker != OLDEST_XMIN_BLOCKER_NONE)
+				appendStringInfo(&amp;buf,
+								 _(&quot;oldest xmin held back by: %s\n&quot;),
+								 vacuum_oldest_xmin_blocker_name(vacrel-&gt;cutoffs.oldest_xmin_blocker));</code></pre>
+</figure>
+<p class="code-note">出力の条件は blocker != NONE の 1 つだけで、死タプルの数は見ない (帰結は落とし穴 4)。位置が removable cutoff の直後なのは、cutoff の値とそれを留めた犯人を続けて読ませるためである。実際の出力は cap_v1 の CASE 1 で、xid を持つ idle in transaction の保持者に対し cutoff 行の直後に「oldest xmin held back by: running transaction」が出る。CASE 2 では実行中の別 VACUUM の pg_stat_progress_vacuum 行が「3086346 | scanning heap | running transaction」となり、開始直後から同じカテゴリが見える。文字列化は vacuum.c の配列 OldestXminBlockerNames を引く vacuum_oldest_xmin_blocker_name() で、progress ビュー側は system_views.sql の CASE 式が同じ 5 つの名前を返す。</p>
+
+<h3 class="step" id="p-v1-inloop-gotchas"><span class="step-mark">注意</span>落とし穴</h3>
+        <ul class="notes warn-list"><li><h4>同点では prepared transaction が「running transaction」に化ける</h4><p>実機確認: prepared transaction 'stuck' (xid 661027) と REPEATABLE READ の傍観者セッション (backend_xid は NULL、backend_xmin 661027) を並べて VACUUM (VERBOSE) を実行した (cap_v1_case3)。出力は「oldest xmin held back by: running transaction」だが、pg_stat_activity に実行中のトランザクションは 1 つも無い。機序は 2 段で、まず xmin = TransactionIdOlder(xmin, xid) の畳み込みにより両者の候補値が 661027 の同点になり、厳密比較の採用判定は同点で更新しないから走査順で先の proc が犯人のまま残る。そして prepared xact のダミー PGPROC は FIRST_PREPARED_XACT_PROC_NUMBER (= MaxBackends + NUM_AUXILIARY_PROCS) 以降に割り当てられ、pgprocnos は昇順に保たれるので、prepared xact は常に全バックエンドの後に走査され同点では決して勝てない。つまりこの誤分類は確率的ではなく決定的である。</p></li>
+<li><h4>スレッドのレビューが同じ欠陥クラスを先に踏んでいる</h4><p>Fujii Masao は 2025-11-04 に、hot_standby_feedback と prepared transaction が同じ xmin を共有すると初期のループ内実装が「hot standby feedback」と報告する誤りを報告した。Sami Imseih は 2026-01-05 に、ComputeXidHorizons() 内での捕捉が誤った PID を報告することを実演し、これが競合シリーズ (スレッドの v1) が v2 で事後スキャン方式へ再設計された記録上の理由である。Jacob Champion も 2026-06-03 に、利用者としてはループ内追跡を好むとしつつ、この方式は「leads to a collision issue」であり、その問題の解き方を考えるために PGConf.dev の前にパッチをいったん棚上げしたと書いた。前項の再現は、この既知の欠陥クラスが v1 にそのまま存在することを示す。</p></li>
+<li><h4>累算器の種と同点だと何も出ない (偽陰性)</h4><p>実機確認: スナップショットの xmin が latestCompletedXid + 1 (累算器の種) と一致する傍観者セッションだけを置いて VACUUM (VERBOSE) を実行した (cap_v1_noise)。出力は「tuples: 0 removed, 1000 remain, 0 are dead but not yet removable」で、blocker 行は 1 行も無い。採用判定は種に対しても厳密比較なので、種と同点の xmin は決して採用されず b は NONE のまま、vacuumlazy.c のゲートで行ごと消える。</p></li>
+<li><h4>XID が進むと死タプル 0 件でも行が出る (ノイズ)</h4><p>実機確認: 同じ傍観者のスナップショット取得後に無関係な XID を 5 つ消費してから、死タプルの無いテーブルを VACUUM (VERBOSE) した (cap_v1_noise2)。「tuples: 0 removed, 1000 remain, 0 are dead but not yet removable」に続いて「oldest xmin held back by: running transaction」が出る。出力条件は blocker != NONE だけで、その VACUUM が何かを消し損ねたかどうかは見ない。前項と併せると、報告が出るか出ないかを決めるのはブロッカー自身ではなく他所の XID 消費量である。なお v9 側の 0002 は同じ行を recently_dead_tuples &gt; 0 のときに限って出す。</p></li>
+<li><h4>同種の同点は接続順で犯人が決まる</h4><p>同じ候補値を持つ proc が複数あるとき、厳密比較の採用判定により pgprocnos 順で先の proc の分類が残る。pgprocnos は PGPROC 番号の昇順に維持されるから、実質はバックエンドのスロット割り当て順で、セッションの接続順が変われば報告対象も入れ替わる。0001 のカテゴリ表示では同種同士の入れ替わりは見えないが、0002 が pid や GID を付けた瞬間に順序依存が観測可能になる。</p></li>
+<li><h4>「running transaction」はトランザクションを実行していなくても出る</h4><p>実機確認: cap_v1_case3 の傍観者は state が idle in transaction で backend_xid は NULL、つまりスナップショットを保持しているだけだが、報告は「running transaction」である。分類が pid == 0 と PROC_AFFECTS_ALL_HORIZONS しか見ないため、xid の有無はカテゴリに反映されない。この名前を信じて pg_stat_activity を state = 'active' で絞ると犯人は見つからない。v9 は同じ状況を「idle in transaction holding snapshot (pid = ...)」と別カテゴリで報告する (cap_v9 CASE B)。</p></li>
+<li><h4>progress 列は VACUUM 開始時点の値のまま動かない</h4><p>pgstat_progress_update_param(PROGRESS_VACUUM_OLDEST_XMIN_BLOCKER, ...) は heap_vacuum_rel() の冒頭で 1 回呼ばれるだけで、以後更新されない。数時間の VACUUM の途中でブロッカーが commit しても列は元のカテゴリを示し続ける。コミットメッセージ自身が best-effort hint であり対象は消えているかもしれないと明記しており、鮮度は vacuum_get_cutoffs() の実行時点である。</p></li>
+</ul>
+
+<h3 class="step" id="p-v1-inloop-tests"><span class="step-mark">検証</span>テストが固定していること</h3>
+        <ul class="notes ok-list"><li><h4>ブロッカー不在時に行が出ないこと (NONE ゲート)</h4><p>src/test/recovery/t/055_vacuum_oldest_xmin_blocker.pl の "no blocker reported when nothing holds the horizon back"。並行セッションの無い状態で VACUUM (VERBOSE) を実行し、stderr に qr/oldest xmin held back by/ が無いことを unlike で要求する。vacuumlazy.c のゲートを外して無条件出力にするとこのケースが落ちる。</p></li>
+<li><h4>基本カテゴリ 2 種 (running と prepared) の分類</h4><p>"blocker reported: running transaction" は background_psql で BEGIN と txid_current() を保持したまま VACUUM し、"blocker reported: prepared transaction" は PREPARE TRANSACTION 'hold_xmin' を単独で残して VACUUM する。分類の pid == 0 分岐を落とすと後者が running transaction になり落ちる。重要な観察がある。prepared のケースは VACUUM 中に開いたままの並行トランザクションを 1 つも持たないから通る。cap_v1_case3 の決定的な同点負けは、同点相手が存在する構成を CI が一度も作らないため発火しない。レビューアが探すべき種類の隙間である。</p></li>
+<li><h4>horizon 種別と blocker の対応 (logical slot はユーザテーブルを責めない)</h4><p>"user table not held back by logical slot catalog_xmin" と "catalog relation held back by logical slot catalog_xmin" の対。test_decoding のスロットを作り、テーブル t への VACUUM では logical replication slot の行が無いことを、pg_class への VACUUM では有ることを要求する。GetOldestNonRemovableTransactionIdExt() の switch を常に blockers.shared を返すよう壊すと unlike 側が落ちる。</p></li>
+<li><h4>replication slot と standby feedback の区別</h4><p>"blocker reported: replication slot" は physical slot 経由の standby を止め、スロットに凍結された xmin だけを残す。"blocker reported: standby feedback" はスロット無しの standby の feedback で walsender の PGPROC に xmin が載る構成である。PROC_AFFECTS_ALL_HORIZONS 分岐を落とすと後者が running transaction と報告されて落ちる。</p></li>
+<li><h4>テスト自身が種の偽陰性を回避している (固定ではなく迂回)</h4><p>各ケースの前にヘルパー advance_xids() が txid_current() を 5 回呼んで XID を進める。コメントは「Advance a few XIDs so a concurrent transaction's xmin is older than this session's and the blocker gets reported」で、落とし穴 3 の種との同点をテスト側の作り込みで避けている。これを消すと意図したケースまで無出力になり得る。仕様上の穴をテストが固定せず迂回している例で、8 サブテスト全通過という結果だけからは読み取れない。</p></li>
+</ul>
+      </section>
+      <section class="patch" id="p-v1-warning">
+        <p class="eyebrow"><span class="seq">v1-0002</span><span class="sep">/</span><span>WARNING の実名化</span></p>
+        <h2>wraparound 警告でブロッカーの実名を名指しする</h2>
+        <p class="lead">0001 のカテゴリ報告に、wraparound 警告の DETAIL でだけ実名を足す。pid は ComputeXidHorizons() が ProcArrayLock 下で捕獲し、GID とスロット名は捕獲済み xid から TwoPhaseGetGidByXid() と ReplicationSlotNameForXmin() が警告時に値検索で引く。実名解決には TwoPhaseStateLock か ReplicationSlotControlLock が要るため、常時の VERBOSE 行と pg_stat_progress_vacuum には載せない。実名が付いた分だけ誤誘導も具体化し、同点の傍観者の pid を名指しする欠陥が実機で再現する。</p>
+        <dl class="facts"><div><dt>コミット</dt><dd>4062f17a355</dd></div><div><dt>件名</dt><dd>Name the specific blocker holding back VACUUM's oldest xmin</dd></div><div><dt>差分</dt><dd>11 files <span class="plus">+274</span> <span class="minus">&minus;65</span></dd></div></dl>
+
+<h3 class="step" id="p-v1-warning-problem"><span class="step-mark">問題</span>何が足りなかったか</h3>
+        <p>0001 が報告するのはカテゴリ名だけで、running transaction と言われてもどのセッションを閉じればよいか分からない。prepared transaction と replication slot は pg_stat_activity に映らないため、GID かスロット名が無ければ pg_prepared_xacts や pg_replication_slots を自分で突き合わせるしかない。horizon が autovacuum_freeze_max_age を超えて古いときに出る WARNING「cutoff for removing and freezing tuples is far in the past」は wraparound が迫る局面の警報で、ここでこそ具体的な対象名が要る。このパッチはその WARNING の DETAIL に pid、GID、スロット名を付ける。</p>
+<p>prepared transaction 'stuck' を作り、autovacuum_freeze_max_age = 100000 の下で 110000 XID を消費してから VACUUM を実行した。単独ブロッカーの意図したケースでは、DETAIL が GID まで名指しする。</p>
+<figure class="term">
+<figcaption>実行例</figcaption>
+<pre><code>$ psql -d postgres -c &quot;VACUUM t&quot;
+WARNING:  cutoff for removing and freezing tuples is far in the past
+DETAIL:  The oldest xmin horizon is currently held back by: prepared transaction &#x27;stuck&#x27;.
+HINT:  Close open transactions soon to avoid wraparound problems.
+You might also need to commit or roll back old prepared transactions, or drop stale replication slots.
+VACUUM</code></pre>
+</figure>
+<p class="code-note">ここまでは意図どおり動く。同じ DETAIL 行が同点の傍観者で無関係な pid を名指しするケースは落とし穴で示す。</p>
+
+<h3 class="step" id="p-v1-warning-design"><span class="step-mark">設計</span>採った道と捨てた道</h3>
+        <div class="choices"><div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>実名の解決を、vacuum_get_cutoffs() が「cutoff for removing and freezing tuples is far in the past」の WARNING を出すと決めた分岐の内側だけで行う。判定は OldestXmin が safeOldestXmin (nextXID から autovacuum_freeze_max_age を引いた値) より古いかどうかで、通常の VERBOSE 行と pg_stat_progress_vacuum は 0001 のカテゴリ報告のまま変えない。</p>
+<p>GID は TwoPhaseState に、スロット名は ReplicationSlotCtl にあり、読むには TwoPhaseStateLock か ReplicationSlotControlLock が要る。警告経路は horizon が autovacuum_freeze_max_age を超えたときしか走らないから、追加ロックのコスト論はここでは成立する。ただしこの形は、ProcArrayLock を放した後に追加ロックを取って実名を後追い検索する構造そのもので、0001 が対案の separate scan を退ける根拠にした「追加ロックも追加走査もない」は、シリーズ全体の説明としては成り立たなくなる。スレッドでは Laurenz Albe が autovacuum 1 回あたり 1 回の proc array 追加走査を許容と判断しており (2026-05-23)、コスト論の重み自体も争点になっている。</p>
+<p class="drop"><span class="tag tag-drop">見送り</span>ComputeXidHorizons() のループ内で名前まで解決する形。slot.c の ReplicationSlotsComputeRequiredXmin() のヘッダコメントが、ReplicationSlotControlLock を先に、ProcArrayLock を後に取る順序を文書化している。ProcArrayLock 保持中に ReplicationSlotControlLock を取るのはこの逆順で、undetectable deadlock の危険がある。したがってスロット名の解決は ProcArrayLock の下では成立しない。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>捕獲時に保存するのは OldestXminBlockerInfo の kind と、running transaction と standby feedback なら proc-&gt;pid、prepared transaction とスロットなら xid だけにする。名前そのものは保存せず、警告時に TwoPhaseGetGidByXid() と ReplicationSlotNameForXmin() が xid の値一致で検索する。</p>
+<p>pid と xid は ComputeXidHorizons() が既に読んでいる PGPROC と horizon 値からのコピーで済み、ループに新しいロックを持ち込まない。代償として値検索は二度目の非同期スナップショットになる。捕獲と検索の間に同期は無く、両関数のヘッダコメント自身が best-effort と明記して、見つからなければ false で縮退する。警告時に見つかる実体が、捕獲時に horizon を止めていた実体と同一である保証は無い。</p>
+</div>
+<div class="choice">
+<p class="take"><span class="tag tag-take">採用</span>DETAIL は errdetail("The oldest xmin horizon is currently held back by: %s%s.") の一本にまとめ、前の %s に OldestXminBlockerNames[] のカテゴリ名を、後の %s に vacuum_oldest_xmin_blocker_ident() が組み立てた suffix (" (pid %d)"、" (walsender pid %d; the transaction runs on the standby)"、" '%s'"、" (slot \"%s\")") を差し込む。</p>
+<p>警告サイトはカテゴリを問わず 1 つの ereport で済み、ident が空なら "%s%s" が自然にカテゴリ名だけへ縮退する。一方で翻訳には不向きな構造になる。errdetail のフォーマット文字列は翻訳カタログに載るが、差し込まれるカテゴリ名と suffix は _() を通らない英語リテラルで、翻訳後の DETAIL に英語断片が残る。文を部品から組み立てるため、翻訳者が語順を変えることもできない。</p>
+</div>
+</div>
+
+<h3 class="step" id="p-v1-warning-code"><span class="step-mark">仕組み</span>コードを読む</h3>
+<figure>
+<pre class="mermaid">flowchart TD
+    A["vacuum_get_cutoffs()"] --> B["GetOldestNonRemovableTransactionIdExt()&lt;br/>ProcArrayLock 下で kind と pid と xid を捕獲"]
+    B --> C{"OldestXmin が safeOldestXmin&lt;br/>より古いか"}
+    C -- "偽" --> K["WARNING なし&lt;br/>0001 のカテゴリ報告のみ"]
+    C -- "真" --> D{"捕獲した kind"}
+    D -- "running xact / standby feedback" --> E["捕獲済み pid を追記&lt;br/>追加ロックなし"]
+    D -- "prepared xact" --> F["TwoPhaseGetGidByXid()&lt;br/>TwoPhaseStateLock 共有"]
+    D -- "slot / logical slot" --> G["ReplicationSlotNameForXmin()&lt;br/>ReplicationSlotControlLock 共有"]
+    F --> H{"xid の値一致で発見か"}
+    G --> H
+    H -- "真" --> J["WARNING の DETAIL に&lt;br/>カテゴリ名と実名"]
+    H -- "偽" --> I["DETAIL はカテゴリ名のみ&lt;br/>best-effort 縮退"]
+    E --> J</pre>
+</figure>
+<figure class="code">
+<figcaption>src/backend/storage/ipc/procarray.c / ComputeXidHorizons() — 捕獲側で kind と pid か xid を残す (0002 が広げた唯一のループ内変更)</figcaption>
+<pre><code>		if (b)
+		{
+			if (proc-&gt;pid == 0)
+			{
+				this_blocker.kind = OLDEST_XMIN_BLOCKER_PREPARED_XACT;
+				this_blocker.xid = xid;
+			}
+			else if (statusFlags &amp; PROC_AFFECTS_ALL_HORIZONS)
+			{
+				this_blocker.kind = OLDEST_XMIN_BLOCKER_STANDBY_FEEDBACK;
+				this_blocker.pid = proc-&gt;pid;
+			}
+			else
+			{
+				this_blocker.kind = OLDEST_XMIN_BLOCKER_RUNNING_XACT;
+				this_blocker.pid = proc-&gt;pid;
+			}
+
+			if (TransactionIdPrecedes(xmin, h-&gt;shared_oldest_nonremovable))
+				b-&gt;shared = this_blocker;</code></pre>
+</figure>
+<p class="code-note">proc-&gt;pid == 0 が prepared transaction の dummy PGPROC の目印で、そこでは pid の代わりに xid を保存する。後で GID を引く鍵が xid しかないからだ。running transaction と walsender は走査中の PGPROC から pid をコピーするだけで、ProcArrayLock 共有下ではコピー以上のことをしない。this_blocker が採用されるかは直後の TransactionIdPrecedes() の厳密比較で決まり、同値の xmin は先に記録された方を上書きしない。この一点が落とし穴 1 の同点誤りの源になる。</p>
+<figure class="code">
+<figcaption>src/backend/commands/vacuum.c / vacuum_get_cutoffs() — wraparound 警告の組み立て (このパッチの中心)</figcaption>
+<pre><code>	if (TransactionIdPrecedes(cutoffs-&gt;OldestXmin, safeOldestXmin))
+	{
+		OldestXminBlockerInfo *blocker = &amp;cutoffs-&gt;oldest_xmin_blocker;
+		StringInfoData ident;
+
+		/* identity to append after the category name, empty if none */
+		initStringInfo(&amp;ident);
+		if (blocker-&gt;kind != OLDEST_XMIN_BLOCKER_NONE)
+			vacuum_oldest_xmin_blocker_ident(blocker, &amp;ident);
+
+		ereport(WARNING,
+				(errmsg(&quot;cutoff for removing and freezing tuples is far in the past&quot;),
+				 blocker-&gt;kind != OLDEST_XMIN_BLOCKER_NONE ?
+				 errdetail(&quot;The oldest xmin horizon is currently held back by: %s%s.&quot;,
+						   vacuum_oldest_xmin_blocker_name(blocker-&gt;kind), ident.data) : 0,
+				 errhint(&quot;Close open transactions soon to avoid wraparound problems.\n&quot;
+						 &quot;You might also need to commit or roll back old prepared transactions, or drop stale replication slots.&quot;)));
+		pfree(ident.data);
+	}</code></pre>
+</figure>
+<p class="code-note">実名解決が TransactionIdPrecedes(OldestXmin, safeOldestXmin) の内側にあるのは、追加ロックのコストをこの稀な分岐に閉じ込めるためである。GetOldestNonRemovableTransactionIdExt() はこの関数の冒頭側で既に返っており、ここは ProcArrayLock 解放後の後追い検索になる。ident は errdetail の 2 つ目の %s にそのまま入り、解決に失敗すると空文字列のまま "%s%s" がカテゴリ名だけに縮退する。errdetail 全体が条件式で 0 になり得るのは、0001 が blocker を特定できなかったときに DETAIL 行そのものを出さないためである。</p>
+<figure class="code">
+<figcaption>src/backend/access/transam/twophase.c / TwoPhaseGetGidByXid() — 捕獲済み xid から GID を引く値検索 (関数全体)</figcaption>
+<pre><code>bool
+TwoPhaseGetGidByXid(TransactionId xid, char *gid, int gidsize)
+{
+	bool		found = false;
+
+	if (!TransactionIdIsValid(xid))
+		return false;
+
+	LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
+	for (int i = 0; i &lt; TwoPhaseState-&gt;numPrepXacts; i++)
+	{
+		GlobalTransaction gxact = TwoPhaseState-&gt;prepXacts[i];
+
+		if (XidFromFullTransactionId(gxact-&gt;fxid) == xid)
+		{
+			strlcpy(gid, gxact-&gt;gid, gidsize);
+			found = true;
+			break;
+		}
+	}
+	LWLockRelease(TwoPhaseStateLock);
+
+	return found;
+}</code></pre>
+</figure>
+<p class="code-note">TwoPhaseStateLock 共有で prepXacts 配列を線形走査し、fxid の下位 32 bit と捕獲済み xid の一致で GID を返す。ヘッダコメントは best-effort と明記し、見つからなければ false を返すだけでエラーにしない。この関数を ComputeXidHorizons() の中で呼ばないのは、ProcArrayLock 保持中に TwoPhaseStateLock を重ねることになり、0001 が退けたはずの追加ロックがホットパスに入るからだ。だから呼び出しは警告分岐まで遅延される。</p>
+<figure class="code">
+<figcaption>src/backend/replication/slot.c / ReplicationSlotNameForXmin() — スロット名の値検索 (走査ループ部)</figcaption>
+<pre><code>	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+	for (int i = 0; i &lt; max_replication_slots + max_repack_replication_slots; i++)
+	{
+		ReplicationSlot *s = &amp;ReplicationSlotCtl-&gt;replication_slots[i];
+		TransactionId slot_xmin;
+
+		if (!s-&gt;in_use)
+			continue;
+
+		SpinLockAcquire(&amp;s-&gt;mutex);
+		slot_xmin = catalog ? s-&gt;effective_catalog_xmin : s-&gt;effective_xmin;
+		SpinLockRelease(&amp;s-&gt;mutex);
+
+		if (xid == slot_xmin)
+		{
+			strlcpy(name, NameStr(s-&gt;data.name), namesize);
+			found = true;
+			break;
+		}
+	}
+	LWLockRelease(ReplicationSlotControlLock);</code></pre>
+</figure>
+<p class="code-note">ReplicationSlotControlLock 共有で全スロットを走査し、catalog フラグで effective_catalog_xmin と effective_xmin を選んで値一致を探す。カテゴリが LOGICAL_SLOT なら前者、REPLICATION_SLOT なら後者で、捕獲時にどちらの horizon が効いたかと対応させる。この関数を ProcArrayLock の下で呼べないのは、ReplicationSlotsComputeRequiredXmin() のヘッダが ReplicationSlotControlLock を ProcArrayLock より先に取る順序を文書化しているためで、スロットの実名解決は構造的に後追いにしかできない。一致は値だけの照合なので、複数スロットが同じ xmin を共有すれば最初に見つかった方が名乗る。</p>
+
+<h3 class="step" id="p-v1-warning-gotchas"><span class="step-mark">注意</span>落とし穴</h3>
+        <ul class="notes warn-list"><li><h4>同点の傍観者に pid が付き、誤誘導が完成する</h4><p>実機確認: cap_v1_warn2 と cap_v1_kill の再現。prepared transaction 'stuck' が horizon を止めた状態で、同じ xmin 値を持つ repeatable read の傍観者 (idle in transaction、backend_xid は NULL) を置いて wraparound 警告を出すと、DETAIL は「running transaction (pid 3093021)」と傍観者を名指しした。別の再現 (cap_v1_kill) で助言どおり名指しされた pid を pg_terminate_backend() で切っても、次の VACUUM の removable cutoff は 881057 のまま 1 XID も進まず、10000 件の dead tuple はそのまま残った。傍観者が消えて初めてログは「prepared transaction」を報告し、ROLLBACK PREPARED の後の VACUUM で 10001 件が除去され cutoff が進んだ。原因は捕獲側にあり、ComputeXidHorizons() の厳密比較は同値の xmin を上書きしないため先に走査された傍観者が勝ち、実名解決は誤った kind の上に正しい pid を載せる。スレッドでも Sami Imseih が ComputeXidHorizons() 内の捕獲が誤った PID を報告することを実演し (2026-01-05)、Fujii Masao は hot_standby_feedback と prepared transaction の組で同型の誤カテゴリを報告している (2025-11-04)。もっともらしい実在の pid が出るため、嘘だと気づきにくい。</p></li>
+<li><h4>実名解決は「今」の値検索で、捕獲時の実体と同一とは限らない</h4><p>TwoPhaseGetGidByXid() と ReplicationSlotNameForXmin() は捕獲済み xid の値一致を警告時に検索し、捕獲と検索の間に同期は無い。holder が消えていれば false になり、DETAIL はカテゴリ名だけに縮退する。これはヘッダが best-effort と明記する設計内の縮退である。より厄介なのは別の実体が同じ値で一致する場合で、ReplicationSlotNameForXmin() のヘッダ自身が、複数スロットが xid を共有すれば最初に見つかった方を名乗ると書いている。表示された名前は「捕獲時に horizon を止めていた実体」ではなく「警告時にその値を持っていた実体」である。</p></li>
+<li><h4>pg_stat_progress_vacuum は enum の序数に 3 か所で結合している</h4><p>カテゴリの正体は procarray.h の enum、名前は vacuum.c の OldestXminBlockerNames[]、ビューの表示は system_views.sql の CASE WHEN 1..5 と、3 か所が序数で暗黙に同期している。enum にメンバーを足して names 配列を更新しても、CASE を触り忘れるとビューは ELSE NULL に落ちて無言で NULL を返す。ログ側は vacuum_oldest_xmin_blocker_name() の範囲外ガードが "unknown" を返すのでまだ気づけるが、ビュー側に対応するガードは無い。</p></li>
+<li><h4>実名は wraparound 警告にしか出ない</h4><p>heap_vacuum_rel() が VERBOSE 行と progress に渡すのは oldest_xmin_blocker.kind だけで、pid も xid もそこで捨てられる。DBA が実名を得られるのは horizon が autovacuum_freeze_max_age を超えた後だけで、通常運用の「dead but not yet removable が増えている」段階では 0001 のカテゴリ名しか手掛かりがない。実名が最も安く役立つのは危険水域に入る前だが、このパッチはロックコストを理由にそこへは出さない。</p></li>
+<li><h4>in_recovery 経路は pid 0 の RUNNING_XACT を作る</h4><p>KnownAssignedXids の分岐は make_xmin_blocker(OLDEST_XMIN_BLOCKER_RUNNING_XACT, InvalidTransactionId) で埋め、pid は 0 のままになる。VACUUM は recovery 中に走らないため、現状この値は表示に届かない。ただし vacuum_oldest_xmin_blocker_ident() は RUNNING_XACT なら無条件に " (pid %d)" を追記するので、将来この経路が報告に届くと「(pid 0)」を印字する。pid の妥当性検査はどこにも無い。</p></li>
+</ul>
+
+<h3 class="step" id="p-v1-warning-tests"><span class="step-mark">検証</span>テストが固定していること</h3>
+        <ul class="notes ok-list"><li><h4>running transaction の実名付き警告行</h4><p>src/test/recovery/t/055_vacuum_oldest_xmin_blocker.pl の "blocker reported: running transaction with PID"。background_psql で txid_current() を持つセッションを開いて pg_backend_pid() を取り、consume_xids で XID を消費した後の VACUUM ログに qr/held back by: running transaction \(pid $pid\)/ を要求する。捕獲側が走査中の PGPROC 以外の pid を書けば落ちる。ただし候補が 1 本だけの構成なので、落とし穴 1 の同点誤誘導はこのケースを素通りする。</p></li>
+<li><h4>xid から GID への解決</h4><p>同ファイルの "blocker reported: prepared transaction with identifier"。PREPARE TRANSACTION 'hold_xmin' の後に qr/held back by: prepared transaction 'hold_xmin'/ を要求する。dummy PGPROC で xid でなく別の値を保存する実装や、XidFromFullTransactionId() の比較を壊す実装は GID を引けず、カテゴリ名だけの行になって落ちる。</p></li>
+<li><h4>catalog フラグの選択</h4><p>"logical slot has a catalog_xmin" で catalog_xmin の存在を確かめた上で、"catalog relation held back by logical slot, slot named" が pg_class の VACUUM に qr/held back by: logical replication slot \(slot "s"\)/ を要求する。対になる "user table not held back by logical slot catalog_xmin" は普通のテーブルにこのカテゴリが出ないことを固定する。ReplicationSlotNameForXmin() の catalog 分岐を effective_xmin 側に倒すと一致せず落ちる。</p></li>
+<li><h4>物理スロットと standby feedback の実名</h4><p>"blocker reported: replication slot, slot named" が standby 停止後に qr/held back by: replication slot \(slot "ps"\)/ を、"blocker reported: standby feedback with walsender PID" が pg_stat_replication から取った pid で qr/held back by: standby feedback \(walsender pid $wspid; the transaction runs on the standby\)/ を要求する。walsender を PROC_AFFECTS_ALL_HORIZONS でなく普通の running transaction に分類する実装は後者で落ちる。</p></li>
+<li><h4>固定されていないもの</h4><p>どのケースも blocker 候補を 1 本しか作らず、cap_v1_warn2 の構成である同点の傍観者を組むテストは無い。holder を消してから警告を出させる best-effort 縮退 (カテゴリ名のみへの退化) も未検証のままである。同点の扱いを入れ替えた実装でも、このスイートは全件通過する。</p></li>
+</ul>
+      </section>
+
+
+      <section class="quiz" id="quiz">
+        <h2>理解度チェック</h2>
+        <p>全 16 問。選ぶと即座に正誤と解説が出る。間違えた節は最後にまとめて示すので、そこだけ読み返せばよい。</p>
+        <div class="scorebar">
+          <span class="score" id="score">0 / 16 正解</span>
+          <span class="track"><span class="fill" id="fill"></span></span>
+          <span class="remain" id="remain">未回答 16</span>
+          <button type="button" id="reset">最初からやり直す</button>
+        </div>
+        <article class="q" data-answer="0" data-anchor="p-v9-infra" data-patch="ブロッカー特定基盤">
+          <p class="q-meta"><span class="q-no">Q01</span><a href="#p-v9-infra">v9-0001 ブロッカー特定基盤</a></p>
+          <h4>スレッドの v1 が採っていた「ComputeXidHorizons() のループ内で現時点の最小値の持ち主を記録する」設計が、v2 で分離走査に再設計された記録上の直接の理由はどれか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="0" data-o="0"><span class="opt-key">A</span><span class="opt-text">ループは xid と xmin を TransactionIdOlder() で畳み込みながら進むため、途中のどの時点の暫定持ち主も最終 horizon の持ち主である保証が無く、実際に別の PID が報告される再現が示されたから</span></button>
+<button type="button" class="opt" data-q="0" data-o="1"><span class="opt-key">B</span><span class="opt-text">ComputeXidHorizons() は autovacuum 専用の経路であり、手動 VACUUM のログには情報を出せないから</span></button>
+<button type="button" class="opt" data-q="0" data-o="2"><span class="opt-key">C</span><span class="opt-text">ProcArrayLock を保持したままでは prepared transaction の GID が解決できず、カテゴリしか報告できないから</span></button>
+<button type="button" class="opt" data-q="0" data-o="3"><span class="opt-key">D</span><span class="opt-text">PGPROC の pid の読み取りには ProcArrayLock の排他獲得が必要で、horizon 計算の共有獲得と両立せず性能が大きく落ちるから</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">正解は A で、Sami Imseih が 2026-01-05 に別の PID が報告される再現を示したことが再設計の記録上の理由である。slot の xmin がループの後で畳み込まれる点も含め、途中の暫定最小値は最終値である保証が無い。選択肢 C が最も誘惑的で、ロック保持中に GID を解決できないのは事実だが、それは名前解決を FillXidHorizonBlocker() としてロック外に分離すれば済む話で、ループ内捕捉そのものを捨てた理由ではない。選択肢 D は事実誤認で、pid の読み取りに排他獲得は要らない。選択肢 B も誤りで、ComputeXidHorizons() は手動 VACUUM を含む全 horizon 計算の共通経路である。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="1" data-anchor="p-v9-infra" data-patch="ブロッカー特定基盤">
+          <p class="q-meta"><span class="q-no">Q02</span><a href="#p-v9-infra">v9-0001 ブロッカー特定基盤</a></p>
+          <h4>XidHorizonBlockerType の並びで、xid 一致型 (XHB_ACTIVE_TRANSACTION など) が xmin 一致型より常に上位に置かれているのはなぜか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="1" data-o="0"><span class="opt-key">A</span><span class="opt-text">xid 一致型はロックを保持したまま GID まで解決できるのに対し、xmin 一致型は名前解決を後回しにする必要があるから</span></button>
+<button type="button" class="opt" data-q="1" data-o="1"><span class="opt-key">B</span><span class="opt-text">xid 一致の proc こそが horizon をその値に固定している根本原因で、xmin 一致の proc を排除しても horizon は 1 XID も進まないから</span></button>
+<button type="button" class="opt" data-q="1" data-o="2"><span class="opt-key">C</span><span class="opt-text">xmin 一致型は track_activities が無効な環境では検出そのものができず、報告が安定しないから</span></button>
+<button type="button" class="opt" data-q="1" data-o="3"><span class="opt-key">D</span><span class="opt-text">xid 一致の候補は ProcArray 上で必ず xmin 一致より前に並ぶので、配列の並び順をそのまま優先順位に流用できるから</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">正解は A である。xmin 一致の proc は根本原因の xid を snapshot 越しに見ているだけで、それを終了させても xid の持ち主が全員の xmin を固定し続ける。実機でも prepared transaction と repeatable read の bystander が共存する構成で prepared 側が選ばれた。選択肢 D が最も誘惑的だが、ProcArray の並びは接続順で意味を持たず、コードは並びに依存せず type の数値比較で選抜する。早期 break も type &lt;= XHB_PREPARED_TRANSACTION という enum の並びへの依存であって配列順への依存ではない。選択肢 A は誤りで、名前解決は型を問わず全ロック解放後の FillXidHorizonBlocker() に統一されている。選択肢 C も誤りで、track_activities は active か idle かの分類に影響するだけで候補の検出には影響しない。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="2" data-anchor="p-v9-infra" data-patch="ブロッカー特定基盤">
+          <p class="q-meta"><span class="q-no">Q03</span><a href="#p-v9-infra">v9-0001 ブロッカー特定基盤</a></p>
+          <h4>スタンバイ上で動く SQL ビューから GetXidHorizonBlocker() を呼べるようにしたい。現状の実装で最初に問題になるのは何か。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="2" data-o="0"><span class="opt-key">A</span><span class="opt-text">recovery 中は pg_stat_activity が更新されないため、active と idle の判別だけが不可能になる</span></button>
+<button type="button" class="opt" data-q="2" data-o="1"><span class="opt-key">B</span><span class="opt-text">recovery 中は ProcArrayLock が startup process に独占され、共有獲得の走査が長時間ブロックし続ける</span></button>
+<button type="button" class="opt" data-q="2" data-o="2"><span class="opt-key">C</span><span class="opt-text">recovery 中の horizon は KnownAssignedXids に由来しうるが走査はそれを見ないため、Assert(!RecoveryInProgress()) が呼び出しを拒否する</span></button>
+<button type="button" class="opt" data-q="2" data-o="3"><span class="opt-key">D</span><span class="opt-text">スタンバイには replication slot が存在しないため、slot 走査が常に空振りして意味を成さない</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">正解は A である。GetXidHorizonBlockers() 冒頭の Assert とコメントが、KnownAssignedXids を走査が知らないことと per-database フィルタの無効化が要ることの 2 点を、recovery 対応する将来の呼び出し元の宿題として明記している。選択肢 D が最も誘惑的だが、スタンバイにも slot は作成できる (cascading replication 用の physical slot など)。選択肢 B は事実誤認で、共有獲得は recovery 中も通常どおり可能である。選択肢 A も誤りで、pg_stat_activity はスタンバイでも更新される。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-v9-infra" data-patch="ブロッカー特定基盤">
+          <p class="q-meta"><span class="q-no">Q04</span><a href="#p-v9-infra">v9-0001 ブロッカー特定基盤</a></p>
+          <h4>track_activities = off の環境で、idle in transaction のセッションが horizon を止めているとき、この基盤は何を報告するか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="3" data-o="0"><span class="opt-key">A</span><span class="opt-text">判別は PGPROC の wait event から行われるので、track_activities の設定には影響されない</span></button>
+<button type="button" class="opt" data-q="3" data-o="1"><span class="opt-key">B</span><span class="opt-text">pgstat_get_beentry_by_proc_number() が NULL を返すため、その候補が捨てられて blocker 無しになる</span></button>
+<button type="button" class="opt" data-q="3" data-o="2"><span class="opt-key">C</span><span class="opt-text">track_activities は通常 backend 向けの設定で走査側には適用されないので、正しく idle in transaction と報告される</span></button>
+<button type="button" class="opt" data-q="3" data-o="3"><span class="opt-key">D</span><span class="opt-text">st_state が STATE_DISABLED のままなので idle への振り替えが発火せず、active transaction 系の型のまま報告される</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">正解は A である。pgstat_report_activity() は track_activities 無効時に st_state を STATE_DISABLED へ落とすため、振り替えループの STATE_IDLEINTRANSACTION 判定が成立せず、走査時の暫定分類である active のまま残る。選択肢 B が最も誘惑的だが、backend status のエントリ自体は存在し続けるので lookup は NULL を返さず、候補も捨てられない。選択肢 A は逆で、PGPROC や wait event では idle in transaction と client I/O 待ちを区別できない (どちらも WAIT_EVENT_CLIENT_READ) ことこそが pgstat を引く理由である。選択肢 C は誤りで、track_activities は状態を記録する側 (blocker となった backend) の設定なので、走査側では回避できない。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="2" data-anchor="p-v9-log" data-patch="blocker のログ報告">
+          <p class="q-meta"><span class="q-no">Q05</span><a href="#p-v9-log">v9-0002 blocker のログ報告</a></p>
+          <h4>log_vacuum_min_duration の閾値未満で毎回終わる小さなテーブルの autovacuum では、v9-0002 の blocker 報告はどう振る舞うか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="4" data-o="0"><span class="opt-key">A</span><span class="opt-text">ログには出ないが pg_stat_progress_vacuum の列に blocker が記録され、そちらで確認できる</span></button>
+<button type="button" class="opt" data-q="4" data-o="1"><span class="opt-key">B</span><span class="opt-text">recently_dead_tuples が 0 より大きければスキャンだけは走り、結果は次回の VERBOSE 実行時にまとめて出力される</span></button>
+<button type="button" class="opt" data-q="4" data-o="2"><span class="opt-key">C</span><span class="opt-text">ログ出力ブロック自体に入らないため blocker のスキャンは一度も走らず、行も出ない</span></button>
+<button type="button" class="opt" data-q="4" data-o="3"><span class="opt-key">D</span><span class="opt-text">閾値未満でも recently_dead_tuples が 0 より大きければ blocker 行だけは例外的にログへ出る</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">報告コードは verbose または log_vacuum_min_duration 条件を満たしたログ出力ブロックの内側にしか無く、そこに入らなければ GetXidHorizonBlocker() の呼び出し自体が無い。これが「行を出すときだけ払う」コスト形状の裏面で、Sami Imseih が 2026-07-14 に指摘した短時間 vacuum のカバレッジ欠落になる。選択肢 A が最も誘惑的だが、pg_stat_progress_vacuum への露出は対案 (Bharath 版 v1) の機能で v9 には存在しない。選択肢 B のような結果の持ち越しは実装されておらず、選択肢 D のような例外経路も無い。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-v9-log" data-patch="blocker のログ報告">
+          <p class="q-meta"><span class="q-no">Q06</span><a href="#p-v9-log">v9-0002 blocker のログ報告</a></p>
+          <h4>blocker の特定を ComputeXidHorizons() のループ内で行う対案 (スレッド初期版と Bharath 版 v1) を採った場合、prepared transaction 'stuck' と、その xid を backend_xmin に写した repeatable read の idle セッションが共存する状況では何が報告されるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="5" data-o="0"><span class="opt-key">A</span><span class="opt-text">prepared transaction と idle セッションの両方が記録され、ログに blocker 行が 2 行並ぶ</span></button>
+<button type="button" class="opt" data-q="5" data-o="1"><span class="opt-key">B</span><span class="opt-text">ProcArrayLock と ReplicationSlotControlLock のロック順序違反でデッドロックが起きる</span></button>
+<button type="button" class="opt" data-q="5" data-o="2"><span class="opt-key">C</span><span class="opt-text">prepared transaction が正しく報告される。xid の一致はループ内でも xmin の一致より優先されるから</span></button>
+<button type="button" class="opt" data-q="5" data-o="3"><span class="opt-key">D</span><span class="opt-text">ループが配列順で先に厳密改善を観測した側に帰属し、実測では "running transaction" と報告された。真因の prepared transaction は名指しされない</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">ループは accumulator を改善した候補を上書きで 1 つ持つだけで、優先順位の概念が無い。実測 (v1 ビルド) では実行中のセッションが 1 本も無いのに "oldest xmin held back by: running transaction" が出た。Sami Imseih は 2026-01-05 に同型の誤 pid 報告を実演し、それがスレッド v2 で別スキャン形へ設計変更された記録上の理由である。選択肢 C が最も誘惑的だが、xid 一致を優先する順位付けは v9-0001 の別スキャンが後から導入したもので、ループ内捕捉の対案には無い。選択肢 A の複数行報告はどちらの実装にも無く、選択肢 B のデッドロックは対案が名前解決をロックの外へ遅延させることで回避している。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="1" data-anchor="p-v9-log" data-patch="blocker のログ報告">
+          <p class="q-meta"><span class="q-no">Q07</span><a href="#p-v9-log">v9-0002 blocker のログ報告</a></p>
+          <h4>vacuumlazy.c の recently_dead_tuples &gt; 0 のゲートを外し、blocker が見つかりさえすれば行を出す実装に変えると、何が観測されるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="6" data-o="0"><span class="opt-key">A</span><span class="opt-text">挙動は変わらない。horizon を止める blocker が居る間は、どのテーブルでも recently_dead_tuples が 0 より大きくなるから</span></button>
+<button type="button" class="opt" data-q="6" data-o="1"><span class="opt-key">B</span><span class="opt-text">dead tuple が 1 件も無いテーブルの vacuum ログにも blocker 行が付き、行から「この vacuum が妨げられた」ことを読み取れなくなる</span></button>
+<button type="button" class="opt" data-q="6" data-o="2"><span class="opt-key">C</span><span class="opt-text">一時テーブルの vacuum で自分自身のバックエンドが blocker として報告されるようになる</span></button>
+<button type="button" class="opt" data-q="6" data-o="3"><span class="opt-key">D</span><span class="opt-text">GetXidHorizonBlocker() が候補ゼロのとき Assert に失敗し、VERBOSE の vacuum がクラッシュする</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">選択肢 A が最も誘惑的だが、horizon が database 単位で共有でも dead tuple の有無はテーブルごとの事情である。古い snapshot を 1 本放置したまま dead tuple ゼロのテーブルを vacuum しても horizon 一致の候補は見つかる。実際、このゲートを持たない対案 v1 の実測では "tuples: 0 removed, 1000 remain, 0 are dead but not yet removable" の直後に "oldest xmin held back by: running transaction" が出力された。選択肢 D の Assert は存在せず、候補ゼロは false を返すだけである。選択肢 C は kind が VISHORIZON_TEMP のときの早期 return で防がれており、このゲートとは独立している。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="0" data-anchor="p-v9-log" data-patch="blocker のログ報告">
+          <p class="q-meta"><span class="q-no">Q08</span><a href="#p-v9-log">v9-0002 blocker のログ報告</a></p>
+          <h4>数時間かかった autovacuum の終了時、開始時点で horizon を止めていた idle セッションが途中で commit して消えていた。v9-0002 のログはどうなるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="7" data-o="0"><span class="opt-key">A</span><span class="opt-text">recently_dead_tuples の行は出るが oldest xmin blocker の行は出ないことがある。照合が開始時の cutoff への完全一致で、一致する候補が残っていないため</span></button>
+<button type="button" class="opt" data-q="7" data-o="1"><span class="opt-key">B</span><span class="opt-text">終了時に horizon を計算し直し、その時点で最も古い別の blocker を報告する</span></button>
+<button type="button" class="opt" data-q="7" data-o="2"><span class="opt-key">C</span><span class="opt-text">開始時に観測した blocker の pid が記録されており、消えたセッションの pid がそのまま報告される</span></button>
+<button type="button" class="opt" data-q="7" data-o="3"><span class="opt-key">D</span><span class="opt-text">完全一致に失敗すると "oldest xmin blocker: unknown" のフォールバック書式で出力される</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">スキャンが走るのは終了時のログ出力時が最初で、それまで blocker は観測すらされていない。渡すのは開始時に確定した vacrel-&gt;cutoffs.OldestXmin なので、blocker 消滅後は一致候補が無く GetXidHorizonBlocker() が false を返し、行ごと消える。commit message はこれを best-effort と明記している。選択肢 C が最も誘惑的だが、pid はどこにもキャッシュされない。選択肢 D の unknown 書式は switch のどの case にも無い。選択肢 B の再計算は行われず、たまたま同じ古い xid に一致する別候補が居れば報告されることはあるが、それは再計算の結果ではない。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-v1-inloop" data-patch="v1: ループ内捕捉">
+          <p class="q-meta"><span class="q-no">Q09</span><a href="#p-v1-inloop">v1-0001 v1: ループ内捕捉</a></p>
+          <h4>v1-0001 適用後、prepared transaction と REPEATABLE READ の idle in transaction セッションが min(xid, xmin) の畳み込み後に同じ候補値を共有する状態で VACUUM (VERBOSE) を実行すると、blocker 行には何が出るか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="8" data-o="0"><span class="opt-key">A</span><span class="opt-text">両方が並記される。horizon ごとに候補のカテゴリを複数保持しているため</span></button>
+<button type="button" class="opt" data-q="8" data-o="1"><span class="opt-key">B</span><span class="opt-text">prepared transaction。実 xid を持つ候補が、スナップショットの xmin しか持たない候補より優先されるため</span></button>
+<button type="button" class="opt" data-q="8" data-o="2"><span class="opt-key">C</span><span class="opt-text">実行のたびに揺れる。ProcArrayLock の下でも proc の走査順は不定のため</span></button>
+<button type="button" class="opt" data-q="8" data-o="3"><span class="opt-key">D</span><span class="opt-text">running transaction。採用判定は同点で更新せず、prepared xact のダミー PGPROC は全バックエンドより後に走査されるため</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">機序は 2 段である。TransactionIdPrecedes(xmin, 累算器) は同点で偽になり先に走査された proc の分類が残ること、そして prepared xact のダミー PGPROC は FIRST_PREPARED_XACT_PROC_NUMBER (MaxBackends + NUM_AUXILIARY_PROCS) 以降にあり、昇順に保たれた pgprocnos の走査で必ず後に来ることである。実機確認は cap_v1_case3 で、pg_stat_activity に実行中トランザクションが無いのに running transaction と出た。選択肢 B が最も誘惑的だが、xid 一致を xmin 一致より上位に置く順位付けは競合シリーズ v9 の設計で、v1 に順位付けは存在しない。選択肢 A は誤りで、v1 は horizon ごとに単一の enum しか持たない。選択肢 C も誤りで、pgprocnos は昇順に維持されるから誤分類は決定的に再現する。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="1" data-anchor="p-v1-inloop" data-patch="v1: ループ内捕捉">
+          <p class="q-meta"><span class="q-no">Q10</span><a href="#p-v1-inloop">v1-0001 v1: ループ内捕捉</a></p>
+          <h4>v1-0001 で、REPEATABLE READ スナップショットを保持する唯一の並行セッションの xmin が latestCompletedXid + 1 と一致している (スナップショット取得後に XID が 1 つも消費されていない) とき、VACUUM (VERBOSE) の blocker 行はどうなるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="9" data-o="0"><span class="opt-key">A</span><span class="opt-text">WARNING が出る。cutoff が安全な下限より古くなっているため</span></button>
+<button type="button" class="opt" data-q="9" data-o="1"><span class="opt-key">B</span><span class="opt-text">行そのものが出ない。累算器の種が latestCompletedXid + 1 で、採用が厳密比較のため</span></button>
+<button type="button" class="opt" data-q="9" data-o="2"><span class="opt-key">C</span><span class="opt-text">oldest xmin held back by: running transaction が出る。そのセッションが horizon を留めているため</span></button>
+<button type="button" class="opt" data-q="9" data-o="3"><span class="opt-key">D</span><span class="opt-text">oldest xmin held back by: none が出る。ブロッカー未特定を明示するため</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">種と同点の xmin は TransactionIdPrecedes で偽になり、b は OLDEST_XMIN_BLOCKER_NONE のまま vacuumlazy.c のゲートで行ごと消える。実機確認は cap_v1_noise で、blocker 行は 1 行も出なかった。選択肢 C が最も誘惑的で、実際そのセッションは horizon をその値に留めており、無関係な XID が 5 つ消費された途端に B の出力へ反転する (cap_v1_noise2)。報告の有無を決めるのはブロッカーではなく他所の XID 消費である。選択肢 D は誤りで、ゲートが != NONE だから none という文字列はログに出ない。選択肢 A は誤りで、WARNING は autovacuum_freeze_max_age 由来の safeOldestXmin を割った場合にしか出ない。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="0" data-anchor="p-v1-inloop" data-patch="v1: ループ内捕捉">
+          <p class="q-meta"><span class="q-no">Q11</span><a href="#p-v1-inloop">v1-0001 v1: ループ内捕捉</a></p>
+          <h4>v1-0001 が ComputeXidHorizons() のループ内でカテゴリだけを確定し、スロット名や GID などの個体の解決を 0002 に分離した理由として正しいものはどれか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="10" data-o="0"><span class="opt-key">A</span><span class="opt-text">ReplicationSlotControlLock は ProcArrayLock より先に取る順序が定められており、ProcArrayLock 保持中には取得できないため</span></button>
+<button type="button" class="opt" data-q="10" data-o="1"><span class="opt-key">B</span><span class="opt-text">カテゴリさえ分かれば個体の特定は不要だと判断されたため</span></button>
+<button type="button" class="opt" data-q="10" data-o="2"><span class="opt-key">C</span><span class="opt-text">スロット名や GID は共有メモリに置かれておらず、ディスク読み取りが必要になるため</span></button>
+<button type="button" class="opt" data-q="10" data-o="3"><span class="opt-key">D</span><span class="opt-text">名前の解決は文字列コピーを伴い、ホットパスの ComputeXidHorizons() を遅くするため</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">slot.c の ReplicationSlotsComputeRequiredXmin() が ReplicationSlotControlLock を ProcArrayLock より先に取る規約を明文化しており、逆順で取ればロック順序違反になる。だから 0002 は ProcArrayLock を放した後に TwoPhaseStateLock や ReplicationSlotControlLock を正順で取って個体を解決する。選択肢 D が最も誘惑的だが、分類の分岐自体は既にループ内で走っており、記録された理由はコストではなくロック順序である。選択肢 C は事実として誤りで、TwoPhaseState もスロットの名前も共有メモリにある。選択肢 B は 0002 が存在すること自体と矛盾する。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-v1-inloop" data-patch="v1: ループ内捕捉">
+          <p class="q-meta"><span class="q-no">Q12</span><a href="#p-v1-inloop">v1-0001 v1: ループ内捕捉</a></p>
+          <h4>055_vacuum_oldest_xmin_blocker.pl の "blocker reported: prepared transaction" は、cap_v1_case3 で再現した同点の誤分類 (prepared が running に化ける) が実装に残ったままなぜ CI で通るのか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="11" data-o="0"><span class="opt-key">A</span><span class="opt-text">テストは pg_stat_progress_vacuum を検査しており、ログの誤分類は対象外のため</span></button>
+<button type="button" class="opt" data-q="11" data-o="1"><span class="opt-key">B</span><span class="opt-text">prepared xact のダミー PGPROC が最初に走査されるので、同点でも勝てるため</span></button>
+<button type="button" class="opt" data-q="11" data-o="2"><span class="opt-key">C</span><span class="opt-text">advance_xids() が XID を 5 つ進めることで、prepared xact が唯一の最古候補になるため</span></button>
+<button type="button" class="opt" data-q="11" data-o="3"><span class="opt-key">D</span><span class="opt-text">VACUUM 実行中に開いたままの並行トランザクションが無く、prepared xact と同点になる相手が存在しないため</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">誤分類は同点でしか起きず、このケースは PREPARE TRANSACTION 'hold_xmin' だけを残して VACUUM するので、同点の相手となる並行バックエンドがそもそも居ない。決定的に再現する欠陥が CI に一度も現れない、構成上の隙間である。選択肢 C が最も誘惑的だが、advance_xids() が回避するのは累算器の種 (latestCompletedXid + 1) との同点による偽陰性であり、XID を進めても同点の相手は消えない。選択肢 B は逆で、ダミー PGPROC は FIRST_PREPARED_XACT_PROC_NUMBER 以降にあり必ず後に走査される。選択肢 A は誤りで、このケースは VACUUM (VERBOSE) の stderr を like で検査している。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="2" data-anchor="p-v1-warning" data-patch="WARNING の実名化">
+          <p class="q-meta"><span class="q-no">Q13</span><a href="#p-v1-warning">v1-0002 WARNING の実名化</a></p>
+          <h4>GID とスロット名の解決を ComputeXidHorizons() の中でなく、wraparound 警告を出す直前に行うのはなぜか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="12" data-o="0"><span class="opt-key">A</span><span class="opt-text">TwoPhaseStateLock と ReplicationSlotControlLock は排他モードでしか取れず、共有ロックしか持たないループ内では読めないため。</span></button>
+<button type="button" class="opt" data-q="12" data-o="1"><span class="opt-key">B</span><span class="opt-text">警告を出す時点で解決し直す方が情報が新しく、捕獲時に解決するより正確な実名が得られるため。</span></button>
+<button type="button" class="opt" data-q="12" data-o="2"><span class="opt-key">C</span><span class="opt-text">スロット名の解決には ReplicationSlotControlLock が要り、文書化されたロック順序は ReplicationSlotControlLock が先で ProcArrayLock が後なので、ProcArrayLock 保持中には取れないため。</span></button>
+<button type="button" class="opt" data-q="12" data-o="3"><span class="opt-key">D</span><span class="opt-text">ComputeXidHorizons() は VACUUM 以外からも呼ばれ、全呼び出し元が実名解決のコストを払うことになるため。</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">slot.c の ReplicationSlotsComputeRequiredXmin() のヘッダが ReplicationSlotControlLock を ProcArrayLock より先に取る順序を文書化しており、逆順は undetectable deadlock を招く。だからスロット名は ProcArrayLock の下では構造的に引けず、解決は警告時へ後回しになる。選択肢 D が最も誘惑的だが、blocker の捕獲コードは b が非 NULL のときしか走らず、b を渡すのは GetOldestNonRemovableTransactionIdExt() 経由の VACUUM だけなので、他の呼び出し元はもともと何も払わない。選択肢 B は逆で、警告時の値検索は捕獲時の実体と別物を見つけ得る。選択肢 A は事実誤認で、どちらの検索関数も LW_SHARED で取る。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="1" data-anchor="p-v1-warning" data-patch="WARNING の実名化">
+          <p class="q-meta"><span class="q-no">Q14</span><a href="#p-v1-warning">v1-0002 WARNING の実名化</a></p>
+          <h4>prepared transaction が oldest xmin を止めており、同じ xmin 値を持つ repeatable read の傍観者セッション (backend_xid は NULL) が居る。wraparound 警告の DETAIL は何を名指しするか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="13" data-o="0"><span class="opt-key">A</span><span class="opt-text">prepared transaction の GID。実名解決は警告時に 2PC 状態を引き直すので正しい方が出る。</span></button>
+<button type="button" class="opt" data-q="13" data-o="1"><span class="opt-key">B</span><span class="opt-text">傍観者の pid 付きの running transaction。同値の xmin では先に記録された方が勝つため。</span></button>
+<button type="button" class="opt" data-q="13" data-o="2"><span class="opt-key">C</span><span class="opt-text">両方。horizon を同値で止める候補はすべて DETAIL に併記される。</span></button>
+<button type="button" class="opt" data-q="13" data-o="3"><span class="opt-key">D</span><span class="opt-text">カテゴリ名のみ。同点は解決不能として best-effort の縮退が働く。</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">ComputeXidHorizons() の TransactionIdPrecedes() は厳密比較で、同値の xmin では blocker を上書きしない。先に走査された傍観者が kind = RUNNING_XACT と pid を残し、警告はその上に実名を載せる。実機確認 (cap_v1_warn2) では idle in transaction の pid 3093021 が名指しされ、本当の blocker は prepared transaction 'stuck' だった。選択肢 A が最も誘惑的だが、警告時に引き直すのは捕獲済み kind と xid からの GID 解決だけで、kind が既に RUNNING_XACT なら 2PC 状態は一切見ない。選択肢 C は誤りで、horizon ごとに blocker は 1 個しか持たない。選択肢 D の縮退は kind が prepared か slot で検索が外れたときの挙動である。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="3" data-anchor="p-v1-warning" data-patch="WARNING の実名化">
+          <p class="q-meta"><span class="q-no">Q15</span><a href="#p-v1-warning">v1-0002 WARNING の実名化</a></p>
+          <h4>wraparound 警告の時点で、捕獲済み xid に一致する prepared transaction を TwoPhaseGetGidByXid() が見つけられなかった。何が観測されるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="14" data-o="0"><span class="opt-key">A</span><span class="opt-text">WARNING そのものが抑止され、次回の VACUUM に持ち越される。</span></button>
+<button type="button" class="opt" data-q="14" data-o="1"><span class="opt-key">B</span><span class="opt-text">カテゴリ名の位置に unknown と表示される。</span></button>
+<button type="button" class="opt" data-q="14" data-o="2"><span class="opt-key">C</span><span class="opt-text">DETAIL 行が出ず、errmsg と errhint だけの WARNING になる。</span></button>
+<button type="button" class="opt" data-q="14" data-o="3"><span class="opt-key">D</span><span class="opt-text">DETAIL はカテゴリ名だけになり、実名の suffix が消えた行が出る。</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">vacuum_oldest_xmin_blocker_ident() が false を返しても ident は空文字列のままで、errdetail の "%s%s" は "held back by: prepared transaction." に縮退する。選択肢 C が最も誘惑的だが、errdetail が条件式で 0 になって消えるのは kind が OLDEST_XMIN_BLOCKER_NONE のとき、つまり 0001 が blocker を特定できなかったときだけである。選択肢 B の unknown は kind が names 配列の範囲外のときの返り値で、検索の失敗とは別の経路になる。選択肢 A のような抑止は存在せず、警告の発火は safeOldestXmin との比較だけで決まる。</p>
+          </div>
+        </article>
+        <article class="q" data-answer="1" data-anchor="p-v1-warning" data-patch="WARNING の実名化">
+          <p class="q-meta"><span class="q-no">Q16</span><a href="#p-v1-warning">v1-0002 WARNING の実名化</a></p>
+          <h4>OldestXminBlocker enum に新カテゴリを追加し、OldestXminBlockerNames[] にも名前を足したが、system_views.sql の CASE を触り忘れた。何が観測されるか。</h4>
+          <div class="opts"><button type="button" class="opt" data-q="15" data-o="0"><span class="opt-key">A</span><span class="opt-text">ビュー定義の CASE が一致する WHEN を欠くため、参照時に実行時エラーになる。</span></button>
+<button type="button" class="opt" data-q="15" data-o="1"><span class="opt-key">B</span><span class="opt-text">ログの DETAIL には新カテゴリ名が出るが、pg_stat_progress_vacuum の oldest_xmin_blocker は NULL になる。</span></button>
+<button type="button" class="opt" data-q="15" data-o="2"><span class="opt-key">C</span><span class="opt-text">ビューにもログにも unknown が表示され、範囲外ガードが両方で働く。</span></button>
+<button type="button" class="opt" data-q="15" data-o="3"><span class="opt-key">D</span><span class="opt-text">ログにもビューにも何も出ない。序数の不一致は捕獲時に NONE へ丸められる。</span></button>
+</div>
+          <div class="q-feedback" hidden aria-live="polite">
+            <p class="verdict"></p>
+            <p class="why">ビューは param14 の生の序数を CASE WHEN 1..5 で文字列にしており、新しい序数は ELSE NULL に落ちる。names 配列は更新済みなのでログ側は正しい名前を出す。選択肢 C が最も誘惑的だが、unknown を返す範囲外ガードは C 関数の vacuum_oldest_xmin_blocker_name() にしかなく、ビューに対応物は無い。しかもこの筋書きでは配列も更新済みなのでガードには到達しない。選択肢 A は誤りで、SQL の CASE は一致が無ければエラーでなく NULL を返す。選択肢 D のような丸めはどこにも実装されていない。</p>
+          </div>
+        </article>
+
+        <div class="result" id="result" hidden>
+          <h4 id="result-title"></h4>
+          <p id="result-body"></p>
+          <ul id="result-list"></ul>
+        </div>
+      </section>
+    </main>
+  </div>
+  <footer class="site-footer">v9 はブランチ add-oldest-xmin-reason-to-autovacuum-log (CF 6188)、v1 はスレッド添付パッチ (2026-07-14) を git am で適用したもの。</footer>
+
+  <script>
+  (function () {
+    var total = 16;
+    var answered = 0, correct = 0, wrong = {};
+    var scoreEl = document.getElementById('score');
+    var fillEl = document.getElementById('fill');
+    var remainEl = document.getElementById('remain');
+    var resultEl = document.getElementById('result');
+    var resultTitle = document.getElementById('result-title');
+    var resultBody = document.getElementById('result-body');
+    var resultList = document.getElementById('result-list');
+
+    function refresh() {
+      scoreEl.textContent = correct + ' / ' + total + ' 正解';
+      fillEl.style.width = (answered ? (correct / total) * 100 : 0) + '%';
+      remainEl.textContent = answered < total ? ('未回答 ' + (total - answered)) : '回答完了';
+      if (answered === total) {
+        var names = Object.keys(wrong);
+        resultTitle.textContent = correct + ' / ' + total + ' 正解';
+        if (names.length === 0) {
+          resultBody.textContent = '全問正解。各パッチの設計判断と落とし穴を押さえられている。';
+          resultList.innerHTML = '';
+        } else {
+          resultBody.textContent = '取りこぼしのあった節を読み返すと効率がよい。';
+          resultList.innerHTML = names.map(function (a) {
+            return '<li><a href="#' + a + '">' + wrong[a].label + '</a>（' + wrong[a].count + ' 問）</li>';
+          }).join('');
+        }
+        resultEl.hidden = false;
+      } else {
+        resultEl.hidden = true;
+      }
+    }
+
+    document.querySelectorAll('.q').forEach(function (q) {
+      var answer = parseInt(q.dataset.answer, 10);
+      q.querySelectorAll('.opt').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          if (q.dataset.done) return;
+          q.dataset.done = '1';
+          var picked = parseInt(btn.dataset.o, 10);
+          var ok = picked === answer;
+          answered++;
+          if (ok) {
+            correct++;
+          } else {
+            var key = q.dataset.anchor;
+            if (!wrong[key]) wrong[key] = { label: q.dataset.patch, count: 0 };
+            wrong[key].count++;
+          }
+          q.querySelectorAll('.opt').forEach(function (b) {
+            var idx = parseInt(b.dataset.o, 10);
+            b.disabled = true;
+            if (idx === answer) b.classList.add('correct');
+            else if (idx === picked) b.classList.add('wrong');
+          });
+          var fb = q.querySelector('.q-feedback');
+          var verdict = fb.querySelector('.verdict');
+          verdict.textContent = ok ? '正解' : '不正解 — 正解は ' + String.fromCharCode(65 + answer);
+          verdict.className = 'verdict ' + (ok ? 'ok' : 'ng');
+          fb.hidden = false;
+          refresh();
+        });
+      });
+    });
+
+    document.getElementById('reset').addEventListener('click', function () {
+      answered = 0; correct = 0; wrong = {};
+      document.querySelectorAll('.q').forEach(function (q) {
+        delete q.dataset.done;
+        q.querySelector('.q-feedback').hidden = true;
+        q.querySelectorAll('.opt').forEach(function (b) {
+          b.disabled = false;
+          b.classList.remove('correct', 'wrong');
+        });
+      });
+      refresh();
+      document.getElementById('quiz').scrollIntoView({ block: 'start' });
+    });
+
+    refresh();
+  })();
+  </script>
+</body>
+</html>
