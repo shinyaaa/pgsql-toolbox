@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第7章 実践: 論理レプリケーションと CDC | pgoutput 実践ガイド — PostgreSQL 16 · 2026-08-06</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgoutput 実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 16 · 2026-08-06</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 pgoutput でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 pgoutput とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 どこで使われているか</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 test_decoding との違い</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 このガイドの進め方</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 wal_level を logical にする</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルデータベースとテーブルを作る</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 パブリケーションを作る</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 レプリケーションスロットを作る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす — 3 分で出力を見る</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 SQL 関数で出力を覗く</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 4 行の出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 peek と get の違い</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 pg_recvlogical で受け取る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 出力メッセージを読む</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 メッセージ型の一覧</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 Relation と Insert</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 Update・Delete と REPLICA IDENTITY</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 Truncate と論理メッセージ</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 デコーダを手元に置く</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 pgoutput のオプション</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 オプションの渡し方</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 proto_version</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 binary</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 messages</a></li>
+      <li><a href="ch05.html#sec-5-5">5.5 streaming</a></li>
+      <li><a href="ch05.html#sec-5-6">5.6 two_phase</a></li>
+      <li><a href="ch05.html#sec-5-7">5.7 origin</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 送る内容をパブリケーションで絞る</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 publish で操作種別を絞る</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 行フィルタ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 列リスト</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パーティションテーブル</a></li>
+      <li><a href="ch06.html#sec-6-5">6.5 テーブル集合の指定方法</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch07.html">第7章 実践: 論理レプリケーションと CDC</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 購読側インスタンスを用意する</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 CREATE SUBSCRIPTION で複製する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 裏側で流れている pgoutput のオプション</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 サブスクリプションの設定は pgoutput の設定</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 監視する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 つまずきポイントと対処・チートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 環境まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 REPLICA IDENTITY まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 スロットの運用</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 出力が空になるとき</a></li>
+      <li><a href="ch08.html#sec-8-5">8.5 チートシート</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第7章　実践: 論理レプリケーションと CDC</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>2つのインスタンス間で論理レプリケーションを構成できる</li>
+    <li><code>CREATE SUBSCRIPTION</code> が裏で発行している pgoutput のオプションを、自分の目で確認できる</li>
+    <li>サブスクリプションの設定変更が pgoutput のオプションに直結することを説明できる</li>
+    <li>レプリケーションの進み具合を監視ビューで確認できる</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>第6章までの環境（発行側 = ポート 5432 の <code>shop</code> データベース、<code>shop_pub</code>）</li>
+    <li>購読側として、<strong>別インスタンス</strong>をポート 5433 に用意する（作り方は 7.1）</li>
+    <li>第6章で作った検証用パブリケーションは削除しておく:
+        <code>DROP PUBLICATION ins_only_pub, cheap_pub, names_pub, sales_leaf_pub, sales_root_pub;</code></li>
+  </ul>
+</div>
+
+<h2 id="sec-7-1">7.1　購読側インスタンスを用意する</h2>
+
+<p>ここまでは pgoutput の出力を自分で覗いてきた。この章では、
+<strong>PostgreSQL 自身に受け取らせる</strong>構成を作る。図 7.1 の形になる。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    subgraph PUB["発行側 (:5432) shop"]
+        T1["items"]
+        P["shop_pub"]
+        SLOT["スロット shop_sub<br/>plugin = pgoutput"]
+        WS["ウォールセンダ"]
+    end
+    subgraph SUB["購読側 (:5433) shop"]
+        S["サブスクリプション<br/>shop_sub"]
+        AW["適用ワーカ"]
+        T2["items"]
+    end
+    T1 --> P --> SLOT --> WS
+    WS -->|START_REPLICATION<br/>pgoutput のメッセージ列| AW
+    S --- AW
+    AW --> T2
+  </pre>
+  <figcaption>図 7.1: 論理レプリケーションの構成。購読側の適用ワーカが pgoutput の出力を受け取って適用する</figcaption>
+</figure>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 購読側を用意する</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>ポート 5433 に別インスタンスを作って起動する（Debian/Ubuntu の例）。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pg_createcluster 16 replica -p 5433 -- -A trust
+pg_ctlcluster 16 replica start
+pg_lsclusters</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>Ver Cluster Port Status Owner    Data directory                 Log file
+16  main    5432 online postgres /var/lib/postgresql/16/main    ...
+16  replica 5433 online postgres /var/lib/postgresql/16/replica ...</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>購読側にデータベースと<strong>同じ定義のテーブル</strong>を作る。
+           DDL は複製されないので、これは手で用意する必要がある。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -p 5433）</span>
+          <pre><code>CREATE DATABASE shop;
+\c shop
+CREATE TABLE items (
+    id       integer PRIMARY KEY,
+    name     text    NOT NULL,
+    price    integer NOT NULL,
+    in_stock boolean DEFAULT true
+);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>CREATE DATABASE
+CREATE TABLE</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>発行側にレプリケーション用のロールを作り、対象テーブルの読み取り権限を与える。</p>
+        <div class="example">
+          <span class="example-label">入力（psql :5432）</span>
+          <pre><code>CREATE ROLE repl_user WITH LOGIN REPLICATION PASSWORD 'repl_pass';
+\c shop
+GRANT USAGE ON SCHEMA public TO repl_user;
+GRANT SELECT ON items TO repl_user;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>CREATE ROLE
+GRANT
+GRANT</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>発行側の <code>pg_hba.conf</code> に、購読側からの接続を許す行を足して再読み込みする。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>echo 'host    shop    repl_user    127.0.0.1/32    scram-sha-256' \
+  &gt;&gt; /etc/postgresql/16/main/pg_hba.conf
+psql -c "SELECT pg_reload_conf();"</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>発行側にテスト用のデータを入れておく。</p>
+        <div class="example">
+          <span class="example-label">入力（psql :5432 -d shop）</span>
+          <pre><code>TRUNCATE items;
+INSERT INTO items VALUES (1, 'apple', 120), (2, 'banana', 80);</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  <code>pg_hba.conf</code> の設定を忘れると、<code>CREATE SUBSCRIPTION</code> がこう失敗する。
+  <div class="example" style="margin-top:.6em">
+    <span class="example-label out">出力</span>
+    <pre><code>ERROR:  could not connect to the publisher: connection to server at "127.0.0.1",
+port 5432 failed: fe_sendauth: no password supplied</code></pre>
+  </div>
+  論理レプリケーションの接続は <code>replication</code> 用の行ではなく、
+  <strong>対象データベースへの通常の接続行</strong>で許可する点に注意する
+  （ロール側に <code>REPLICATION</code> 属性は必要）。
+</div>
+
+<h2 id="sec-7-2">7.2　CREATE SUBSCRIPTION で複製する</h2>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: サブスクリプションを作る</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>購読側でサブスクリプションを作る。<strong>出力プラグインは指定していない</strong>点に注目する。</p>
+        <div class="example">
+          <span class="example-label">入力（psql :5433 -d shop）</span>
+          <pre><code>CREATE SUBSCRIPTION shop_sub
+  CONNECTION 'host=127.0.0.1 port=5432 dbname=shop user=repl_user password=repl_pass'
+  PUBLICATION shop_pub;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>NOTICE:  created replication slot "shop_sub" on publisher
+CREATE SUBSCRIPTION</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>数秒待って購読側を見ると、初回コピーが終わっている。</p>
+        <div class="example">
+          <span class="example-label">入力（psql :5433 -d shop）</span>
+          <pre><code>SELECT * FROM items ORDER BY id;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> id |  name  | price | in_stock
+----+--------+-------+----------
+  1 | apple  |   120 | t
+  2 | banana |    80 | t
+(2 rows)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>発行側で1件足すと、購読側にも現れる。</p>
+        <div class="example">
+          <span class="example-label">入力（psql :5432 -d shop）</span>
+          <pre><code>INSERT INTO items VALUES (3, 'cherry', 300);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label">入力（psql :5433 -d shop）</span>
+          <pre><code>SELECT * FROM items ORDER BY id;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> id |  name  | price | in_stock
+----+--------+-------+----------
+  1 | apple  |   120 | t
+  2 | banana |    80 | t
+  3 | cherry |   300 | t
+(3 rows)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>発行側にできたスロットを見ると、プラグインは pgoutput である。</p>
+        <div class="example">
+          <span class="example-label">入力（psql :5432 -d shop）</span>
+          <pre><code>SELECT slot_name, plugin, slot_type, active, two_phase
+  FROM pg_replication_slots WHERE slot_name = 'shop_sub';</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>-[ RECORD 1 ]-------
+slot_name | shop_sub
+plugin    | pgoutput
+slot_type | logical
+active    | t
+two_phase | f</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>ここまでで <strong>pgoutput を一度も名指ししていない</strong>のに、
+スロットの <code>plugin</code> は <code>pgoutput</code> になっている。
+論理レプリケーションは pgoutput を既定かつ唯一の出力プラグインとして使うためである。</p>
+
+<h2 id="sec-7-3">7.3　裏側で流れている pgoutput のオプション</h2>
+
+<p>購読側が発行側に何を要求しているかは、発行側のログで直接見られる。
+<code>log_replication_commands</code> を有効にすると、レプリケーションコマンドが記録される。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: START_REPLICATION を覗く</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>発行側でログ設定を有効にする。</p>
+        <div class="example">
+          <span class="example-label">入力（psql :5432）</span>
+          <pre><code>ALTER SYSTEM SET log_replication_commands = on;
+SELECT pg_reload_conf();</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>ALTER SYSTEM
+ pg_reload_conf
+----------------
+ t
+(1 row)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>購読側を一度切って繋ぎ直し、接続をやり直させる。</p>
+        <div class="example">
+          <span class="example-label">入力（psql :5433 -d shop）</span>
+          <pre><code>ALTER SUBSCRIPTION shop_sub DISABLE;
+ALTER SUBSCRIPTION shop_sub ENABLE;</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>発行側のログを見る。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>grep -a "START_REPLICATION" /var/log/postgresql/postgresql-16-main.log | tail -1</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>STATEMENT:  START_REPLICATION SLOT "shop_sub" LOGICAL 0/0 (proto_version '4', origin 'any', publication_names '"shop_pub"')</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>第3章で <code>pg_recvlogical -o proto_version=4 -o publication_names='shop_pub'</code> と
+手で打ったのと<strong>同じもの</strong>が、購読側から自動的に送られている。
+論理レプリケーションと <code>pg_recvlogical</code> は、まったく同じ入口を使っている。</p>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  初回のデータコピー中には、テーブルごとの一時スロットが別に作られ、
+  こちらも pgoutput で <code>START_REPLICATION</code> する。ログには
+  <code>SLOT "pg_24585_sync_24577_7670908608867262836"</code> のような名前で現れる。
+  同期が終われば自動的に消えるので、この名前のスロットを見かけても慌てなくてよい。
+</div>
+
+<h2 id="sec-7-4">7.4　サブスクリプションの設定は pgoutput の設定</h2>
+
+<p>サブスクリプションのオプションを変えると、<code>START_REPLICATION</code> の中身がそのまま変わる。
+つまり <strong><code>ALTER SUBSCRIPTION</code> は pgoutput のオプションを変えている</strong>のである。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: オプションを変えてログを見比べる</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p><code>binary</code> と <code>streaming</code> を変える。</p>
+        <div class="example">
+          <span class="example-label">入力（psql :5433 -d shop）</span>
+          <pre><code>ALTER SUBSCRIPTION shop_sub SET (binary = true, streaming = 'parallel');</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>ALTER SUBSCRIPTION</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>数秒待ってログを見る。</p>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>STATEMENT:  START_REPLICATION SLOT "shop_sub" LOGICAL 0/234F900 (proto_version '4', streaming 'parallel', origin 'any', publication_names '"shop_pub"', binary 'true')</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>さらに <code>origin</code> を変える。</p>
+        <div class="example">
+          <span class="example-label">入力（psql :5433 -d shop）</span>
+          <pre><code>ALTER SUBSCRIPTION shop_sub SET (origin = none);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力（ログ）</span>
+          <pre><code>STATEMENT:  START_REPLICATION SLOT "shop_sub" LOGICAL 0/234F900 (proto_version '4', streaming 'parallel', origin 'none', publication_names '"shop_pub"', binary 'true')</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>設定はカタログにも反映されている。</p>
+        <div class="example">
+          <span class="example-label">入力（psql :5433 -d shop）</span>
+          <pre><code>SELECT subname, subbinary, substream, suborigin FROM pg_subscription;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> subname  | subbinary | substream | suborigin
+----------+-----------+-----------+-----------
+ shop_sub | t         | p         | none
+(1 row)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>対応関係を表にすると次のとおり。第5章で1つずつ試したオプションが、そのまま並んでいる。</p>
+
+<table>
+  <thead>
+    <tr><th>サブスクリプションのオプション</th><th>pgoutput に渡るオプション</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>binary = true</code></td><td><code>binary 'true'</code></td></tr>
+    <tr><td><code>streaming = 'on'</code> / <code>'parallel'</code></td><td><code>streaming 'on'</code> / <code>'parallel'</code></td></tr>
+    <tr><td><code>two_phase = true</code></td><td><code>two_phase 'true'</code>（スロット作成時に決まる）</td></tr>
+    <tr><td><code>origin = none</code></td><td><code>origin 'none'</code></td></tr>
+    <tr><td><code>PUBLICATION a, b</code></td><td><code>publication_names '"a","b"'</code></td></tr>
+  </tbody>
+</table>
+
+<h2 id="sec-7-5">7.5　監視する</h2>
+
+<p>運用で見るべきビューは3つある。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql :5433 -d shop）— 購読側</span>
+  <pre><code>SELECT subid, subname, pid, received_lsn, latest_end_lsn FROM pg_stat_subscription;</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>-[ RECORD 1 ]--+----------
+subid          | 24585
+subname        | shop_sub
+pid            | 8479
+received_lsn   | 0/234F900
+latest_end_lsn | 0/234F900</code></pre>
+</div>
+
+<p><code>received_lsn</code> と <code>latest_end_lsn</code> が一致していれば追いついている。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql :5432 -d shop）— 発行側</span>
+  <pre><code>SELECT application_name, state, sent_lsn, flush_lsn, replay_lsn, sync_state
+  FROM pg_stat_replication;</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>-[ RECORD 1 ]----+----------
+application_name | shop_sub
+state            | streaming
+sent_lsn         | 0/234F900
+flush_lsn        | 0/234F900
+replay_lsn       | 0/234F900
+sync_state       | async</code></pre>
+</div>
+
+<p><code>state = streaming</code> が定常状態である。<code>sent_lsn</code> と <code>replay_lsn</code> の差が
+遅延にあたる。3つ目の <code>pg_stat_replication_slots</code>（5.5 で使った）で
+spill / stream の発生状況を見れば、遅延の原因がデコード側にあるかどうかが切り分けられる。</p>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li>発行側で INSERT した行が、数秒以内に購読側に現れる</li>
+    <li>発行側の <code>pg_replication_slots</code> に <code>plugin = pgoutput</code> のスロットがある</li>
+    <li>発行側のログで <code>START_REPLICATION ... (proto_version '4', ...)</code> を確認した</li>
+    <li><code>ALTER SUBSCRIPTION ... SET (binary = true)</code> がログの <code>binary 'true'</code> に対応するのを確認した</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch06.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第6章 送る内容をパブリケーションで絞る</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch08.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第8章 つまずきポイントと対処・チートシート</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgoutput 実践ガイド — PostgreSQL 16.13 上で実際に実行した出力にもとづく</footer>
+</body>
+</html>

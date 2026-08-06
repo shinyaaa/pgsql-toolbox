@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第8章 つまずきポイントと対処・チートシート | pgoutput 実践ガイド — PostgreSQL 16 · 2026-08-06</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgoutput 実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 16 · 2026-08-06</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 pgoutput でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 pgoutput とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 どこで使われているか</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 test_decoding との違い</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 このガイドの進め方</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 wal_level を logical にする</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルデータベースとテーブルを作る</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 パブリケーションを作る</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 レプリケーションスロットを作る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす — 3 分で出力を見る</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 SQL 関数で出力を覗く</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 4 行の出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 peek と get の違い</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 pg_recvlogical で受け取る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 出力メッセージを読む</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 メッセージ型の一覧</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 Relation と Insert</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 Update・Delete と REPLICA IDENTITY</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 Truncate と論理メッセージ</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 デコーダを手元に置く</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 pgoutput のオプション</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 オプションの渡し方</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 proto_version</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 binary</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 messages</a></li>
+      <li><a href="ch05.html#sec-5-5">5.5 streaming</a></li>
+      <li><a href="ch05.html#sec-5-6">5.6 two_phase</a></li>
+      <li><a href="ch05.html#sec-5-7">5.7 origin</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 送る内容をパブリケーションで絞る</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 publish で操作種別を絞る</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 行フィルタ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 列リスト</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パーティションテーブル</a></li>
+      <li><a href="ch06.html#sec-6-5">6.5 テーブル集合の指定方法</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 実践: 論理レプリケーションと CDC</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 購読側インスタンスを用意する</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 CREATE SUBSCRIPTION で複製する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 裏側で流れている pgoutput のオプション</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 サブスクリプションの設定は pgoutput の設定</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 監視する</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch08.html">第8章 つまずきポイントと対処・チートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 環境まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 REPLICA IDENTITY まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 スロットの運用</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 出力が空になるとき</a></li>
+      <li><a href="ch08.html#sec-8-5">8.5 チートシート</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第8章　つまずきポイントと対処・チートシート</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>pgoutput 利用時によく出るエラーを、メッセージから原因に結び付けられる</li>
+    <li>スロットが原因のディスク逼迫を検知し、対処できる</li>
+    <li>チートシートを使って、必要な操作をすぐ引ける</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>第7章までの環境（発行側 :5432、購読側 :5433）</li>
+    <li>この章のエラー例はすべて実際に再現させたもの</li>
+  </ul>
+</div>
+
+<h2 id="sec-8-1">8.1　環境まわりのエラー</h2>
+
+<p><strong>wal_level が足りない。</strong> 論理スロットを作ろうとして次のエラーが出たら、
+そのインスタンスの <code>wal_level</code> が <code>logical</code> になっていない。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql）</span>
+  <pre><code>SELECT * FROM pg_create_logical_replication_slot('demo', 'pgoutput');</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>ERROR:  logical decoding requires wal_level &gt;= logical</code></pre>
+</div>
+
+<p>対処は 2.1 と同じ（<code>ALTER SYSTEM SET wal_level = 'logical';</code> のあと再起動）。
+<strong>再起動が必要</strong>なので、<code>pg_reload_conf()</code> だけでは直らない。</p>
+
+<p><strong>プラグインが見つからない。</strong> pgoutput 以外を指定したときによく出る。</p>
+
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>ERROR:  could not access file "wal2json": No such file or directory</code></pre>
+</div>
+
+<p>pgoutput は標準同梱なのでこのエラーは出ないはずである。出るなら綴りを疑う。
+インストール済みのプラグインは次で確認できる。</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>ls $(pg_config --pkglibdir) | grep -E 'pgoutput|decoding'</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>pgoutput.so
+test_decoding.so</code></pre>
+</div>
+
+<p><strong>オプションの不備。</strong> 5.2 で見たとおり、起動時コールバックで落ちる。
+<code>CONTEXT</code> 行に <code>output plugin "pgoutput"</code> と出るのが目印である。</p>
+
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>ERROR:  publication_names parameter missing
+CONTEXT:  slot "shop_slot", output plugin "pgoutput", in the startup callback</code></pre>
+</div>
+
+<p><strong>同一インスタンス内でのサブスクリプション。</strong>
+発行側と購読側が同じインスタンス（データベースは別）だと、
+<code>CREATE SUBSCRIPTION</code> が終わらずハングする。スロット作成が
+「実行中のトランザクションが終わるのを待つ」状態になり、そのトランザクション自身が
+<code>CREATE SUBSCRIPTION</code> だからである。発行側のログにはこう出る。</p>
+
+<div class="example">
+  <span class="example-label out">出力（発行側ログ）</span>
+  <pre><code>LOG:  logical decoding found initial starting point at 0/1E31378
+DETAIL:  Waiting for transactions (approximately 1) older than 774 to end.
+STATEMENT:  CREATE_REPLICATION_SLOT "shop_sub" LOGICAL pgoutput (SNAPSHOT 'nothing')</code></pre>
+</div>
+
+<p>回避策は<strong>スロットを先に作っておくこと</strong>である。実際に次の手順で成功する。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql、発行側データベース）</span>
+  <pre><code>SELECT * FROM pg_create_logical_replication_slot('local_sub_slot', 'pgoutput');</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>   slot_name    |    lsn
+----------------+-----------
+ local_sub_slot | 0/27883D0
+(1 row)</code></pre>
+</div>
+<div class="example">
+  <span class="example-label">入力（psql、購読側データベース）</span>
+  <pre><code>CREATE SUBSCRIPTION local_sub
+  CONNECTION 'host=127.0.0.1 port=5432 dbname=shop user=repl_user password=repl_pass'
+  PUBLICATION shop_pub
+  WITH (create_slot = false, slot_name = 'local_sub_slot', copy_data = false);</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>CREATE SUBSCRIPTION</code></pre>
+</div>
+
+<h2 id="sec-8-2">8.2　REPLICA IDENTITY まわりのエラー</h2>
+
+<p>パブリケーションに含まれるテーブルにレプリカアイデンティティが無いと、
+<strong>UPDATE と DELETE そのものが失敗する</strong>ようになる。INSERT は成功するので、
+気付くのが遅れやすい。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql -d shop）</span>
+  <pre><code>CREATE TABLE audit_log (a int, b text);
+ALTER TABLE audit_log REPLICA IDENTITY NOTHING;
+ALTER PUBLICATION shop_pub ADD TABLE audit_log;
+
+INSERT INTO audit_log VALUES (1, 'x');   -- これは通る
+UPDATE audit_log SET b = 'y';
+DELETE FROM audit_log;</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>INSERT 0 1
+ERROR:  cannot update table "audit_log" because it does not have a replica identity and publishes updates
+HINT:  To enable updating the table, set REPLICA IDENTITY using ALTER TABLE.
+ERROR:  cannot delete from table "audit_log" because it does not have a replica identity and publishes deletes
+HINT:  To enable deleting from the table, set REPLICA IDENTITY using ALTER TABLE.</code></pre>
+</div>
+
+<p>対処は3つある。</p>
+
+<ol>
+  <li>主キーか一意索引を付けて <code>ALTER TABLE ... REPLICA IDENTITY USING INDEX ...</code> を設定する（推奨）</li>
+  <li><code>ALTER TABLE ... REPLICA IDENTITY FULL;</code> にする（購読側の適用が遅くなる）</li>
+  <li>そのテーブルをパブリケーションから外すか、<code>publish = 'insert'</code> にする</li>
+</ol>
+
+<p>危ないテーブルは事前に洗い出せる。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql -d shop）</span>
+  <pre><code>SELECT c.relname, c.relreplident
+  FROM pg_class c
+  JOIN pg_publication_rel pr ON pr.prrelid = c.oid
+ WHERE c.relreplident IN ('n', 'd')
+   AND NOT EXISTS (SELECT 1 FROM pg_index i
+                    WHERE i.indrelid = c.oid AND i.indisprimary);</code></pre>
+</div>
+
+<p>この結果に出たテーブルは、レプリカアイデンティティが決まっていないので UPDATE / DELETE で失敗する。</p>
+
+<p>6.2 で見た行フィルタ由来のエラーも同じ系統である。</p>
+
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>ERROR:  cannot update table "items"
+DETAIL:  Column used in the publication WHERE expression is not part of the replica identity.</code></pre>
+</div>
+
+<h2 id="sec-8-3">8.3　スロットの運用</h2>
+
+<p>pgoutput のトラブルで最も深刻なのは、<strong>誰も読まないスロットが WAL を溜め続けること</strong>である。
+スロットは「まだ読まれていない WAL を消すな」と指示するので、放置するとディスクが埋まる。
+状態は図 8.1 のように遷移する。</p>
+
+<figure>
+  <pre class="mermaid">
+stateDiagram-v2
+    [*] --> reserved: スロット作成
+    reserved --> reserved: 消費者が読み進める<br/>(restart_lsn が前進)
+    reserved --> extended: 消費者が止まり<br/>max_slot_wal_keep_size 超過が近い
+    extended --> lost: WAL が削除された<br/>(このスロットは復旧不能)
+    reserved --> [*]: pg_drop_replication_slot()
+    lost --> [*]: 作り直すしかない
+  </pre>
+  <figcaption>図 8.1: レプリケーションスロットの状態遷移（pg_replication_slots.wal_status）</figcaption>
+</figure>
+
+<p>監視は次のクエリで行う。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql -d shop）</span>
+  <pre><code>SELECT slot_name, active,
+       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS retained_wal,
+       wal_status
+  FROM pg_replication_slots ORDER BY slot_name;</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>  slot_name  | active | retained_wal | wal_status
+-------------+--------+--------------+------------
+ big_slot    | f      | 494 kB       | reserved
+ cdc_slot    | f      | 909 kB       | reserved
+ shop_slot   | f      | 19 kB        | reserved
+ shop_sub    | t      | 56 bytes     | reserved
+ stream_slot | f      | 494 kB       | reserved
+ tp_slot     | f      | 58 kB        | reserved
+(6 rows)</code></pre>
+</div>
+
+<p>読み方は次のとおり。</p>
+
+<ul>
+  <li><code>active = f</code> かつ <code>retained_wal</code> が増え続けるスロットが危険である</li>
+  <li><code>wal_status</code> が <code>extended</code> になったら猶予は残り少ない</li>
+  <li><code>lost</code> になったスロットは復旧できない。作り直しになる</li>
+</ul>
+
+<p>不要なスロットは削除する。ただし<strong>使用中は削除できない</strong>。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql -d shop）</span>
+  <pre><code>SELECT pg_drop_replication_slot('shop_sub');</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>ERROR:  replication slot "shop_sub" is active for PID 8518</code></pre>
+</div>
+
+<div class="pitfall">
+  <strong>⚠️ 破壊的操作の注意</strong>
+  <code>pg_drop_replication_slot()</code> は<strong>取り消せない</strong>。
+  稼働中のサブスクリプションのスロットを消すと、購読側は二度と続きを受け取れず、
+  サブスクリプションの作り直し（＝全データの再コピー）が必要になる。
+  消す前に必ず <code>pg_replication_slots</code> と <code>pg_stat_replication</code> で
+  そのスロットの持ち主を確認すること。サブスクリプション側から消すなら
+  <code>DROP SUBSCRIPTION</code> を使えば、発行側のスロットも一緒に消える。
+</div>
+
+<p><strong>スロットを先に消してしまった場合。</strong>
+購読側より先に発行側のスロットを消すと、サブスクリプションが「消せない」状態になる。
+<code>DROP SUBSCRIPTION</code> は発行側のスロットも消そうとするが、それが存在しないためである。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql :5433 -d shop）</span>
+  <pre><code>DROP SUBSCRIPTION shop_sub;</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>ERROR:  could not drop replication slot "shop_sub" on publisher: ERROR:  replication slot "shop_sub" does not exist</code></pre>
+</div>
+
+<p>データベースごと消そうとしても止められる。</p>
+
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>ERROR:  database "shop" is being used by logical replication subscription
+DETAIL:  There is 1 subscription.</code></pre>
+</div>
+
+<p>対処は、<strong>スロットとの紐付けを外してから削除する</strong>ことである。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql :5433 -d shop）</span>
+  <pre><code>ALTER SUBSCRIPTION shop_sub DISABLE;
+ALTER SUBSCRIPTION shop_sub SET (slot_name = NONE);
+DROP SUBSCRIPTION shop_sub;</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>ALTER SUBSCRIPTION
+ALTER SUBSCRIPTION
+DROP SUBSCRIPTION</code></pre>
+</div>
+
+<p>片付けの正しい順序は<strong>購読側の <code>DROP SUBSCRIPTION</code> が先</strong>である。
+そうすれば発行側のスロットも一緒に消える。</p>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  <code>max_slot_wal_keep_size</code> を設定しておくと、スロットが保持できる WAL に上限を設けられる。
+  上限を超えたスロットは <code>lost</code> になるが、<strong>サーバが停止するよりはましである</strong>。
+  本番では設定しておくことを勧める。
+</div>
+
+<h2 id="sec-8-4">8.4　出力が空になるとき</h2>
+
+<p>エラーは出ないのに何も届かない、という状況にはいくつかの原因がある。上から順に確認する。</p>
+
+<table>
+  <thead>
+    <tr><th>原因</th><th>確認方法</th><th>対処</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>すでに <code>get</code> で消費済み</td>
+      <td><code>confirmed_flush_lsn</code> が進んでいる</td>
+      <td>調査には <code>peek</code> を使う</td>
+    </tr>
+    <tr>
+      <td>存在しないパブリケーションを指定した</td>
+      <td><code>SELECT * FROM pg_publication;</code></td>
+      <td>綴りを直す。<strong>エラーにならず 0 件になる</strong>ので気付きにくい</td>
+    </tr>
+    <tr>
+      <td>テーブルがパブリケーションに入っていない</td>
+      <td><code>SELECT * FROM pg_publication_tables;</code></td>
+      <td><code>ALTER PUBLICATION ... ADD TABLE</code></td>
+    </tr>
+    <tr>
+      <td>行フィルタに合っていない</td>
+      <td><code>pg_publication_tables.rowfilter</code></td>
+      <td>条件を見直す</td>
+    </tr>
+    <tr>
+      <td><code>publish</code> で操作種別が除外されている</td>
+      <td><code>SELECT * FROM pg_publication;</code></td>
+      <td><code>ALTER PUBLICATION ... SET (publish = ...)</code></td>
+    </tr>
+    <tr>
+      <td>論理メッセージが <code>messages=false</code> で捨てられている</td>
+      <td>オプション指定を確認</td>
+      <td><code>messages=true</code> を付ける</td>
+    </tr>
+    <tr>
+      <td>別のデータベースの変更を見ようとしている</td>
+      <td><code>pg_replication_slots.database</code></td>
+      <td>対象データベースでスロットを作り直す</td>
+    </tr>
+    <tr>
+      <td>DDL・シーケンス・生成列を期待している</td>
+      <td>—</td>
+      <td>pgoutput では取得できない（1.4 参照）</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>存在しないパブリケーション名を渡した場合の挙動は、実際に確認しておく価値がある。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql -d shop）</span>
+  <pre><code>SELECT data FROM pg_logical_slot_peek_binary_changes(
+    'shop_slot', NULL, NULL,
+    'proto_version','4','publication_names','nosuch_pub');</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code> data
+------
+(0 rows)</code></pre>
+</div>
+
+<p>エラーにならない。<strong>「0 件だから変更が無い」と判断する前に、パブリケーション名を確認する</strong>こと。</p>
+
+<h2 id="sec-8-5">8.5　チートシート</h2>
+
+<h3 id="sec-8-5-1">準備</h3>
+<table>
+  <thead><tr><th>やりたいこと</th><th>コマンド</th></tr></thead>
+  <tbody>
+    <tr><td>論理デコーディングを有効化</td><td><code>ALTER SYSTEM SET wal_level = 'logical';</code> のあと再起動</td></tr>
+    <tr><td>パブリケーション作成</td><td><code>CREATE PUBLICATION p FOR TABLE t;</code></td></tr>
+    <tr><td>スロット作成（SQL）</td><td><code>SELECT pg_create_logical_replication_slot('s', 'pgoutput');</code></td></tr>
+    <tr><td>スロット作成（CLI）</td><td><code>pg_recvlogical -d db --slot=s --create-slot -P pgoutput</code></td></tr>
+    <tr><td>2相対応スロット作成</td><td>上に <code>--two-phase</code> を追加</td></tr>
+    <tr><td>スロット削除</td><td><code>SELECT pg_drop_replication_slot('s');</code></td></tr>
+  </tbody>
+</table>
+
+<h3 id="sec-8-5-2">出力を取り出す</h3>
+<table>
+  <thead><tr><th>やりたいこと</th><th>コマンド</th></tr></thead>
+  <tbody>
+    <tr><td>覗く（消費しない）</td><td><code>SELECT * FROM pg_logical_slot_peek_binary_changes('s', NULL, NULL, 'proto_version','4','publication_names','p');</code></td></tr>
+    <tr><td>取り出す（消費する）</td><td>上の <code>peek</code> を <code>get</code> に変える</td></tr>
+    <tr><td>CLI で受け取る</td><td><code>pg_recvlogical -d db --slot=s --start -o proto_version=4 -o publication_names='p' -f out.bin</code></td></tr>
+    <tr><td>指定位置で止める</td><td><code>--endpos="$(psql -tAc 'SELECT pg_current_wal_lsn()')"</code></td></tr>
+    <tr><td>バイナリを見る</td><td><code>od -A d -t x1z out.bin</code></td></tr>
+  </tbody>
+</table>
+
+<h3 id="sec-8-5-3">pgoutput のオプション</h3>
+<table>
+  <thead><tr><th>オプション</th><th>既定</th><th>効果</th></tr></thead>
+  <tbody>
+    <tr><td><code>proto_version</code></td><td>—（必須）</td><td>1=PG10 / 2=PG14 / 3=PG15 / 4=PG16</td></tr>
+    <tr><td><code>publication_names</code></td><td>—（必須）</td><td>カンマ区切りで複数指定可（和集合）</td></tr>
+    <tr><td><code>binary</code></td><td><code>false</code></td><td>値をバイナリ表現で送る</td></tr>
+    <tr><td><code>messages</code></td><td><code>false</code></td><td><code>pg_logical_emit_message()</code> を送る</td></tr>
+    <tr><td><code>streaming</code></td><td><code>false</code></td><td><code>true</code> / <code>parallel</code>（PG16）</td></tr>
+    <tr><td><code>two_phase</code></td><td><code>false</code></td><td>スロットも 2相対応で作る必要あり</td></tr>
+    <tr><td><code>origin</code></td><td><code>any</code></td><td><code>none</code> で複製由来の変更を除外</td></tr>
+  </tbody>
+</table>
+
+<h3 id="sec-8-5-4">メッセージ型</h3>
+<table>
+  <thead><tr><th>16進</th><th>型</th><th>16進</th><th>型</th></tr></thead>
+  <tbody>
+    <tr><td><code>42</code> B</td><td>Begin</td><td><code>53</code> S</td><td>Stream Start</td></tr>
+    <tr><td><code>43</code> C</td><td>Commit</td><td><code>45</code> E</td><td>Stream Stop</td></tr>
+    <tr><td><code>52</code> R</td><td>Relation</td><td><code>63</code> c</td><td>Stream Commit</td></tr>
+    <tr><td><code>59</code> Y</td><td>Type</td><td><code>41</code> A</td><td>Stream Abort</td></tr>
+    <tr><td><code>49</code> I</td><td>Insert</td><td><code>62</code> b</td><td>Begin Prepare</td></tr>
+    <tr><td><code>55</code> U</td><td>Update</td><td><code>50</code> P</td><td>Prepare</td></tr>
+    <tr><td><code>44</code> D</td><td>Delete</td><td><code>4b</code> K</td><td>Commit Prepared</td></tr>
+    <tr><td><code>54</code> T</td><td>Truncate</td><td><code>72</code> r</td><td>Rollback Prepared</td></tr>
+    <tr><td><code>4d</code> M</td><td>Message</td><td><code>4f</code> O</td><td>Origin</td></tr>
+  </tbody>
+</table>
+
+<p>タプル種別: <code>4e</code> <code>N</code>=新しい行 / <code>4b</code> <code>K</code>=キーのみ / <code>4f</code> <code>O</code>=変更前の全列。<br>
+列の値の種別: <code>74</code> <code>t</code>=テキスト / <code>62</code> <code>b</code>=バイナリ /
+<code>6e</code> <code>n</code>=NULL / <code>75</code> <code>u</code>=未変更 TOAST。</p>
+
+<h3 id="sec-8-5-5">パブリケーション側の絞り込み</h3>
+<table>
+  <thead><tr><th>やりたいこと</th><th>コマンド</th></tr></thead>
+  <tbody>
+    <tr><td>操作種別を絞る</td><td><code>CREATE PUBLICATION p FOR TABLE t WITH (publish = 'insert,update');</code></td></tr>
+    <tr><td>行を絞る</td><td><code>CREATE PUBLICATION p FOR TABLE t WHERE (cond);</code></td></tr>
+    <tr><td>列を絞る</td><td><code>CREATE PUBLICATION p FOR TABLE t (c1, c2);</code></td></tr>
+    <tr><td>親テーブル名で送る</td><td><code>WITH (publish_via_partition_root = true)</code></td></tr>
+    <tr><td>スキーマ単位</td><td><code>CREATE PUBLICATION p FOR TABLES IN SCHEMA s;</code></td></tr>
+  </tbody>
+</table>
+
+<h3 id="sec-8-5-6">監視</h3>
+<table>
+  <thead><tr><th>見たいもの</th><th>クエリ</th></tr></thead>
+  <tbody>
+    <tr><td>スロットと保持 WAL</td><td><code>SELECT slot_name, active, wal_status, pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) FROM pg_replication_slots;</code></td></tr>
+    <tr><td>spill / stream</td><td><code>SELECT * FROM pg_stat_replication_slots;</code></td></tr>
+    <tr><td>発行側の送信状況</td><td><code>SELECT * FROM pg_stat_replication;</code></td></tr>
+    <tr><td>購読側の受信状況</td><td><code>SELECT * FROM pg_stat_subscription;</code></td></tr>
+    <tr><td>渡っているオプション</td><td><code>ALTER SYSTEM SET log_replication_commands = on;</code> のあとログを見る</td></tr>
+  </tbody>
+</table>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>logical decoding requires wal_level &gt;= logical</code> の対処が再起動を伴うと言える</li>
+    <li>レプリカアイデンティティが無いテーブルを、クエリ1本で洗い出せる</li>
+    <li><code>pg_replication_slots</code> で保持 WAL 量と <code>wal_status</code> を確認できる</li>
+    <li>存在しないパブリケーション名を渡してもエラーにならない、と知っている</li>
+    <li>チートシートから、必要な操作をすぐ引ける</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch07.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第7章 実践: 論理レプリケーションと CDC</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<span class="pager-spacer" aria-hidden="true"></span>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgoutput 実践ガイド — PostgreSQL 16.13 上で実際に実行した出力にもとづく</footer>
+</body>
+</html>

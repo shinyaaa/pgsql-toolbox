@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第2章 準備 | pgoutput 実践ガイド — PostgreSQL 16 · 2026-08-06</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgoutput 実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 16 · 2026-08-06</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 pgoutput でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 pgoutput とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 どこで使われているか</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 test_decoding との違い</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 このガイドの進め方</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 wal_level を logical にする</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルデータベースとテーブルを作る</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 パブリケーションを作る</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 レプリケーションスロットを作る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす — 3 分で出力を見る</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 SQL 関数で出力を覗く</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 4 行の出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 peek と get の違い</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 pg_recvlogical で受け取る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 出力メッセージを読む</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 メッセージ型の一覧</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 Relation と Insert</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 Update・Delete と REPLICA IDENTITY</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 Truncate と論理メッセージ</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 デコーダを手元に置く</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 pgoutput のオプション</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 オプションの渡し方</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 proto_version</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 binary</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 messages</a></li>
+      <li><a href="ch05.html#sec-5-5">5.5 streaming</a></li>
+      <li><a href="ch05.html#sec-5-6">5.6 two_phase</a></li>
+      <li><a href="ch05.html#sec-5-7">5.7 origin</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 送る内容をパブリケーションで絞る</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 publish で操作種別を絞る</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 行フィルタ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 列リスト</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パーティションテーブル</a></li>
+      <li><a href="ch06.html#sec-6-5">6.5 テーブル集合の指定方法</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 実践: 論理レプリケーションと CDC</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 購読側インスタンスを用意する</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 CREATE SUBSCRIPTION で複製する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 裏側で流れている pgoutput のオプション</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 サブスクリプションの設定は pgoutput の設定</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 監視する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 つまずきポイントと対処・チートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 環境まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 REPLICA IDENTITY まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 スロットの運用</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 出力が空になるとき</a></li>
+      <li><a href="ch08.html#sec-8-5">8.5 チートシート</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第2章　準備</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li><code>wal_level = logical</code> を設定し、論理デコーディングを使える状態にできる</li>
+    <li>サンプルテーブルとパブリケーションを作れる</li>
+    <li>pgoutput を指定したレプリケーションスロットを作り、状態を確認できる</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>PostgreSQL 16 が動いていて、スーパーユーザ（例: <code>postgres</code>）で <code>psql</code> に接続できる</li>
+    <li>サーバを1回再起動できる（<code>wal_level</code> の変更に必要）</li>
+    <li>本ガイドの出力例は Ubuntu 24.04 上の PostgreSQL 16.13、ポート 5432 で採取した</li>
+  </ul>
+</div>
+
+<p>ここで作る環境は第8章まで使い続ける。図 2.1 の4ステップで用意する。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    A["2.1<br/>wal_level = logical"] --> B["2.2<br/>shop DB と items テーブル"]
+    B --> C["2.3<br/>パブリケーション shop_pub"]
+    C --> D["2.4<br/>スロット shop_slot<br/>(plugin = pgoutput)"]
+  </pre>
+  <figcaption>図 2.1: 準備の4ステップ。ここまで終われば第3章で出力を取り出せる</figcaption>
+</figure>
+
+<h2 id="sec-2-1">2.1　wal_level を logical にする</h2>
+
+<p>論理デコーディングは、WAL に「行の中身」まで書かれていないと成立しない。既定の
+<code>wal_level = replica</code> では情報が足りないので、<code>logical</code> に上げる。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: wal_level を上げる</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>現在の設定を確認する。</p>
+        <div class="example">
+          <span class="example-label">入力（psql）</span>
+          <pre><code>SHOW wal_level;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> wal_level
+-----------
+ replica
+(1 row)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p><code>logical</code> に変更する。スロットとウォールセンダの上限も、後の章で複数スロットを使うので余裕を持たせておく。</p>
+        <div class="example">
+          <span class="example-label">入力（psql）</span>
+          <pre><code>ALTER SYSTEM SET wal_level = 'logical';
+ALTER SYSTEM SET max_replication_slots = 10;
+ALTER SYSTEM SET max_wal_senders = 10;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>ALTER SYSTEM
+ALTER SYSTEM
+ALTER SYSTEM</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>サーバを再起動する。<code>wal_level</code> は再起動が必要なパラメータで、<code>pg_reload_conf()</code> では反映されない。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pg_ctlcluster 16 main restart      # Debian/Ubuntu の場合
+# もしくは: pg_ctl -D $PGDATA restart</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>反映を確認する。</p>
+        <div class="example">
+          <span class="example-label">入力（psql）</span>
+          <pre><code>SHOW wal_level;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> wal_level
+-----------
+ logical
+(1 row)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p><code>logical</code> と表示されれば準備完了である。ここが <code>replica</code> のままだと、この先のスロット作成が
+すべて失敗する（第8章 8.1 で実際のエラーを示す）。</p>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  <code>wal_level</code> を上げると WAL の量が増える。ディスクの空きと WAL アーカイブの容量に
+  余裕があるかを、本番で変更する前に確認すること。また <code>ALTER SYSTEM</code> は
+  <code>postgresql.auto.conf</code> に書き込むので、構成管理ツールで
+  <code>postgresql.conf</code> を管理している環境では設定が二重になる点に注意する。
+</div>
+
+<h2 id="sec-2-2">2.2　サンプルデータベースとテーブルを作る</h2>
+
+<p>以降の章で使う <code>shop</code> データベースと <code>items</code> テーブルを作る。
+<strong>主キーを付けるのが重要</strong>で、これが後の章で出てくる「レプリカアイデンティティ」の既定値になる。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: shop データベースを作る</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>データベースを作る。</p>
+        <div class="example">
+          <span class="example-label">入力（psql）</span>
+          <pre><code>CREATE DATABASE shop;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>CREATE DATABASE</code></pre>
+        </div>
+      </li>
+      <li>
+        <p><code>shop</code> に接続し直してテーブルを作る。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>CREATE TABLE items (
+    id       integer PRIMARY KEY,
+    name     text    NOT NULL,
+    price    integer NOT NULL,
+    in_stock boolean DEFAULT true
+);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>CREATE TABLE</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  論理デコーディングは<strong>データベース単位</strong>で動く。スロットは作成時のデータベースに固定され、
+  他のデータベースの変更は一切見えない。複数データベースを対象にしたいなら、データベースごとにスロットを作る。
+</div>
+
+<h2 id="sec-2-3">2.3　パブリケーションを作る</h2>
+
+<p>pgoutput は「どのテーブルを送るか」を自分では決めない。<strong>パブリケーション</strong>という
+カタログオブジェクトで指定する。これは pgoutput の必須の前提で、パブリケーションを渡さないと
+pgoutput は起動時にエラーになる（第5章 5.2 で確認する）。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: パブリケーションを作る</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p><code>items</code> を含むパブリケーションを作る。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>CREATE PUBLICATION shop_pub FOR TABLE items;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>CREATE PUBLICATION</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>どの操作が発行対象になっているかを確認する。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT pubname, pubinsert, pubupdate, pubdelete, pubtruncate
+  FROM pg_publication;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> pubname  | pubinsert | pubupdate | pubdelete | pubtruncate
+----------+-----------+-----------+-----------+-------------
+ shop_pub | t         | t         | t         | t
+(1 row)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>どの列・どの行が対象かは <code>pg_publication_tables</code> で分かる。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT * FROM pg_publication_tables;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> pubname  | schemaname | tablename |         attnames         | rowfilter
+----------+------------+-----------+--------------------------+-----------
+ shop_pub | public     | items     | {id,name,price,in_stock} |
+(1 row)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p><code>attnames</code> が4列すべて、<code>rowfilter</code> が空なので、いまは <code>items</code> の全行・全列が対象である。
+これを絞る方法は第6章で扱う。</p>
+
+<h2 id="sec-2-4">2.4　レプリケーションスロットを作る</h2>
+
+<p><strong>レプリケーションスロット</strong>は「どこまで読んだか」を覚えておく栞であり、
+同時に「まだ読まれていない WAL を消すな」とサーバに指示する仕組みでもある。
+スロットを作るときに、使う出力プラグインとして <code>pgoutput</code> を指定する。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: pgoutput のスロットを作る</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>スロットを作る。第2引数が出力プラグイン名である。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT * FROM pg_create_logical_replication_slot('shop_slot', 'pgoutput');</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> slot_name |    lsn
+-----------+-----------
+ shop_slot | 0/2269E60
+(1 row)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>状態を確認する。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT slot_name, plugin, slot_type, database, active,
+       restart_lsn, confirmed_flush_lsn
+  FROM pg_replication_slots WHERE slot_name = 'shop_slot';</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>-[ RECORD 1 ]-------+----------
+slot_name           | shop_slot
+plugin              | pgoutput
+slot_type           | logical
+database            | shop
+active              | f
+restart_lsn         | 0/2269E28
+confirmed_flush_lsn | 0/2269E60</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>読み方は次のとおり。<code>plugin</code> が <code>pgoutput</code>、<code>slot_type</code> が <code>logical</code> なら意図どおり。
+<code>database</code> が <code>shop</code> に固定されている点、いま誰も接続していないので <code>active</code> が
+<code>f</code> である点も確認しておく。<code>confirmed_flush_lsn</code> は「消費者がここまで受け取ったと確認した位置」で、
+第3章以降、変更を消費するたびに進んでいく。</p>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  スロットは<strong>誰も読まなくても WAL を保持し続ける</strong>。作りっぱなしのスロットを放置すると
+  WAL がディスクを埋め尽くしてサーバが停止する。検証で作ったスロットは
+  <code>SELECT pg_drop_replication_slot('スロット名');</code> で必ず消すこと。監視方法は第8章 8.3 で扱う。
+</div>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>SHOW wal_level;</code> が <code>logical</code> を返す</li>
+    <li><code>shop</code> データベースに <code>items</code> テーブルがある</li>
+    <li><code>pg_publication_tables</code> に <code>shop_pub</code> / <code>items</code> の行が1つある</li>
+    <li><code>pg_replication_slots</code> に <code>plugin = pgoutput</code> の <code>shop_slot</code> がある</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch01.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第1章 pgoutput でできること</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch03.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第3章 まず動かす — 3 分で出力を見る</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgoutput 実践ガイド — PostgreSQL 16.13 上で実際に実行した出力にもとづく</footer>
+</body>
+</html>
