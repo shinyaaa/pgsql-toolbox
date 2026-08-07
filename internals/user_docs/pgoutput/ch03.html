@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第3章 まず動かす — 3 分で出力を見る | pgoutput 実践ガイド — PostgreSQL 16 · 2026-08-06</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgoutput 実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 16 · 2026-08-06</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 pgoutput でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 pgoutput とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 どこで使われているか</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 test_decoding との違い</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 このガイドの進め方</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 wal_level を logical にする</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルデータベースとテーブルを作る</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 パブリケーションを作る</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 レプリケーションスロットを作る</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch03.html">第3章 まず動かす — 3 分で出力を見る</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 SQL 関数で出力を覗く</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 4 行の出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 peek と get の違い</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 pg_recvlogical で受け取る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 出力メッセージを読む</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 メッセージ型の一覧</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 Relation と Insert</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 Update・Delete と REPLICA IDENTITY</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 Truncate と論理メッセージ</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 デコーダを手元に置く</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 pgoutput のオプション</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 オプションの渡し方</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 proto_version</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 binary</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 messages</a></li>
+      <li><a href="ch05.html#sec-5-5">5.5 streaming</a></li>
+      <li><a href="ch05.html#sec-5-6">5.6 two_phase</a></li>
+      <li><a href="ch05.html#sec-5-7">5.7 origin</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 送る内容をパブリケーションで絞る</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 publish で操作種別を絞る</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 行フィルタ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 列リスト</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パーティションテーブル</a></li>
+      <li><a href="ch06.html#sec-6-5">6.5 テーブル集合の指定方法</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 実践: 論理レプリケーションと CDC</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 購読側インスタンスを用意する</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 CREATE SUBSCRIPTION で複製する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 裏側で流れている pgoutput のオプション</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 サブスクリプションの設定は pgoutput の設定</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 監視する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 つまずきポイントと対処・チートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 環境まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 REPLICA IDENTITY まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 スロットの運用</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 出力が空になるとき</a></li>
+      <li><a href="ch08.html#sec-8-5">8.5 チートシート</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第3章　まず動かす — 3 分で出力を見る</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>SQL 関数だけで pgoutput の出力を取り出せる</li>
+    <li>取り出した4行が何を意味しているか、先頭1バイトから読み取れる</li>
+    <li><code>peek</code> と <code>get</code> の違いを説明でき、使い分けられる</li>
+    <li><code>pg_recvlogical</code> で同じ内容をファイルに受け取れる</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>第2章の環境（<code>shop</code> データベース、<code>items</code> テーブル、<code>shop_pub</code>、<code>shop_slot</code>）</li>
+    <li><code>psql</code> で <code>shop</code> に接続できること</li>
+    <li>3.4 では <code>pg_recvlogical</code> コマンドを使う（PostgreSQL のクライアントパッケージに同梱）</li>
+  </ul>
+</div>
+
+<p>pgoutput の出力を手元に取り出す方法は2つある。図 3.1 のとおり、
+どちらも同じスロット・同じオプションを使い、<strong>返ってくるメッセージ列も同じ</strong>である。
+違うのは取り出し方だけなので、まず手軽な SQL 関数から始める。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    SLOT["shop_slot<br/>plugin = pgoutput"]
+    SLOT --> SQLF["SQL 関数<br/>pg_logical_slot_*_binary_changes()"]
+    SLOT --> RECV["pg_recvlogical<br/>(レプリケーション接続)"]
+    SQLF --> R1["psql の結果として<br/>1行1メッセージの16進"]
+    RECV --> R2["ファイルに<br/>連結されたバイト列"]
+    R1 --> SAME["同じメッセージ列"]
+    R2 --> SAME
+  </pre>
+  <figcaption>図 3.1: pgoutput の出力を取り出す2つの方法。取り出し方が違うだけで内容は同じ</figcaption>
+</figure>
+
+<h2 id="sec-3-1">3.1　SQL 関数で出力を覗く</h2>
+
+<p>pgoutput の出力を見る一番手軽な方法は、<code>pg_logical_slot_peek_binary_changes()</code> である。
+レプリケーション接続を張らずに、普通の <code>psql</code> から呼べる。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 最初の1件を取り出す</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>1行 INSERT する。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>INSERT INTO items VALUES (1, 'apple', 120);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>INSERT 0 1</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>スロットに溜まった変更を pgoutput 形式で取り出す。第4引数以降は
+           <strong>キーと値を交互に並べた pgoutput のオプション</strong>で、
+           <code>proto_version</code> と <code>publication_names</code> は必須である。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT lsn, xid, data
+  FROM pg_logical_slot_peek_binary_changes(
+         'shop_slot', NULL, NULL,
+         'proto_version', '4',
+         'publication_names', 'shop_pub');</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>    lsn    | xid |                                                data
+-----------+-----+------------------------------------------------------------------------------------
+ 0/2269E60 | 792 | \x420000000002269f480002fb5fb165a5ce00000318
+ 0/2269E60 | 792 | \x52000060147075626c6963006974656d73006400040169640000000017ffffffff006e616d650000000019ffffffff0070726963650000000017ffffffff00696e5f73746f636b0000000010ffffffff
+ 0/2269E60 | 792 | \x49000060144e000474000000013174000000056170706c657400000003313230740000000174
+ 0/2269F78 | 792 | \x43000000000002269f480000000002269f780002fb5fb165a5ce
+(4 rows)</code></pre>
+        </div>
+        <p class="note">2行目と3行目は長いので、端末では折り返して表示される。区切り線の幅は端末幅に合わせて縮めてある。</p>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>1回の <code>INSERT</code> から4つのメッセージが出た。これが pgoutput の出力そのものである。
+<code>lsn</code> は WAL 上の位置、<code>xid</code> はトランザクション ID で、この4つが同じ 792 なので
+同一トランザクションのものだと分かる。</p>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  <code>pg_logical_slot_peek_changes()</code>（<code>binary</code> なし）を使うと
+  <code>ERROR: output plugin "pgoutput" produces binary output, but function ... expects textual data</code>
+  になる。pgoutput はバイナリを出すので、<strong><code>_binary_</code> が付いた関数</strong>を使うこと。
+</div>
+
+<h2 id="sec-3-2">3.2　4 行の出力を読む</h2>
+
+<p>pgoutput のメッセージは<strong>先頭1バイトが型</strong>である。ASCII 1文字なので、16進の最初の2桁を見れば
+何のメッセージか分かる。今回の4行は次のとおり。</p>
+
+<table>
+  <thead>
+    <tr><th>先頭バイト</th><th>ASCII</th><th>メッセージ</th><th>意味</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>42</code></td><td><code>B</code></td><td>Begin</td><td>トランザクション開始</td></tr>
+    <tr><td><code>52</code></td><td><code>R</code></td><td>Relation</td><td>これから送るテーブルの定義</td></tr>
+    <tr><td><code>49</code></td><td><code>I</code></td><td>Insert</td><td>行が1件入った</td></tr>
+    <tr><td><code>43</code></td><td><code>C</code></td><td>Commit</td><td>トランザクション終了</td></tr>
+  </tbody>
+</table>
+
+<p>3行目の Insert メッセージを手で分解してみる。16進を意味の単位で区切ると、次のように読める。</p>
+
+<div class="example">
+  <span class="example-label">Insert メッセージの分解</span>
+  <pre><code>49            'I'         メッセージ型 = Insert
+00006014      24596       テーブルの OID（relid）
+4e            'N'         これから続くのは新しい行（New tuple）
+0004          4           列数
+74 00000001 31            't' 長さ1 "1"        → id       = 1
+74 00000005 6170706c65    't' 長さ5 "apple"    → name     = 'apple'
+74 00000003 313230        't' 長さ3 "120"      → price    = 120
+74 00000001 74            't' 長さ1 "t"        → in_stock = true</code></pre>
+</div>
+
+<p>各列は「種別1バイト＋長さ4バイト＋値」の形で並んでいる。種別 <code>t</code> は
+<strong>テキスト表現</strong>という意味で、<code>120</code> という整数も文字列 <code>"120"</code> として送られている。
+これを本来のバイナリ表現に変える方法が第5章の <code>binary</code> オプションである。</p>
+
+<p>テーブルの OID がメッセージに載っているので、実際のテーブルと照合できる。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql -d shop）</span>
+  <pre><code>SELECT 'items'::regclass::oid AS relid,
+       to_hex('items'::regclass::oid::int) AS hex;</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code> relid | hex
+-------+------
+ 24596 | 6014
+(1 row)</code></pre>
+</div>
+
+<p>Insert メッセージにあった <code>00006014</code> と一致している。OID は環境ごとに異なるので、
+自分の環境ではこのクエリで確認すること。同様に列の型 OID も確認できる。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql -d shop）</span>
+  <pre><code>SELECT oid, typname FROM pg_type WHERE oid IN (16, 23, 25) ORDER BY oid;</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code> oid | typname
+-----+---------
+  16 | bool
+  23 | int4
+  25 | text
+(3 rows)</code></pre>
+</div>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  Relation メッセージ（2行目）の中に <code>7075626c6963</code>（<code>public</code>）と
+  <code>6974656d73</code>（<code>items</code>）が見える。16進を眺めるときは、ASCII が混ざっている部分を
+  探すとスキーマ名・テーブル名・列名の切れ目が見つけやすい。詳しい分解は第4章で行う。
+</div>
+
+<h2 id="sec-3-3">3.3　peek と get の違い</h2>
+
+<p>いま使った <code>peek</code> は<strong>覗くだけ</strong>で、スロットの読み取り位置を進めない。
+何度呼んでも同じものが返る。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: peek と get を比べる</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>もう一度 <code>peek</code> する。同じ4件が残っている。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT count(*) FROM pg_logical_slot_peek_binary_changes(
+    'shop_slot', NULL, NULL,
+    'proto_version', '4', 'publication_names', 'shop_pub');</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> count
+-------
+     4
+(1 row)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p><code>get</code> に変えると、返すと同時に<strong>消費</strong>する。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT count(*) FROM pg_logical_slot_get_binary_changes(
+    'shop_slot', NULL, NULL,
+    'proto_version', '4', 'publication_names', 'shop_pub');</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> count
+-------
+     4
+(1 row)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>もう一度覗くと空になっている。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT count(*) FROM pg_logical_slot_peek_binary_changes(
+    'shop_slot', NULL, NULL,
+    'proto_version', '4', 'publication_names', 'shop_pub');</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> count
+-------
+     0
+(1 row)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>使い分けは単純である。<strong>調査中は <code>peek</code>、スロットを進めて WAL を解放したいときは <code>get</code></strong>。
+以降の章では、前の章の残骸を片付ける目的で <code>get</code> をよく使う。</p>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  本番で使われているスロットに対して <code>get</code> を実行してはいけない。
+  本来の消費者（購読側や CDC ツール）が受け取るはずだった変更を横取りしてしまい、
+  <strong>データの取りこぼしになる</strong>。本番調査では必ず <code>peek</code> を使うか、
+  調査専用のスロットを別に作ること。
+</div>
+
+<h2 id="sec-3-4">3.4　pg_recvlogical で受け取る</h2>
+
+<p>本番の CDC ツールは SQL 関数ではなく<strong>レプリケーション接続</strong>で受け取る。
+その最小の実装が、PostgreSQL 同梱の <code>pg_recvlogical</code> コマンドである。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: pg_recvlogical で受け取る</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>受信用のスロットを作る。<code>-P</code> で出力プラグインを指定する。成功時は何も表示されない。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pg_recvlogical -d shop --slot=cdc_slot --create-slot -P pgoutput</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>(何も出力されない。終了コード 0 なら成功)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>変更を1件作る。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>INSERT INTO items VALUES (8, 'lemon', 210);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>INSERT 0 1</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>現在の WAL 位置を控える。これを終了位置に使うと、
+           <code>pg_recvlogical</code> がそこまで受け取って自動的に終了するので、
+           対話的に <kbd>Ctrl-C</kbd> しなくて済む。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>LSN=$(psql -d shop -tAc "SELECT pg_current_wal_lsn();")
+echo $LSN</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>0/226C5F8</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>受信する。オプションは <code>-o キー=値</code> の形で pgoutput にそのまま渡る。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pg_recvlogical -d shop --slot=cdc_slot --start \
+  -o proto_version=4 \
+  -o publication_names='shop_pub' \
+  --endpos="$LSN" -f /tmp/cdc.bin</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>(何も出力されず、$LSN まで受け取ると終了する)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>受け取った内容はバイナリなので <code>od</code> で見る。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>od -A d -t x1z /tmp/cdc.bin</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>0000000 42 00 00 00 00 02 26 c5 c8 00 02 fb 5f b4 35 73  &gt;B.....&amp;....._.5s&lt;
+0000016 c3 00 00 03 27 0a 52 00 00 60 14 70 75 62 6c 69  &gt;....'.R..`.publi&lt;
+0000032 63 00 69 74 65 6d 73 00 64 00 04 01 69 64 00 00  &gt;c.items.d...id..&lt;
+0000048 00 00 17 ff ff ff ff 00 6e 61 6d 65 00 00 00 00  &gt;........name....&lt;
+0000064 19 ff ff ff ff 00 70 72 69 63 65 00 00 00 00 17  &gt;......price.....&lt;
+0000080 ff ff ff ff 00 69 6e 5f 73 74 6f 63 6b 00 00 00  &gt;.....in_stock...&lt;
+0000096 00 10 ff ff ff ff 0a 49 00 00 60 14 4e 00 04 74  &gt;.......I..`.N..t&lt;
+0000112 00 00 00 01 38 74 00 00 00 05 6c 65 6d 6f 6e 74  &gt;....8t....lemont&lt;
+0000128 00 00 00 03 32 31 30 74 00 00 00 01 74 0a 43 00  &gt;....210t....t.C.&lt;
+0000144 00 00 00 00 02 26 c5 c8 00 00 00 00 02 26 c5 f8  &gt;.....&amp;.......&amp;..&lt;
+0000160 00 02 fb 5f b4 35 73 c3 0a                       &gt;..._.5s..&lt;
+0000169</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>右側の ASCII 表示に <code>public</code>、<code>items</code>、<code>id</code>、<code>name</code>、
+<code>price</code>、<code>in_stock</code>、<code>lemon</code> が読み取れる。
+3.1 の SQL 関数で見たのと<strong>まったく同じメッセージ列</strong>である。取り出し方が違うだけで、
+pgoutput が出しているものは変わらない。</p>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  <code>pg_recvlogical</code> は各メッセージの後ろに改行（<code>0a</code>）を1バイト足して書き出す。
+  上の出力で <code>...00 00 03 27 <strong>0a</strong> 52 00 00 60 14...</code> のように、Begin と Relation の
+  境目に <code>0a</code> が挟まっているのがそれである。これは <code>pg_recvlogical</code> が付ける区切りであって、
+  pgoutput のメッセージの一部ではない。
+</div>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  <code>-f</code> で指定したファイルは<strong>追記</strong>される。同じ手順を2回実行すると
+  前回の内容の後ろに繋がってしまうので、やり直すときは <code>rm -f /tmp/cdc.bin</code> してから実行する。
+  <br>また、<code>--endpos</code> を付けずに <code>-f -</code> で標準出力に流すと、
+  端末がバイナリで埋まって表示が壊れる。必ずファイルに落とすか <code>| od -A d -t x1z</code> に繋ぐこと。
+</div>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>pg_logical_slot_peek_binary_changes()</code> で4件のメッセージが取り出せた</li>
+    <li>先頭バイト <code>42 / 52 / 49 / 43</code> がそれぞれ Begin / Relation / Insert / Commit だと言える</li>
+    <li><code>get</code> を実行すると次の <code>peek</code> が 0 件になることを確認した</li>
+    <li><code>/tmp/cdc.bin</code> の <code>od</code> 出力に <code>public</code> と <code>items</code> が読める</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch02.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第2章 準備</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch04.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第4章 出力メッセージを読む</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgoutput 実践ガイド — PostgreSQL 16.13 上で実際に実行した出力にもとづく</footer>
+</body>
+</html>

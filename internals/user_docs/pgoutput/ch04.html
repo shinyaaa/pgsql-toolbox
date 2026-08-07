@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第4章 出力メッセージを読む | pgoutput 実践ガイド — PostgreSQL 16 · 2026-08-06</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgoutput 実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 16 · 2026-08-06</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 pgoutput でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 pgoutput とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 どこで使われているか</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 test_decoding との違い</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 このガイドの進め方</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 wal_level を logical にする</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルデータベースとテーブルを作る</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 パブリケーションを作る</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 レプリケーションスロットを作る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす — 3 分で出力を見る</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 SQL 関数で出力を覗く</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 4 行の出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 peek と get の違い</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 pg_recvlogical で受け取る</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch04.html">第4章 出力メッセージを読む</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 メッセージ型の一覧</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 Relation と Insert</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 Update・Delete と REPLICA IDENTITY</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 Truncate と論理メッセージ</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 デコーダを手元に置く</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 pgoutput のオプション</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 オプションの渡し方</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 proto_version</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 binary</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 messages</a></li>
+      <li><a href="ch05.html#sec-5-5">5.5 streaming</a></li>
+      <li><a href="ch05.html#sec-5-6">5.6 two_phase</a></li>
+      <li><a href="ch05.html#sec-5-7">5.7 origin</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 送る内容をパブリケーションで絞る</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 publish で操作種別を絞る</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 行フィルタ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 列リスト</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パーティションテーブル</a></li>
+      <li><a href="ch06.html#sec-6-5">6.5 テーブル集合の指定方法</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 実践: 論理レプリケーションと CDC</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 購読側インスタンスを用意する</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 CREATE SUBSCRIPTION で複製する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 裏側で流れている pgoutput のオプション</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 サブスクリプションの設定は pgoutput の設定</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 監視する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 つまずきポイントと対処・チートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 環境まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 REPLICA IDENTITY まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 スロットの運用</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 出力が空になるとき</a></li>
+      <li><a href="ch08.html#sec-8-5">8.5 チートシート</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第4章　出力メッセージを読む</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>pgoutput のメッセージ型を一覧で把握し、先頭バイトから見分けられる</li>
+    <li>UPDATE / DELETE の出力が REPLICA IDENTITY でどう変わるかを説明できる</li>
+    <li>手元のデコーダで、16進を人間が読める形に変換できる</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>第3章までの環境（<code>shop_slot</code> は 3.3 で消費済み、<code>cdc_slot</code> も作成済み）</li>
+    <li>Python 3 が使えること（4.5 のデコーダで使う）</li>
+    <li>この章の出力はすべて <code>shop_slot</code> を <code>get</code> で消費しながら採取している</li>
+  </ul>
+</div>
+
+<h2 id="sec-4-1">4.1　メッセージ型の一覧</h2>
+
+<p>pgoutput が出すメッセージは、すべて<strong>先頭1バイトの型</strong>で始まる。
+プロトコルバージョン4（PostgreSQL 16）で出てくるものは次のとおり。</p>
+
+<table>
+  <thead>
+    <tr><th>16進</th><th>文字</th><th>メッセージ</th><th>いつ出るか</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>42</code></td><td><code>B</code></td><td>Begin</td><td>トランザクションの先頭</td></tr>
+    <tr><td><code>43</code></td><td><code>C</code></td><td>Commit</td><td>トランザクションの末尾</td></tr>
+    <tr><td><code>52</code></td><td><code>R</code></td><td>Relation</td><td>そのテーブルを初めて送るとき</td></tr>
+    <tr><td><code>59</code></td><td><code>Y</code></td><td>Type</td><td>組み込みでない型を初めて送るとき</td></tr>
+    <tr><td><code>49</code></td><td><code>I</code></td><td>Insert</td><td>INSERT</td></tr>
+    <tr><td><code>55</code></td><td><code>U</code></td><td>Update</td><td>UPDATE</td></tr>
+    <tr><td><code>44</code></td><td><code>D</code></td><td>Delete</td><td>DELETE</td></tr>
+    <tr><td><code>54</code></td><td><code>T</code></td><td>Truncate</td><td>TRUNCATE</td></tr>
+    <tr><td><code>4d</code></td><td><code>M</code></td><td>Message</td><td><code>messages=true</code> かつ論理メッセージが埋められたとき</td></tr>
+    <tr><td><code>4f</code></td><td><code>O</code></td><td>Origin</td><td>複製起点の情報を送るとき</td></tr>
+    <tr><td><code>53</code></td><td><code>S</code></td><td>Stream Start</td><td><code>streaming=true</code> で未コミットの塊を送り始めるとき</td></tr>
+    <tr><td><code>45</code></td><td><code>E</code></td><td>Stream Stop</td><td>同上、塊の終わり</td></tr>
+    <tr><td><code>63</code></td><td><code>c</code></td><td>Stream Commit</td><td>ストリーミングしたトランザクションのコミット</td></tr>
+    <tr><td><code>41</code></td><td><code>A</code></td><td>Stream Abort</td><td>ストリーミングしたトランザクションのアボート</td></tr>
+    <tr><td><code>62</code></td><td><code>b</code></td><td>Begin Prepare</td><td><code>two_phase=true</code> の PREPARE</td></tr>
+    <tr><td><code>50</code></td><td><code>P</code></td><td>Prepare</td><td>同上</td></tr>
+    <tr><td><code>4b</code></td><td><code>K</code></td><td>Commit Prepared</td><td>COMMIT PREPARED</td></tr>
+    <tr><td><code>72</code></td><td><code>r</code></td><td>Rollback Prepared</td><td>ROLLBACK PREPARED</td></tr>
+  </tbody>
+</table>
+
+<p>通常のトランザクションは、図 4.1 の順序で流れてくる。</p>
+
+<figure>
+  <pre class="mermaid">
+sequenceDiagram
+    participant PG as pgoutput
+    participant C as 受け取る側
+    PG->>C: B  Begin (final_lsn, timestamp, xid)
+    Note over PG,C: そのテーブルを初めて送るときだけ
+    PG->>C: R  Relation (relid, スキーマ, テーブル名, 列定義)
+    PG->>C: I  Insert / U Update / D Delete
+    PG->>C: I  Insert / U Update / D Delete
+    PG->>C: C  Commit (commit_lsn, end_lsn, timestamp)
+  </pre>
+  <figcaption>図 4.1: 1トランザクションのメッセージ列。Relation はテーブルごとに1回だけ送られる</figcaption>
+</figure>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  図 4.1 のとおり Relation は<strong>接続ごとに1回だけ</strong>送られる。受け取る側は relid → 列定義の対応表を
+  自分で保持しておかないと、2件目以降の Insert を解釈できない。これが CDC ツール実装で最初につまずく点である。
+</div>
+
+<h2 id="sec-4-2">4.2　Relation と Insert</h2>
+
+<p>第3章で見た Relation メッセージを、最後まで分解する。</p>
+
+<div class="example">
+  <span class="example-label">Relation メッセージの分解</span>
+  <pre><code>52              'R'        メッセージ型 = Relation
+00006014        24596      relid
+7075626c69 6300 "public"   スキーマ名（NUL 終端）
+6974656d73 00   "items"    テーブル名（NUL 終端）
+64              'd'        レプリカアイデンティティ = default
+0004            4          列数
+  01 6964 00       00000017 ffffffff   キー列, "id",       型 23 (int4),  atttypmod -1
+  00 6e616d6500    00000019 ffffffff   通常列, "name",     型 25 (text),  atttypmod -1
+  00 7072696365 00 00000017 ffffffff   通常列, "price",    型 23 (int4),  atttypmod -1
+  00 696e5f73746f636b 00 00000010 ffffffff 通常列, "in_stock", 型 16 (bool)</code></pre>
+</div>
+
+<p>各列の先頭1バイトはフラグで、<code>01</code> なら<strong>レプリカアイデンティティに含まれる列</strong>、
+<code>00</code> ならそれ以外を意味する。いまは主キー <code>id</code> だけが <code>01</code> になっている。
+この「どの列がキーか」という情報が、次節の UPDATE / DELETE の形を決める。</p>
+
+<h2 id="sec-4-3">4.3　Update・Delete と REPLICA IDENTITY</h2>
+
+<p>UPDATE と DELETE は「変更後の行」だけでは足りない。購読側が<strong>どの行を書き換えればよいか</strong>を
+特定する必要があるからである。その特定に使う列の集合が <strong>REPLICA IDENTITY</strong> で、
+既定は主キーである。</p>
+
+<p>タプルの直前には、それが何のタプルかを示す1バイトが入る。</p>
+
+<table>
+  <thead>
+    <tr><th>16進</th><th>文字</th><th>意味</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>4e</code></td><td><code>N</code></td><td>New — 変更後の行（全列）</td></tr>
+    <tr><td><code>4b</code></td><td><code>K</code></td><td>Key — 変更前のキー列だけ（キー以外は NULL）</td></tr>
+    <tr><td><code>4f</code></td><td><code>O</code></td><td>Old — 変更前の行（全列）。REPLICA IDENTITY FULL のとき</td></tr>
+  </tbody>
+</table>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: REPLICA IDENTITY DEFAULT での UPDATE / DELETE</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>3種類の変更を、それぞれ別トランザクションで実行する。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d shop -c "INSERT INTO items VALUES (2, 'banana', 80);"
+psql -d shop -c "UPDATE items SET price = 95 WHERE id = 2;"   # キーは変えない
+psql -d shop -c "UPDATE items SET id = 3    WHERE id = 2;"    # キーを変える
+psql -d shop -c "DELETE FROM items WHERE id = 3;"</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>4.5 のデコーダに通して読む（デコーダの中身は 4.5 で示す）。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d shop -tAc "SELECT data FROM pg_logical_slot_get_binary_changes(
+    'shop_slot', NULL, NULL,
+    'proto_version','4','publication_names','shop_pub')" \
+  | python3 pgoutput_decode.py</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>BEGIN      final_lsn=0/226A088 ts=2026-08-06T13:33:11.933967+00:00 xid=793
+RELATION   24596 public.items identity=d cols=[*id:23, name:25, price:23, in_stock:16]
+INSERT     rel=24596 N['2', 'banana', '80', 't']
+COMMIT     commit_lsn=0/226A088 end_lsn=0/226A0B8 ts=2026-08-06T13:33:11.933967+00:00
+BEGIN      final_lsn=0/226A110 ts=2026-08-06T13:33:12.066699+00:00 xid=794
+UPDATE     rel=24596 N['2', 'banana', '95', 't']
+COMMIT     commit_lsn=0/226A110 end_lsn=0/226A140 ts=2026-08-06T13:33:12.066699+00:00
+BEGIN      final_lsn=0/226A1E0 ts=2026-08-06T13:33:12.109768+00:00 xid=795
+UPDATE     rel=24596 K['2', 'NULL', 'NULL', 'NULL'] N['3', 'banana', '95', 't']
+COMMIT     commit_lsn=0/226A1E0 end_lsn=0/226A210 ts=2026-08-06T13:33:12.109768+00:00
+BEGIN      final_lsn=0/226A288 ts=2026-08-06T13:33:12.152533+00:00 xid=796
+DELETE     rel=24596 K['3', 'NULL', 'NULL', 'NULL']
+COMMIT     commit_lsn=0/226A288 end_lsn=0/226A2B8 ts=2026-08-06T13:33:12.152533+00:00
+</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>読み方のポイントは3つある。</p>
+
+<ul>
+  <li><strong>キーを変えない UPDATE</strong>（xid=794）は <code>N</code> だけ。購読側は新しい行のキー <code>id=2</code> で
+      対象行を探せるので、変更前の情報は要らない。</li>
+  <li><strong>キーを変える UPDATE</strong>（xid=795）は <code>K</code> と <code>N</code> の両方。
+      <code>K</code> の <code>id=2</code> で行を探し、<code>N</code> の内容で上書きする。</li>
+  <li><strong>DELETE</strong>（xid=796）は <code>K</code> だけ。キー以外は <code>NULL</code> で埋まっていて、
+      値は送られない。</li>
+</ul>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: REPLICA IDENTITY FULL に変えて比べる</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>テーブルのレプリカアイデンティティを全列に変える。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>ALTER TABLE items REPLICA IDENTITY FULL;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>ALTER TABLE</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>同じ操作を繰り返す。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d shop -c "INSERT INTO items VALUES (4, 'cherry', 300);"
+psql -d shop -c "UPDATE items SET price = 330 WHERE id = 4;"
+psql -d shop -c "DELETE FROM items WHERE id = 4;"</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>デコードする。</p>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>BEGIN      final_lsn=0/226A4F8 ts=2026-08-06T13:33:12.287438+00:00 xid=798
+RELATION   24596 public.items identity=f cols=[*id:23, *name:25, *price:23, *in_stock:16]
+INSERT     rel=24596 N['4', 'cherry', '300', 't']
+COMMIT     commit_lsn=0/226A4F8 end_lsn=0/226A528 ts=2026-08-06T13:33:12.287438+00:00
+BEGIN      final_lsn=0/226A598 ts=2026-08-06T13:33:12.331170+00:00 xid=799
+UPDATE     rel=24596 O['4', 'cherry', '300', 't'] N['4', 'cherry', '330', 't']
+COMMIT     commit_lsn=0/226A598 end_lsn=0/226A5C8 ts=2026-08-06T13:33:12.331170+00:00
+BEGIN      final_lsn=0/226A618 ts=2026-08-06T13:33:12.373631+00:00 xid=800
+DELETE     rel=24596 O['4', 'cherry', '330', 't']
+COMMIT     commit_lsn=0/226A618 end_lsn=0/226A648 ts=2026-08-06T13:33:12.373631+00:00</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>既定に戻しておく（以降の章は DEFAULT 前提）。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>ALTER TABLE items REPLICA IDENTITY DEFAULT;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>ALTER TABLE</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>Relation メッセージの <code>identity</code> が <code>d</code> から <code>f</code> に変わり、
+全列の先頭に <code>*</code>（キー列フラグ）が付いた。その結果 UPDATE には <code>O</code>（変更前の全列）が
+付き、DELETE も全列を運ぶようになった。<strong>変更前の値が必要な CDC 用途では FULL が有用だが、
+WAL とネットワークの量が増える</strong>ので、必要なテーブルだけに限定するのが定石である。</p>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  更新されなかった TOAST 値（外部に追い出された大きな値）は、UPDATE で<strong>送られない</strong>。
+  デコード結果では「未変更」を示す種別 <code>u</code> になる。実際に 160,000 バイトの
+  <code>text</code> 列を持つ行の別の列だけを更新すると、次のようになる。
+  <div class="example" style="margin-top:.6em">
+    <span class="example-label out">出力</span>
+    <pre><code>UPDATE     rel=24676 N['1', 'b', '&lt;unchanged-toast&gt;']</code></pre>
+  </div>
+  受け取る側は「値が空になった」と誤解してはいけない。この列は<strong>変更しない</strong>のが正しい扱いで、
+  どうしても毎回値が欲しければ <code>REPLICA IDENTITY FULL</code> にするか、
+  そもそも TOAST されない設計にする。
+</div>
+
+<h2 id="sec-4-4">4.4　Truncate と論理メッセージ</h2>
+
+<p>TRUNCATE は行単位ではなくテーブル単位の操作なので、専用のメッセージ型で届く。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: TRUNCATE を見る</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>1件入れてから TRUNCATE する。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d shop -c "INSERT INTO items VALUES (6, 'kiwi', 250);"
+psql -d shop -c "TRUNCATE items;"</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>生のバイト列で見る。</p>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>                                       data
+------------------------------------------------------------------------------------
+ \x42000000000226b6980002fb5fb2bdbbde00000324
+ \x52000060147075626c6963006974656d73006400040169640000000017ffffffff006e616d650000000019ffffffff0070726963650000000017ffffffff00696e5f73746f636b0000000010ffffffff
+ \x49000060144e000474000000013674000000046b6977697400000003323530740000000174
+ \x4300000000000226b698000000000226b6c80002fb5fb2bdbbde
+ \x42000000000226c2480002fb5fb2bdc91900000325
+ \x52000060147075626c6963006974656d73006400040169640000000017ffffffff006e616d650000000019ffffffff0070726963650000000017ffffffff00696e5f73746f636b0000000010ffffffff
+ \x54000000010000006014
+ \x4300000000000226c248000000000226c3b80002fb5fb2bdc919
+(8 rows)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>7行目 <code>\x54000000010000006014</code> が Truncate である。分解すると次のようになる。</p>
+
+<div class="example">
+  <span class="example-label">Truncate メッセージの分解</span>
+  <pre><code>54          'T'      メッセージ型 = Truncate
+00000001    1        対象テーブル数
+00          0        オプションフラグ（1=CASCADE, 2=RESTART IDENTITY）
+00006014    24596    relid（テーブル数だけ並ぶ）</code></pre>
+</div>
+
+<p>次に、テーブルの変更とは無関係な任意のデータを WAL に埋め込める
+<code>pg_logical_emit_message()</code> を試す。アプリケーション側の文脈（誰の操作か、どのリクエストか）を
+CDC ストリームに載せるのに使う。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 論理メッセージを流す</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>メッセージを埋め込む。第1引数 <code>true</code> はトランザクションに紐づけるという意味。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT pg_logical_emit_message(true, 'audit', 'user=42 action=login');</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> pg_logical_emit_message
+-------------------------
+ 0/226C738
+(1 row)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>そのまま覗くと<strong>何も出ない</strong>。既定では論理メッセージは送られない。</p>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> data
+------
+(0 rows)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p><code>messages</code> オプションを <code>true</code> にすると現れる。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT data FROM pg_logical_slot_peek_binary_changes(
+    'shop_slot', NULL, NULL,
+    'proto_version','4','publication_names','shop_pub',
+    'messages','true');</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>                                        data
+------------------------------------------------------------------------------------
+ \x42000000000226c7380002fb5fb55847fd00000329
+ \x4d01000000000226c73861756469740000000014757365723d343220616374696f6e3d6c6f67696e
+ \x4300000000000226c738000000000226c7680002fb5fb55847fd
+(3 rows)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<div class="example">
+  <span class="example-label">Message メッセージの分解</span>
+  <pre><code>4d                'M'                     メッセージ型 = Message
+01                1                       フラグ（1 = トランザクション内）
+00000000 0226c738 0/226C738               LSN
+61756469 7400     "audit"                 プレフィックス（NUL 終端）
+00000014          20                      内容の長さ
+757365723d3432... "user=42 action=login"  内容</code></pre>
+</div>
+
+<h2 id="sec-4-5">4.5　デコーダを手元に置く</h2>
+
+<p>16進を毎回手で分解するのは現実的でないので、小さなデコーダを作っておく。
+以下は本ガイドのすべての出力例を作るのに実際に使ったもので、
+<code>psql -tAc</code> の出力（1行1メッセージの16進）を標準入力から読む。</p>
+
+<div class="example">
+  <span class="example-label">pgoutput_decode.py</span>
+  <pre><code>#!/usr/bin/env python3
+"""pgoutput のメッセージ (16進1行1メッセージ) を読んで内容を表示する最小デコーダ。"""
+import sys, struct, datetime
+
+PG_EPOCH = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
+
+
+class Reader:
+    def __init__(self, buf):
+        self.b, self.i = buf, 0
+
+    def int8(self):
+        v = self.b[self.i]; self.i += 1; return v
+
+    def int16(self):
+        v = struct.unpack_from('!h', self.b, self.i)[0]; self.i += 2; return v
+
+    def int32(self):
+        v = struct.unpack_from('!i', self.b, self.i)[0]; self.i += 4; return v
+
+    def int64(self):
+        v = struct.unpack_from('!q', self.b, self.i)[0]; self.i += 8; return v
+
+    def lsn(self):
+        v = self.int64(); return '%X/%X' % (v &gt;&gt; 32, v &amp; 0xFFFFFFFF)
+
+    def ts(self):
+        return (PG_EPOCH + datetime.timedelta(microseconds=self.int64())).isoformat()
+
+    def string(self):
+        end = self.b.index(b'\x00', self.i)
+        v = self.b[self.i:end].decode('utf-8', 'replace'); self.i = end + 1; return v
+
+    def tuple_data(self):
+        cols = []
+        for _ in range(self.int16()):
+            kind = chr(self.int8())
+            if kind in ('n', 'u'):
+                cols.append('NULL' if kind == 'n' else '&lt;unchanged-toast&gt;')
+            else:
+                n = self.int32(); v = self.b[self.i:self.i + n]; self.i += n
+                cols.append(v.decode('utf-8', 'replace') if kind == 't' else '0x' + v.hex())
+        return cols
+
+
+def decode(msg):
+    r = Reader(msg)
+    t = chr(r.int8())
+    if t == 'B':
+        return f"BEGIN      final_lsn={r.lsn()} ts={r.ts()} xid={r.int32()}"
+    if t == 'C':
+        r.int8(); return f"COMMIT     commit_lsn={r.lsn()} end_lsn={r.lsn()} ts={r.ts()}"
+    if t == 'R':
+        rel = r.int32(); ns = r.string(); name = r.string()
+        ident = chr(r.int8()); ncols = r.int16()
+        cols = []
+        for _ in range(ncols):
+            key = r.int8(); cname = r.string(); typid = r.int32(); r.int32()
+            cols.append(('*' if key else '') + f"{cname}:{typid}")
+        return f"RELATION   {rel} {ns}.{name} identity={ident} cols=[{', '.join(cols)}]"
+    if t in ('I', 'U', 'D'):
+        rel = r.int32(); parts = []
+        while r.i &lt; len(r.b):
+            sub = chr(r.int8())
+            parts.append(f"{sub}{r.tuple_data()}")
+        names = {'I': 'INSERT', 'U': 'UPDATE', 'D': 'DELETE'}
+        return f"{names[t]:&lt;10} rel={rel} " + ' '.join(parts)
+    if t == 'T':
+        n = r.int32(); flags = r.int8()
+        return f"TRUNCATE   flags={flags} rels={[r.int32() for _ in range(n)]}"
+    if t == 'M':
+        flags = r.int8(); lsn = r.lsn(); prefix = r.string(); n = r.int32()
+        return (f"MESSAGE    transactional={bool(flags &amp; 1)} lsn={lsn} "
+                f"prefix={prefix} content={r.b[r.i:r.i+n]!r}")
+    if t == 'S':
+        return f"STREAM START xid={r.int32()} first_segment={r.int8()}"
+    if t == 'E':
+        return "STREAM STOP"
+    if t == 'c':
+        xid = r.int32(); r.int8()
+        return f"STREAM COMMIT xid={xid} commit_lsn={r.lsn()} end_lsn={r.lsn()} ts={r.ts()}"
+    if t == 'A':
+        xid = r.int32(); r.int8()
+        return f"STREAM ABORT xid={xid}"
+    if t == 'b':
+        return (f"BEGIN PREPARE prepare_lsn={r.lsn()} end_lsn={r.lsn()} ts={r.ts()} "
+                f"xid={r.int32()} gid={r.string()}")
+    if t == 'P':
+        r.int8()
+        return (f"PREPARE    prepare_lsn={r.lsn()} end_lsn={r.lsn()} ts={r.ts()} "
+                f"xid={r.int32()} gid={r.string()}")
+    if t == 'K':
+        r.int8()
+        return (f"COMMIT PREPARED commit_lsn={r.lsn()} end_lsn={r.lsn()} ts={r.ts()} "
+                f"xid={r.int32()} gid={r.string()}")
+    if t == 'r':
+        r.int8()
+        return (f"ROLLBACK PREPARED end_lsn={r.lsn()} rollback_lsn={r.lsn()} "
+                f"prepare_ts={r.ts()} rollback_ts={r.ts()} xid={r.int32()} gid={r.string()}")
+    if t == 'O':
+        return f"ORIGIN     commit_lsn={r.lsn()} name={r.string()}"
+    if t == 'Y':
+        return f"TYPE       oid={r.int32()} name={r.string()}.{r.string()}"
+    return f"UNKNOWN    type={t!r} raw={msg.hex()}"
+
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    print(decode(bytes.fromhex(line[2:] if line.startswith('\\x') else line)))</code></pre>
+</div>
+
+<p>使い方は次のとおり。<code>-tAc</code> を付けて、余計な枠線とヘッダを外した16進だけを渡すのがコツである。</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）</span>
+  <pre><code>psql -d shop -tAc "SELECT data FROM pg_logical_slot_peek_binary_changes(
+    'shop_slot', NULL, NULL,
+    'proto_version','4','publication_names','shop_pub','messages','true')" \
+  | python3 pgoutput_decode.py</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>BEGIN      final_lsn=0/226C738 ts=2026-08-06T13:33:56.347901+00:00 xid=809
+MESSAGE    transactional=True lsn=0/226C738 prefix=audit content=b'user=42 action=login'
+COMMIT     commit_lsn=0/226C738 end_lsn=0/226C768 ts=2026-08-06T13:33:56.347901+00:00</code></pre>
+</div>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  このデコーダは <strong>SQL 関数の出力（1行1メッセージ）専用</strong>である。
+  <code>pg_recvlogical -f</code> が書いたファイルには pgoutput のメッセージが隙間なく連結されており、
+  区切りとして足された改行はメッセージ本文中のバイト値 <code>0x0a</code> と区別できない。
+  ファイルを解析したい場合は、各メッセージの長さを型ごとに計算しながら読み進める必要がある。
+</div>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li>Begin / Relation / Insert / Update / Delete / Commit の先頭バイトを表を見ずに2つ以上言える</li>
+    <li>キーを変えない UPDATE に <code>K</code> が付かない理由を説明できる</li>
+    <li><code>REPLICA IDENTITY FULL</code> にすると Relation の <code>identity</code> が <code>f</code> になるのを確認した</li>
+    <li>手元で <code>pgoutput_decode.py</code> が動き、自分の環境の出力を読める</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch03.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第3章 まず動かす — 3 分で出力を見る</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch05.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第5章 pgoutput のオプション</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgoutput 実践ガイド — PostgreSQL 16.13 上で実際に実行した出力にもとづく</footer>
+</body>
+</html>

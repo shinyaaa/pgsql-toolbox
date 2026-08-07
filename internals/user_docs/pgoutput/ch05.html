@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第5章 pgoutput のオプション | pgoutput 実践ガイド — PostgreSQL 16 · 2026-08-06</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgoutput 実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 16 · 2026-08-06</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 pgoutput でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 pgoutput とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 どこで使われているか</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 test_decoding との違い</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 このガイドの進め方</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 wal_level を logical にする</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルデータベースとテーブルを作る</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 パブリケーションを作る</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 レプリケーションスロットを作る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす — 3 分で出力を見る</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 SQL 関数で出力を覗く</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 4 行の出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 peek と get の違い</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 pg_recvlogical で受け取る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 出力メッセージを読む</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 メッセージ型の一覧</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 Relation と Insert</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 Update・Delete と REPLICA IDENTITY</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 Truncate と論理メッセージ</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 デコーダを手元に置く</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch05.html">第5章 pgoutput のオプション</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 オプションの渡し方</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 proto_version</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 binary</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 messages</a></li>
+      <li><a href="ch05.html#sec-5-5">5.5 streaming</a></li>
+      <li><a href="ch05.html#sec-5-6">5.6 two_phase</a></li>
+      <li><a href="ch05.html#sec-5-7">5.7 origin</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 送る内容をパブリケーションで絞る</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 publish で操作種別を絞る</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 行フィルタ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 列リスト</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パーティションテーブル</a></li>
+      <li><a href="ch06.html#sec-6-5">6.5 テーブル集合の指定方法</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 実践: 論理レプリケーションと CDC</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 購読側インスタンスを用意する</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 CREATE SUBSCRIPTION で複製する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 裏側で流れている pgoutput のオプション</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 サブスクリプションの設定は pgoutput の設定</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 監視する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 つまずきポイントと対処・チートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 環境まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 REPLICA IDENTITY まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 スロットの運用</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 出力が空になるとき</a></li>
+      <li><a href="ch08.html#sec-8-5">8.5 チートシート</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第5章　pgoutput のオプション</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>pgoutput の主要オプションを、SQL 関数と <code>pg_recvlogical</code> の両方から渡せる</li>
+    <li><code>binary</code> / <code>messages</code> / <code>streaming</code> / <code>two_phase</code> / <code>origin</code> の効果を、出力の違いで説明できる</li>
+    <li>大トランザクションで spill と streaming のどちらが起きているか、統計ビューで判別できる</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>第4章までの環境（<code>shop_slot</code>、<code>cdc_slot</code>、<code>pgoutput_decode.py</code>）</li>
+    <li>5.6 では <code>max_prepared_transactions</code> を 0 より大きくするため、サーバの再起動が1回必要</li>
+    <li>5.5 では <code>logical_decoding_work_mem</code> を一時的に <code>64kB</code> に下げる</li>
+  </ul>
+</div>
+
+<h2 id="sec-5-1">5.1　オプションの渡し方</h2>
+
+<p>pgoutput のオプションは、呼び出し方によって書き方が変わるだけで、届く先は同じである。</p>
+
+<table>
+  <thead>
+    <tr><th>呼び出し方</th><th>書き方</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>SQL 関数</td><td><code>pg_logical_slot_peek_binary_changes(slot, NULL, NULL, 'キー', '値', ...)</code></td></tr>
+    <tr><td><code>pg_recvlogical</code></td><td><code>-o キー=値</code> を並べる</td></tr>
+    <tr><td>レプリケーションプロトコル</td><td><code>START_REPLICATION SLOT ... LOGICAL 0/0 (キー '値', ...)</code></td></tr>
+    <tr><td>論理レプリケーション</td><td><code>CREATE/ALTER SUBSCRIPTION ... WITH (...)</code>（PostgreSQL が変換して渡す）</td></tr>
+  </tbody>
+</table>
+
+<p>主要なオプションは次のとおり。</p>
+
+<table>
+  <thead>
+    <tr><th>オプション</th><th>既定</th><th>効果</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>proto_version</code></td><td>なし（必須）</td><td>使うプロトコルバージョン</td></tr>
+    <tr><td><code>publication_names</code></td><td>なし（必須）</td><td>対象パブリケーション名（カンマ区切り）</td></tr>
+    <tr><td><code>binary</code></td><td><code>false</code></td><td>値をテキストでなくバイナリ表現で送る</td></tr>
+    <tr><td><code>messages</code></td><td><code>false</code></td><td><code>pg_logical_emit_message()</code> の内容を送る</td></tr>
+    <tr><td><code>streaming</code></td><td><code>false</code></td><td>コミット前の大トランザクションを分割して送る</td></tr>
+    <tr><td><code>two_phase</code></td><td><code>false</code></td><td>PREPARE 時点で送る</td></tr>
+    <tr><td><code>origin</code></td><td><code>any</code></td><td><code>none</code> にすると他ノード由来の変更を送らない</td></tr>
+  </tbody>
+</table>
+
+<h2 id="sec-5-2">5.2　proto_version</h2>
+
+<p>プロトコルバージョンは、使えるメッセージ型の範囲を決める。PostgreSQL 16 が受け付けるのは 4 までである。</p>
+
+<table>
+  <thead>
+    <tr><th>proto_version</th><th>導入</th><th>増えた機能</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td>PostgreSQL 10</td><td>基本のメッセージ型</td></tr>
+    <tr><td>2</td><td>PostgreSQL 14</td><td>ストリーミング（Stream Start / Stop / Commit / Abort）</td></tr>
+    <tr><td>3</td><td>PostgreSQL 15</td><td>2相コミット（Begin Prepare / Prepare / Commit Prepared / Rollback Prepared）</td></tr>
+    <tr><td>4</td><td>PostgreSQL 16</td><td>ストリーミング中の並列適用に対応した Stream Abort</td></tr>
+  </tbody>
+</table>
+
+<p>サーバが対応していないバージョンを要求すると、起動時にはっきりエラーになる。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql -d shop）</span>
+  <pre><code>SELECT data FROM pg_logical_slot_peek_binary_changes(
+    'shop_slot', NULL, NULL, 'proto_version', '9', 'publication_names', 'shop_pub');</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>ERROR:  client sent proto_version=9 but server only supports protocol 4 or lower
+CONTEXT:  slot "shop_slot", output plugin "pgoutput", in the startup callback</code></pre>
+</div>
+
+<p><code>publication_names</code> を忘れた場合も同様に起動時に落ちる。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql -d shop）</span>
+  <pre><code>SELECT data FROM pg_logical_slot_peek_binary_changes(
+    'shop_slot', NULL, NULL, 'proto_version', '4');</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>ERROR:  publication_names parameter missing
+CONTEXT:  slot "shop_slot", output plugin "pgoutput", in the startup callback</code></pre>
+</div>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  <code>CONTEXT:</code> 行に <code>output plugin "pgoutput"</code> と出るのが目印である。
+  ログにこの形のエラーが出ていたら、pgoutput に渡されたオプションを疑えばよい。
+</div>
+
+<h2 id="sec-5-3">5.3　binary</h2>
+
+<p>既定では、すべての値が<strong>テキスト表現</strong>（<code>output function</code> の結果）で送られる。
+<code>binary=true</code> にすると、型ごとのバイナリ表現（<code>send function</code> の結果）になる。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: binary の有無を比べる</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>1件入れて、まず既定（テキスト）で見る。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d shop -c "INSERT INTO items VALUES (9, 'grape', 450);"
+psql -d shop -c "SELECT data FROM pg_logical_slot_peek_binary_changes(
+    'shop_slot', NULL, NULL, 'proto_version','4','publication_names','shop_pub');"</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力（Insert の行のみ抜粋）</span>
+          <pre><code>\x49000060144e0004740000000139740000000567726170657400000003343530740000000174</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>同じ変更を <code>binary=true</code> で取り直す。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT data FROM pg_logical_slot_get_binary_changes(
+    'shop_slot', NULL, NULL,
+    'proto_version','4','publication_names','shop_pub','binary','true');</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力（Insert の行のみ抜粋）</span>
+          <pre><code>\x49000060144e0004620000000400000009620000000567726170656200000004000001c2620000000101</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>違いは列の種別バイトと値の表現である。</p>
+
+<table>
+  <thead>
+    <tr><th>列</th><th>binary=false</th><th>binary=true</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>id</code>=9</td><td><code>74</code> 長さ1 <code>39</code>（文字 "9"）</td><td><code>62</code> 長さ4 <code>00000009</code>（int4 の 9）</td></tr>
+    <tr><td><code>name</code>='grape'</td><td><code>74</code> 長さ5 <code>67726170 65</code></td><td><code>62</code> 長さ5 <code>67726170 65</code>（text は同じ）</td></tr>
+    <tr><td><code>price</code>=450</td><td><code>74</code> 長さ3 <code>343530</code>（文字 "450"）</td><td><code>62</code> 長さ4 <code>000001c2</code>（int4 の 450）</td></tr>
+    <tr><td><code>in_stock</code>=true</td><td><code>74</code> 長さ1 <code>74</code>（文字 "t"）</td><td><code>62</code> 長さ1 <code>01</code>（bool の true）</td></tr>
+  </tbody>
+</table>
+
+<p>種別バイトが <code>74</code>（<code>'t'</code> = テキスト）から <code>62</code>（<code>'b'</code> = バイナリ）に変わっている。
+<code>0x1c2</code> は 450 なので、確かに int4 のバイナリ表現である。</p>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  <code>binary=true</code> は<strong>受け取る側が同じ型のバイナリ表現を解釈できること</strong>を前提にする。
+  エンディアンや型の内部表現はバージョン間・アーキテクチャ間で必ずしも同一ではないため、
+  異機種間の論理レプリケーションや自作クライアントでは <code>false</code>（既定）が安全である。
+  性能を稼ぎたい同一構成のノード間でのみ有効にする。
+</div>
+
+<h2 id="sec-5-4">5.4　messages</h2>
+
+<p>4.4 で見たとおり、<code>pg_logical_emit_message()</code> で埋め込んだ内容は
+<code>messages=true</code> のときだけ流れる。既定は <code>false</code> なので、
+<strong>CDC でアプリケーション文脈を運びたいなら明示的に有効化する必要がある</strong>。</p>
+
+<div class="example">
+  <span class="example-label">入力（シェル）— pg_recvlogical の場合</span>
+  <pre><code>pg_recvlogical -d shop --slot=cdc_slot --start \
+  -o proto_version=4 -o publication_names='shop_pub' -o messages=true \
+  --endpos="$LSN" -f /tmp/msg.bin</code></pre>
+</div>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  論理メッセージは<strong>パブリケーションと無関係</strong>に流れる。テーブルを1つも含まない
+  パブリケーションでも、<code>messages=true</code> なら Message メッセージは届く。
+  逆に言えば、パブリケーション設定で論理メッセージを絞ることはできない。
+</div>
+
+<h2 id="sec-5-5">5.5　streaming</h2>
+
+<p>既定では、pgoutput は<strong>コミットされるまで何も送らない</strong>。
+そのため巨大なトランザクションでは、変更をサーバ側のメモリに溜め込み、
+<code>logical_decoding_work_mem</code> を超えるとディスクに書き出す（これを spill と呼ぶ）。
+<code>streaming=true</code> にすると、コミットを待たずに途中経過を送り出せる。図 5.1 の違いである。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart TB
+    subgraph OFF["streaming = false (既定)"]
+        A1["巨大トランザクション実行中"] --> A2["メモリに蓄積"]
+        A2 --> A3["logical_decoding_work_mem 超過<br/>→ ディスクに spill"]
+        A3 --> A4["COMMIT"]
+        A4 --> A5["ここで初めて全部を送信"]
+    end
+    subgraph ON["streaming = true"]
+        B1["巨大トランザクション実行中"] --> B2["work_mem に達するたび<br/>S ... E の塊で送信"]
+        B2 --> B3["COMMIT"]
+        B3 --> B4["c (Stream Commit) を送信"]
+    end
+  </pre>
+  <figcaption>図 5.1: streaming の有無による送信タイミングの違い</figcaption>
+</figure>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: spill と streaming を比べる</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>差が出やすいよう、しきい値を最小の <code>64kB</code> に下げる（再起動不要）。</p>
+        <div class="example">
+          <span class="example-label">入力（psql）</span>
+          <pre><code>ALTER SYSTEM SET logical_decoding_work_mem = '64kB';
+SELECT pg_reload_conf();</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>ALTER SYSTEM
+ pg_reload_conf
+----------------
+ t
+(1 row)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>テーブルを空にし、スロットも空にしてから始める。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d shop -c "TRUNCATE items;"
+psql -d shop -tAc "SELECT count(*) FROM pg_logical_slot_get_binary_changes(
+    'shop_slot', NULL, NULL, 'proto_version','4','publication_names','shop_pub')"</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>streaming なしで受けるスロットを作り、1本目の大きなトランザクションを流す。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pg_recvlogical -d shop --slot=big_slot --create-slot -P pgoutput
+
+psql -d shop -c "BEGIN;
+INSERT INTO items SELECT g, 'bulk-'||g, g*10 FROM generate_series(100, 3000) g;
+COMMIT;"</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>次に streaming ありで受けるスロットを作り、2本目を流す。
+           <strong>順序が重要</strong>で、この作り方だと <code>big_slot</code> は2本とも、
+           <code>stream_slot</code> は2本目だけを見ることになる。あとで統計を比べるときの前提になる。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pg_recvlogical -d shop --slot=stream_slot --create-slot -P pgoutput
+
+psql -d shop -c "BEGIN;
+INSERT INTO items SELECT g, 'bulk2-'||g, g*10 FROM generate_series(5000, 8000) g;
+COMMIT;"</code></pre>
+        </div>
+      </li>
+      <li>
+        <p><code>stream_slot</code> を <code>streaming=true</code> で受け取る。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>LSN=$(psql -d shop -tAc "SELECT pg_current_wal_lsn();")
+rm -f /tmp/stream.bin
+pg_recvlogical -d shop --slot=stream_slot --start \
+  -o proto_version=4 -o publication_names='shop_pub' -o streaming=true \
+  --endpos="$LSN" -f /tmp/stream.bin</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>先頭と末尾を見る。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>od -A d -t x1z /tmp/stream.bin | head -3
+od -A d -t x1z /tmp/stream.bin | tail -4</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>0000000 53 00 00 03 2b 01 0a 52 00 00 03 2b 00 00 60 14  &gt;S...+..R...+..`.&lt;
+0000016 70 75 62 6c 69 63 00 69 74 65 6d 73 00 64 00 04  &gt;public.items.d..&lt;
+0000032 01 69 64 00 00 00 00 17 ff ff ff ff 00 6e 61 6d  &gt;.id..........nam&lt;
+...
+0159184 00 00 05 38 30 30 30 30 74 00 00 00 01 74 0a 45  &gt;...80000t....t.E&lt;
+0159200 0a 63 00 00 03 2b 00 00 00 00 00 02 33 f9 b0 00  &gt;.c...+......3...&lt;
+0159216 00 00 00 02 33 f9 e0 00 02 fb 5f b6 6a 9c be 0a  &gt;....3....._.j...&lt;
+0159232</code></pre>
+        </div>
+      </li>
+      <li>
+        <p><code>big_slot</code> のほうは streaming なしで消費する。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT count(*) FROM pg_logical_slot_get_binary_changes(
+    'big_slot', NULL, NULL, 'proto_version','4','publication_names','shop_pub');</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> count
+-------
+  5907
+(1 row)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>統計を比べる。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT slot_name, spill_txns, spill_count, spill_bytes,
+       stream_txns, stream_count, total_txns
+  FROM pg_stat_replication_slots
+ WHERE slot_name IN ('big_slot', 'stream_slot');</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>  slot_name  | spill_txns | spill_count | spill_bytes | stream_txns | stream_count | total_txns
+-------------+------------+-------------+-------------+-------------+--------------+------------
+ big_slot    |          2 |          14 |      879398 |           0 |            0 |          2
+ stream_slot |          0 |           0 |           0 |           1 |            7 |          1
+(2 rows)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>終わったらしきい値を戻す。</p>
+        <div class="example">
+          <span class="example-label">入力（psql）</span>
+          <pre><code>ALTER SYSTEM SET logical_decoding_work_mem = '64MB';
+SELECT pg_reload_conf();</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>読み方は明快である。<code>big_slot</code> は見えていた 2 トランザクションで
+<strong>14 回・約 880KB をディスクに書き出した</strong>（<code>spill_*</code>）のに対し、
+<code>stream_slot</code> は spill が 0 で、代わりに
+<strong>見えていた 1 トランザクションを 7 つの塊に分けて送っている</strong>（<code>stream_count = 7</code>）。
+<code>od</code> の出力でも、先頭が <code>53</code>（Stream Start）、末尾が
+<code>45</code>（Stream Stop）→ <code>63</code>（Stream Commit）になっている。</p>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  <code>spill_bytes</code> が大きいスロットは、デコード時にディスク I/O を大量に発生させ、
+  レプリケーション遅延の原因になる。<code>pg_stat_replication_slots</code> で
+  <code>spill_txns</code> が増え続けているなら、<code>logical_decoding_work_mem</code> を上げるか
+  <code>streaming</code> を有効にすることを検討する。
+</div>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  <code>streaming</code> は SQL 関数経由でも効く。同じ大トランザクションを
+  <code>'streaming','true'</code> 付きで <code>peek</code> すると、メッセージの先頭バイトの内訳は次のようになった。
+  <div class="example" style="margin-top:.6em">
+    <span class="example-label">入力（シェル）</span>
+    <pre><code>psql -d shop -tAc "SELECT data FROM pg_logical_slot_peek_binary_changes(
+    'shop_slot', NULL, NULL,
+    'proto_version','4','publication_names','shop_pub','streaming','true')" \
+  | cut -c1-4 | sort | uniq -c | sort -rn</code></pre>
+  </div>
+  <div class="example">
+    <span class="example-label out">出力</span>
+    <pre><code>   3001 \x49      Insert
+      7 \x53      Stream Start
+      7 \x45      Stream Stop
+      1 \x63      Stream Commit
+      1 \x52      Relation</code></pre>
+  </div>
+  Begin / Commit ではなく Stream Start / Stop / Commit で囲まれているのが、ストリーミングされた証拠である。
+</div>
+
+<h2 id="sec-5-6">5.6　two_phase</h2>
+
+<p>既定では、2相コミットの <code>PREPARE TRANSACTION</code> の時点では何も送られず、
+<code>COMMIT PREPARED</code> のときに通常のトランザクションとしてまとめて届く。
+<code>two_phase=true</code> にすると、PREPARE の時点で送られるようになる。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 2相コミットを流す</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p><code>max_prepared_transactions</code> を有効にする（既定 0 のままでは <code>PREPARE TRANSACTION</code> が使えない）。再起動が必要。</p>
+        <div class="example">
+          <span class="example-label">入力（psql → シェル）</span>
+          <pre><code>psql -c "ALTER SYSTEM SET max_prepared_transactions = 10;"
+pg_ctlcluster 16 main restart
+psql -tAc "SHOW max_prepared_transactions;"</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>10</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>5.5 で入れた大量の行を片付ける。この後で <code>id = 902</code> を使うが、
+           5.5 の <code>bulk-902</code> と衝突するため、先に空にしておく。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>TRUNCATE items;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>TRUNCATE TABLE</code></pre>
+        </div>
+      </li>
+      <li>
+        <p><code>two_phase</code> 対応のスロットを作る。<strong>スロット作成時に決める</strong>点に注意する。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>pg_recvlogical -d shop --slot=tp_slot --create-slot -P pgoutput --two-phase
+psql -d shop -c "SELECT slot_name, plugin, two_phase
+                   FROM pg_replication_slots WHERE slot_name='tp_slot';"</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> slot_name |  plugin  | two_phase
+-----------+----------+-----------
+ tp_slot   | pgoutput | t
+(1 row)</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>トランザクションを PREPARE する（まだコミットしない）。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>BEGIN;
+INSERT INTO items VALUES (902, 'two-phase-demo', 700);
+PREPARE TRANSACTION 'tx3';</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>この時点で覗くと、すでに変更が届いている。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d shop -tAc "SELECT data FROM pg_logical_slot_get_binary_changes(
+    'tp_slot', NULL, NULL,
+    'proto_version','4','publication_names','shop_pub','two_phase','true')" \
+  | python3 pgoutput_decode.py</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>BEGIN PREPARE prepare_lsn=0/2341378 end_lsn=0/2341470 ts=2026-08-06T13:35:17.091437+00:00 xid=816 gid=tx3
+RELATION   24596 public.items identity=d cols=[*id:23, name:25, price:23, in_stock:16]
+INSERT     rel=24596 N['902', 'two-phase-demo', '700', 't']
+PREPARE    prepare_lsn=0/2341378 end_lsn=0/2341470 ts=2026-08-06T13:35:17.091437+00:00 xid=816 gid=tx3</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>コミットすると、確定を知らせる短いメッセージだけが来る。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop → シェル）</span>
+          <pre><code>psql -d shop -c "COMMIT PREPARED 'tx3';"</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>COMMIT PREPARED commit_lsn=0/2341470 end_lsn=0/23414A8 ts=2026-08-06T13:35:17.227394+00:00 xid=816 gid=tx3</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>ロールバックした場合も確認しておく。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>BEGIN;
+INSERT INTO items VALUES (903, 'abandoned', 1);
+PREPARE TRANSACTION 'tx4';
+ROLLBACK PREPARED 'tx4';</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力（デコード結果）</span>
+          <pre><code>BEGIN PREPARE prepare_lsn=0/2341538 end_lsn=0/2341630 ts=2026-08-06T13:35:17.357109+00:00 xid=817 gid=tx4
+PREPARE    prepare_lsn=0/2341538 end_lsn=0/2341630 ts=2026-08-06T13:35:17.357109+00:00 xid=817 gid=tx4
+ROLLBACK PREPARED end_lsn=0/2341630 rollback_lsn=0/2341668 prepare_ts=... rollback_ts=... xid=817 gid=tx4</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>グローバルトランザクション ID（<code>gid</code>）がそのまま運ばれているので、
+受け取る側は同じ <code>gid</code> で自分の側の PREPARE を作り、COMMIT PREPARED を待つ、という
+分散トランザクションが組める。</p>
+
+<p>上の <code>tx4</code> の例で <code>INSERT</code> が見えないのは、PREPARE と ROLLBACK PREPARED を
+続けて実行してから読んだためである。受け取る側が PREPARE の時点で読んでいれば、
+<code>INSERT</code> は<strong>届いている</strong>。実際に、PREPARE 直後に一度読み、
+その後ロールバックしてもう一度読むと、こうなる。</p>
+
+<div class="example">
+  <span class="example-label out">出力（PREPARE 直後に読んだとき）</span>
+  <pre><code>BEGIN PREPARE prepare_lsn=0/2885758 end_lsn=0/2885850 ts=... xid=879 gid=tx9
+RELATION   24596 public.items identity=d cols=[*id:23, name:25, price:23, in_stock:16]
+INSERT     rel=24596 N['950', 'rb-test', '1', 't']
+PREPARE    prepare_lsn=0/2885758 end_lsn=0/2885850 ts=... xid=879 gid=tx9</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力（ROLLBACK PREPARED 後に読んだとき）</span>
+  <pre><code>ROLLBACK PREPARED end_lsn=0/2885850 rollback_lsn=0/2885888 prepare_ts=... rollback_ts=... xid=879 gid=tx9</code></pre>
+</div>
+
+<p>つまり受け取る側は、<strong>いったん適用した PREPARE を後から取り消せる</strong>必要がある。
+これが 2相コミットを扱う CDC 実装の難しいところである。</p>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴</strong>
+  <code>two_phase</code> は<strong>スロット作成時の属性</strong>である。既存スロットに対して
+  <code>-o two_phase=true</code> だけ付けても、スロットが 2相対応で作られていなければ PREPARE 時点では届かない。
+  <code>pg_replication_slots.two_phase</code> が <code>t</code> になっているかを必ず確認すること。
+</div>
+
+<h2 id="sec-5-7">5.7　origin</h2>
+
+<p><code>origin</code> は「どこ由来の変更を送るか」を決める。既定の <code>any</code> はすべて送り、
+<code>none</code> は<strong>複製起点を持たない変更、つまりこのノードで直接行われた変更だけ</strong>を送る。</p>
+
+<p>用途は双方向レプリケーションでの<strong>変更の無限ループ防止</strong>である。A→B と B→A の
+両方向にサブスクリプションを張ると、A で INSERT した行が B に渡り、B ではそれが「B での変更」として
+また A に返ってくる。両方向を <code>origin = none</code> にすると、複製で入ってきた変更は転送されなくなる。</p>
+
+<div class="example">
+  <span class="example-label">入力（購読側 psql）</span>
+  <pre><code>ALTER SUBSCRIPTION shop_sub SET (origin = none);</code></pre>
+</div>
+<div class="example">
+  <span class="example-label out">出力</span>
+  <pre><code>ALTER SUBSCRIPTION</code></pre>
+</div>
+
+<p>この設定が pgoutput にどう渡るかは、第7章 7.3 で発行側のログを見ながら確認する。</p>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>proto_version</code> を 9 にするとエラーになり、<code>CONTEXT</code> に <code>pgoutput</code> と出るのを確認した</li>
+    <li><code>binary=true</code> で列の種別バイトが <code>74</code> から <code>62</code> に変わるのを確認した</li>
+    <li><code>pg_stat_replication_slots</code> で spill と stream の違いを読み取れた</li>
+    <li><code>two_phase</code> 対応スロットで、PREPARE の時点で変更が届くのを確認した</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch04.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第4章 出力メッセージを読む</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch06.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第6章 送る内容をパブリケーションで絞る</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgoutput 実践ガイド — PostgreSQL 16.13 上で実際に実行した出力にもとづく</footer>
+</body>
+</html>

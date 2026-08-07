@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第1章 pgoutput でできること | pgoutput 実践ガイド — PostgreSQL 16 · 2026-08-06</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgoutput 実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 16 · 2026-08-06</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li class="current">
+    <a class="chap-title" href="ch01.html">第1章 pgoutput でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 pgoutput とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 どこで使われているか</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 test_decoding との違い</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 このガイドの進め方</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 wal_level を logical にする</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルデータベースとテーブルを作る</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 パブリケーションを作る</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 レプリケーションスロットを作る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす — 3 分で出力を見る</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 SQL 関数で出力を覗く</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 4 行の出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 peek と get の違い</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 pg_recvlogical で受け取る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 出力メッセージを読む</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 メッセージ型の一覧</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 Relation と Insert</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 Update・Delete と REPLICA IDENTITY</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 Truncate と論理メッセージ</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 デコーダを手元に置く</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 pgoutput のオプション</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 オプションの渡し方</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 proto_version</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 binary</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 messages</a></li>
+      <li><a href="ch05.html#sec-5-5">5.5 streaming</a></li>
+      <li><a href="ch05.html#sec-5-6">5.6 two_phase</a></li>
+      <li><a href="ch05.html#sec-5-7">5.7 origin</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 送る内容をパブリケーションで絞る</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 publish で操作種別を絞る</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 行フィルタ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 列リスト</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パーティションテーブル</a></li>
+      <li><a href="ch06.html#sec-6-5">6.5 テーブル集合の指定方法</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 実践: 論理レプリケーションと CDC</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 購読側インスタンスを用意する</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 CREATE SUBSCRIPTION で複製する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 裏側で流れている pgoutput のオプション</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 サブスクリプションの設定は pgoutput の設定</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 監視する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 つまずきポイントと対処・チートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 環境まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 REPLICA IDENTITY まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 スロットの運用</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 出力が空になるとき</a></li>
+      <li><a href="ch08.html#sec-8-5">8.5 チートシート</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第1章　pgoutput でできること</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li>pgoutput が「何を入力に、何を出力するもの」なのかを説明できる</li>
+    <li>論理レプリケーションと CDC ツールのどこで pgoutput が使われているかが分かる</li>
+    <li>pgoutput で取り出せるもの・取り出せないものを区別できる</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>この章は読むだけ。手を動かすのは第2章から</li>
+    <li>PostgreSQL の WAL（先行書き込みログ）という言葉を聞いたことがある</li>
+  </ul>
+</div>
+
+<h2 id="sec-1-1">1.1　pgoutput とは何か</h2>
+
+<p><strong>pgoutput</strong> は PostgreSQL 本体に標準で組み込まれている<strong>論理デコーディング出力プラグイン</strong>である。
+PostgreSQL は更新のたびに WAL を書くが、WAL はブロック単位の物理的な記録なので、そのままでは
+「<code>items</code> テーブルの <code>id=1</code> の行が入った」といった<strong>論理的な変更</strong>としては読めない。</p>
+
+<p>論理デコーディングは、この WAL を読み直して行単位の変更に組み立て直す仕組みで、
+その結果を「どんな形式で外に出すか」を決めるのが出力プラグインである。pgoutput はそのうちの1つで、
+変更を<strong>独自のバイナリメッセージ列</strong>として出力する。図 1.1 のような位置づけになる。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    APP["アプリケーション<br/>INSERT / UPDATE / DELETE"] --> WAL["WAL<br/>(物理的な記録)"]
+    WAL --> DECODE["論理デコーディング<br/>(レプリケーションスロット)"]
+    DECODE --> PGOUT["pgoutput<br/>出力プラグイン"]
+    PGOUT --> SUB["購読側 PostgreSQL<br/>(論理レプリケーション)"]
+    PGOUT --> CDC["CDC ツール<br/>(Debezium など)"]
+    PGOUT --> TOOL["自前のツール<br/>(pg_recvlogical / SQL 関数)"]
+  </pre>
+  <figcaption>図 1.1: pgoutput の位置づけ。WAL から取り出した論理的な変更を、バイナリメッセージにして送り出す</figcaption>
+</figure>
+
+<p>図 1.1 のとおり、pgoutput の出力先は1つではない。購読側の PostgreSQL がそのまま適用することもあれば、
+CDC ツールが読み取って Kafka などに流すこともあるし、<code>pg_recvlogical</code> や SQL 関数で自分の手元に
+取り出すこともできる。<strong>本ガイドでは主に3つ目の「自分の手元に取り出す」方法で中身を確かめながら進める。</strong></p>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  pgoutput は PostgreSQL 10 以降に標準で同梱されている。<code>CREATE EXTENSION</code> も
+  <code>shared_preload_libraries</code> への追加も不要で、共有ライブラリとして
+  <code>$libdir/pgoutput.so</code> が最初から置かれている。
+</div>
+
+<h2 id="sec-1-2">1.2　どこで使われているか</h2>
+
+<p>pgoutput が実際に動いている場面は、大きく3つある。</p>
+
+<table>
+  <thead>
+    <tr><th>場面</th><th>誰が pgoutput を使うか</th><th>本ガイドで扱う章</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>論理レプリケーション</td><td><code>CREATE SUBSCRIPTION</code> した購読側が、既定の出力プラグインとして指定する</td><td>第7章</td></tr>
+    <tr><td>CDC（変更データキャプチャ）</td><td>Debezium などのツールが、レプリケーションスロット経由で読む</td><td>第3章・第5章</td></tr>
+    <tr><td>調査・検証</td><td>運用者が <code>pg_recvlogical</code> や SQL 関数で直接覗く</td><td>第3章・第4章</td></tr>
+  </tbody>
+</table>
+
+<p>重要なのは、<strong>この3つはすべて同じ pgoutput を、同じオプションで呼んでいる</strong>という点である。
+論理レプリケーションのトラブルを調べるときに <code>pg_recvlogical</code> で生の出力を覗けるのは、この共通性のおかげである。</p>
+
+<h2 id="sec-1-3">1.3　test_decoding との違い</h2>
+
+<p>PostgreSQL には <code>test_decoding</code> というもう1つの標準プラグインが同梱されている。
+名前のとおりテスト用で、人間が読めるテキストを出力する。両者は用途がはっきり分かれている。</p>
+
+<table>
+  <thead>
+    <tr><th></th><th>pgoutput</th><th>test_decoding</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>出力形式</td><td>バイナリのメッセージ列</td><td>人間可読のテキスト</td></tr>
+    <tr><td>用途</td><td>本番の論理レプリケーション・CDC</td><td>動作確認・デバッグ</td></tr>
+    <tr><td>送るテーブルの選択</td><td>パブリケーションで指定（必須）</td><td>全テーブル</td></tr>
+    <tr><td>行フィルタ・列リスト</td><td>使える</td><td>使えない</td></tr>
+    <tr><td>ストリーミング・2相コミット</td><td>使える</td><td>使える（形式は簡易）</td></tr>
+    <tr><td>読みやすさ</td><td>デコードが必要</td><td>そのまま読める</td></tr>
+  </tbody>
+</table>
+
+<p>「とりあえず変更が拾えているか見たい」だけなら <code>test_decoding</code> のほうが手軽である。
+一方、<strong>本番で使うのは pgoutput</strong> なので、本番と同じ挙動を確認したいなら pgoutput を直接読む必要がある。
+本ガイドは後者のための手順書である。</p>
+
+<h2 id="sec-1-4">1.4　このガイドの進め方</h2>
+
+<p>pgoutput から取り出せるもの・取り出せないものを、先に押さえておく。以下はすべて
+PostgreSQL 16.13 で実際に確認した結果である。</p>
+
+<table>
+  <thead>
+    <tr><th>取り出せる</th><th>取り出せない</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>INSERT / UPDATE / DELETE の行データ</td><td>DDL（<code>ALTER TABLE</code> など）</td></tr>
+    <tr><td>TRUNCATE</td><td>シーケンスの値の進み</td></tr>
+    <tr><td>トランザクションの開始・コミット・タイムスタンプ</td><td>生成列（<code>GENERATED ALWAYS AS ... STORED</code>）</td></tr>
+    <tr><td>2相コミットの PREPARE / COMMIT PREPARED</td><td>ラージオブジェクト</td></tr>
+    <tr><td><code>pg_logical_emit_message()</code> で埋めた任意のメッセージ</td><td>更新されなかった TOAST 値の実体（後述）</td></tr>
+  </tbody>
+</table>
+
+<div class="pitfall">
+  <strong>⚠️ よくある誤解</strong>
+  「論理レプリケーションを張れば購読側も自動で ALTER TABLE される」というのは誤り。
+  <strong>DDL は一切流れない</strong>ので、テーブル定義の変更は発行側・購読側の両方で自分で行う必要がある。
+  第8章で、これを忘れたときに何が起きるかを扱う。
+</div>
+
+<p>本ガイドは第2章から実際に手を動かす。<strong>第2章で作った環境を第8章まで引き継ぐ</strong>ので、
+章をまたいで作り直す必要はない。各章の冒頭に前提を書いてあるので、途中から読む場合はそこを確認してほしい。</p>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li>pgoutput の入力（WAL）と出力（バイナリメッセージ列）を自分の言葉で言える</li>
+    <li>論理レプリケーションと CDC ツールが、同じ pgoutput を使っていると説明できる</li>
+    <li>DDL とシーケンスは pgoutput から取り出せない、と即答できる</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <span class="pager-spacer" aria-hidden="true"></span>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch02.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第2章 準備</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgoutput 実践ガイド — PostgreSQL 16.13 上で実際に実行した出力にもとづく</footer>
+</body>
+</html>

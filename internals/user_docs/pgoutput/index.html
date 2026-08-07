@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>pgoutput 実践ガイド — PostgreSQL 16 · 2026-08-06</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgoutput 実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 16 · 2026-08-06</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 pgoutput でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 pgoutput とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 どこで使われているか</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 test_decoding との違い</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 このガイドの進め方</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 wal_level を logical にする</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルデータベースとテーブルを作る</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 パブリケーションを作る</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 レプリケーションスロットを作る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす — 3 分で出力を見る</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 SQL 関数で出力を覗く</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 4 行の出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 peek と get の違い</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 pg_recvlogical で受け取る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 出力メッセージを読む</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 メッセージ型の一覧</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 Relation と Insert</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 Update・Delete と REPLICA IDENTITY</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 Truncate と論理メッセージ</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 デコーダを手元に置く</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 pgoutput のオプション</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 オプションの渡し方</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 proto_version</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 binary</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 messages</a></li>
+      <li><a href="ch05.html#sec-5-5">5.5 streaming</a></li>
+      <li><a href="ch05.html#sec-5-6">5.6 two_phase</a></li>
+      <li><a href="ch05.html#sec-5-7">5.7 origin</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch06.html">第6章 送る内容をパブリケーションで絞る</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 publish で操作種別を絞る</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 行フィルタ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 列リスト</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パーティションテーブル</a></li>
+      <li><a href="ch06.html#sec-6-5">6.5 テーブル集合の指定方法</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 実践: 論理レプリケーションと CDC</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 購読側インスタンスを用意する</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 CREATE SUBSCRIPTION で複製する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 裏側で流れている pgoutput のオプション</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 サブスクリプションの設定は pgoutput の設定</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 監視する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 つまずきポイントと対処・チートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 環境まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 REPLICA IDENTITY まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 スロットの運用</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 出力が空になるとき</a></li>
+      <li><a href="ch08.html#sec-8-5">8.5 チートシート</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <div class="toc-hero">
+        <h1>pgoutput 実践ガイド</h1>
+        <p class="version-hero">PostgreSQL 16 · 2026-08-06</p>
+        <p class="audience">対象: SQL と psql は使えるが、論理デコーディングや pgoutput は触ったことがない方</p>
+        <p class="lead">pgoutput は PostgreSQL に標準で組み込まれている論理デコーディング出力プラグインで、
+論理レプリケーションと CDC（変更データキャプチャ）の共通の入口である。
+このガイドを上から順に読み、示したコマンドを実行していけば、
+<strong>pgoutput の出力を自分で取り出し、中身を読み、オプションで制御できる</strong>ようになる。
+第2章で作る環境を第8章まで引き継ぐので、途中で作り直す必要はない。
+所要時間はハンズオンを実際に打ちながらで 2〜3 時間程度。
+本文中の出力はすべて PostgreSQL 16.13 上で実際に実行して採取したものである
+（LSN・xid・OID・タイムスタンプは環境ごとに異なる）。</p>
+      </div>
+      <div class="toc-grid">
+        <a class="toc-card" href="ch01.html">
+  <span class="num">第1章</span>
+  <span class="title">pgoutput でできること</span>
+  <span class="desc">pgoutput が何者で、どこで使われ、何を解決するのかを掴む。</span>
+</a>
+<a class="toc-card" href="ch02.html">
+  <span class="num">第2章</span>
+  <span class="title">準備</span>
+  <span class="desc">wal_level・サンプルテーブル・パブリケーション・スロットを、コピペで用意する。</span>
+</a>
+<a class="toc-card" href="ch03.html">
+  <span class="num">第3章</span>
+  <span class="title">まず動かす — 3 分で出力を見る</span>
+  <span class="desc">SQL 関数と pg_recvlogical で、pgoutput の出力を実際に取り出す。</span>
+</a>
+<a class="toc-card" href="ch04.html">
+  <span class="num">第4章</span>
+  <span class="title">出力メッセージを読む</span>
+  <span class="desc">Relation / Insert / Update / Delete などの中身をバイト単位で読み解く。</span>
+</a>
+<a class="toc-card" href="ch05.html">
+  <span class="num">第5章</span>
+  <span class="title">pgoutput のオプション</span>
+  <span class="desc">proto_version・binary・messages・streaming・two_phase・origin を1つずつ試す。</span>
+</a>
+<a class="toc-card" href="ch06.html">
+  <span class="num">第6章</span>
+  <span class="title">送る内容をパブリケーションで絞る</span>
+  <span class="desc">publish・行フィルタ・列リスト・パーティションで、流れるデータを制御する。</span>
+</a>
+<a class="toc-card" href="ch07.html">
+  <span class="num">第7章</span>
+  <span class="title">実践: 論理レプリケーションと CDC</span>
+  <span class="desc">CREATE SUBSCRIPTION の裏で pgoutput がどう呼ばれているかを、目で確かめる。</span>
+</a>
+<a class="toc-card" href="ch08.html">
+  <span class="num">第8章</span>
+  <span class="title">つまずきポイントと対処・チートシート</span>
+  <span class="desc">よく出るエラーと復旧手順、そして最後に早見表。</span>
+</a>
+      </div>
+    </main>
+  </div>
+  <footer class="site-footer">pgoutput 実践ガイド — PostgreSQL 16.13 上で実際に実行した出力にもとづく</footer>
+</body>
+</html>

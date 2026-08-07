@@ -1,0 +1,386 @@
+/* db-user-docs : 実践ユーザーガイド用スタイル（teal テーマ） ----------------
+   db-internals-docs のレイアウトを踏襲しつつ、色をティール系に変え、
+   「読んで手を動かす」ためのハンズオン系コンポーネントを追加している。
+   このファイルは編集せずそのまま css/style.css にコピーして使う。 */
+:root {
+  --accent: #0d9488;        /* teal-600 */
+  --accent-dark: #0f766e;   /* teal-700（ヘッダ背景） */
+  --accent-soft: #ccfbf1;   /* teal-100 */
+  --text: #1a202c;
+  --muted: #4a5568;
+  --border: #e2e8f0;
+  --bg: #ffffff;
+  --bg-alt: #f4faf9;
+  --code-bg: #f1f5f4;
+  --sidebar-w: 290px;
+  --content-w: 820px;
+  --header-h: 52px;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  color: var(--text);
+  background: var(--bg);
+  font-family: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+    "Noto Sans JP", "Yu Gothic", Meiryo, sans-serif;
+  font-size: 16px;
+  line-height: 1.85;
+}
+
+/* ヘッダー -------------------------------------------------------------- */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  height: var(--header-h);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  background: var(--accent-dark);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+.site-header .docs-home {
+  margin-right: 16px;
+  padding: 3px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 20px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.8rem;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.site-header .docs-home:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.55);
+  color: #fff;
+}
+.site-header .site-title {
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.05rem;
+  text-decoration: none;
+  letter-spacing: 0.02em;
+}
+/* 「ユーザーガイド」であることを示すヘッダバッジ（白地・ティール文字で目立たせる） */
+.doc-kind-badge {
+  margin-left: 14px;
+  padding: 2px 11px;
+  background: #ffffff;
+  color: var(--accent-dark);
+  border-radius: 20px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.version-badge {
+  margin-left: 12px;
+  padding: 2px 9px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  color: rgba(255, 255, 255, 0.85);
+  white-space: nowrap;
+}
+
+/* レイアウト ------------------------------------------------------------ */
+.layout {
+  display: flex;
+  align-items: flex-start;
+  max-width: calc(var(--sidebar-w) + var(--content-w) + 80px);
+  margin: 0 auto;
+}
+
+/* サイドバー TOC -------------------------------------------------------- */
+.sidebar {
+  position: sticky;
+  top: var(--header-h);
+  flex: 0 0 var(--sidebar-w);
+  width: var(--sidebar-w);
+  height: calc(100vh - var(--header-h));
+  overflow-y: auto;
+  padding: 22px 18px 60px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-alt);
+  font-size: 0.9rem;
+}
+.sidebar ol { list-style: none; margin: 0; padding: 0; }
+.sidebar > ol > li { margin-bottom: 6px; }
+.sidebar .chap-title {
+  display: block;
+  padding: 4px 8px;
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+  border-radius: 4px;
+}
+.sidebar .chap-title:hover { background: #dbf3ef; color: var(--accent-dark); }
+.sidebar .sect { list-style: none; margin: 2px 0 8px; padding-left: 14px; }
+.sidebar .sect a {
+  display: block;
+  padding: 2px 8px;
+  color: var(--muted);
+  text-decoration: none;
+  border-radius: 4px;
+  line-height: 1.5;
+}
+.sidebar .sect a:hover { color: var(--accent); background: #e6f6f3; }
+.sidebar li.current > .chap-title { color: var(--accent-dark); background: var(--accent-soft); }
+.sidebar .sect a.current { color: var(--accent-dark); font-weight: 600; }
+
+/* 本文 ----------------------------------------------------------------- */
+.content {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: var(--content-w);
+  padding: 30px 40px 80px;
+}
+.content h1 {
+  font-size: 1.85rem;
+  line-height: 1.4;
+  margin: 0 0 0.8em;
+  padding-bottom: 0.4em;
+  border-bottom: 3px solid var(--accent);
+}
+.content h2 {
+  font-size: 1.4rem;
+  margin: 2em 0 0.7em;
+  padding-left: 10px;
+  border-left: 5px solid var(--accent);
+}
+.content h3 { font-size: 1.15rem; margin: 1.6em 0 0.5em; color: var(--accent-dark); }
+.content p { margin: 0.8em 0; }
+.content a { color: var(--accent); }
+.content ul, .content ol { padding-left: 1.6em; }
+.content li { margin: 0.3em 0; }
+
+/* 図 (Mermaid) --------------------------------------------------------- */
+figure {
+  margin: 1.8em 0;
+  padding: 18px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: center;
+}
+figure .mermaid { display: flex; justify-content: center; }
+figure figcaption {
+  margin-top: 12px;
+  font-size: 0.9rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* コード --------------------------------------------------------------- */
+code {
+  font-family: "SFMono-Regular", Menlo, Consolas, "Courier New", monospace;
+  font-size: 0.88em;
+  background: var(--code-bg);
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+}
+pre {
+  background: #1e2430;
+  color: #e6e9ef;
+  padding: 16px 18px;
+  border-radius: 8px;
+  overflow-x: auto;
+  line-height: 1.6;
+  font-size: 0.86rem;
+}
+pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+
+/* 入力／出力の例（ラベル付きブロック） -------------------------------- */
+.example { margin: 1.5em 0; }
+.example .example-label {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 4px 4px 0 0;
+}
+/* 出力ラベルは控えめな色に */
+.example .example-label.out { background: var(--muted); }
+.example pre { margin-top: 0; border-top-left-radius: 0; }
+
+/* テーブル ------------------------------------------------------------- */
+table { border-collapse: collapse; width: 100%; margin: 1.4em 0; font-size: 0.92rem; }
+th, td { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+th { background: var(--bg-alt); font-weight: 700; }
+
+/* ハンズオン（番号付きステップ）--------------------------------------- */
+.handson {
+  margin: 1.8em 0;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #f0fdfa;
+}
+.handson > .handson-head {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  padding: 9px 16px;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+.handson > .handson-body { padding: 4px 18px 12px; }
+.handson ol.steps { counter-reset: step; list-style: none; margin: 0; padding: 0; }
+.handson ol.steps > li {
+  position: relative;
+  padding: 12px 0 12px 42px;
+  border-bottom: 1px dashed #b8e6df;
+}
+.handson ol.steps > li:last-child { border-bottom: none; }
+.handson ol.steps > li::before {
+  counter-increment: step;
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 13px;
+  width: 27px;
+  height: 27px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.handson ol.steps > li > :first-child { margin-top: 0; }
+.handson ol.steps > li > :last-child { margin-bottom: 0; }
+
+/* 補足ボックス群 ------------------------------------------------------- */
+.goal, .prereq, .checkpoint, .tip, .pitfall, .note {
+  margin: 1.4em 0;
+  padding: 12px 16px;
+  border-radius: 8px;
+  border-left: 4px solid;
+  font-size: 0.97rem;
+}
+.goal      { background: #ecfdf5; border-color: var(--accent); }      /* この章のゴール */
+.prereq    { background: #f8fafc; border-color: #64748b; }            /* 前提 */
+.checkpoint{ background: #f0fdf4; border-color: #16a34a; }            /* チェックポイント */
+.tip       { background: #eff6ff; border-color: #2563eb; }            /* ヒント */
+.pitfall   { background: #fffbeb; border-color: #d97706; }            /* よくある落とし穴 */
+.note      { background: #f4faf9; border-color: var(--accent); }      /* 一般的なメモ */
+.goal strong, .prereq strong, .checkpoint strong,
+.tip strong, .pitfall strong, .note strong { display: block; margin-bottom: 4px; }
+
+/* チェックポイントのチェックリスト */
+.checkpoint ul { list-style: none; padding-left: 0; margin: 6px 0 0; }
+.checkpoint li { position: relative; padding-left: 26px; }
+.checkpoint li::before {
+  content: "\2611";           /* ☑ */
+  position: absolute;
+  left: 0;
+  color: #16a34a;
+  font-weight: 700;
+}
+
+/* 前後ナビ ------------------------------------------------------------- */
+.pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 50px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.pager a {
+  flex: 1 1 0;
+  max-width: 48%;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--bg-alt);
+}
+.pager a:hover { border-color: var(--accent); background: #e6f6f3; }
+.pager .dir { display: block; font-size: 0.78rem; color: var(--muted); }
+.pager .ttl { font-weight: 600; color: var(--accent-dark); }
+.pager .next { text-align: right; }
+.pager .up { flex: 0 1 auto; max-width: none; text-align: center; }
+.pager-spacer { flex: 1 1 0; max-width: 48%; }
+
+/* フッター ------------------------------------------------------------- */
+.site-footer {
+  padding: 24px 40px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* トップページ TOC ------------------------------------------------------ */
+.toc-hero { padding: 40px 0 10px; }
+.toc-hero h1 { font-size: 2.2rem; border: none; margin-bottom: 0.2em; }
+.toc-hero .version-hero {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  color: var(--accent);
+  margin-bottom: 0.5em;
+}
+.toc-hero .audience {
+  display: inline-block;
+  margin: 0 0 0.6em;
+  padding: 4px 12px;
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.toc-hero .lead { color: var(--muted); font-size: 1.05rem; }
+.toc-grid { display: grid; gap: 16px; margin-top: 24px; }
+.toc-card {
+  display: block;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--bg);
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.toc-card:hover { border-color: var(--accent); box-shadow: 0 4px 14px rgba(13, 148, 136, 0.13); }
+.toc-card .num { color: var(--accent); font-weight: 700; font-size: 0.85rem; }
+.toc-card .title { display: block; font-size: 1.15rem; font-weight: 700; margin: 2px 0 6px; }
+.toc-card .desc { color: var(--muted); font-size: 0.9rem; }
+
+/* レスポンシブ ---------------------------------------------------------- */
+@media (max-width: 900px) {
+  .layout { flex-direction: column; }
+  .sidebar {
+    position: static;
+    width: 100%;
+    flex-basis: auto;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .content { padding: 24px 20px 60px; max-width: 100%; }
+}
+
+@media (max-width: 600px) {
+  .site-header {
+    height: auto;
+    min-height: var(--header-h);
+    padding: 8px 14px;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .doc-kind-badge, .version-badge { font-size: 0.68rem; margin-left: 0; }
+}

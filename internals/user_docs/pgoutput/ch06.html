@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="doc-kind" content="user">
+  <title>第6章 送る内容をパブリケーションで絞る | pgoutput 実践ガイド — PostgreSQL 16 · 2026-08-06</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background:        '#ffffff',
+        primaryColor:      '#ccfbf1',
+        primaryTextColor:  '#134e4a',
+        primaryBorderColor:'#0d9488',
+        lineColor:         '#4a5568',
+        secondaryColor:    '#e2e8f0',
+        tertiaryColor:     '#f7fafc',
+        edgeLabelBackground: '#ffffff',
+        clusterBkg:        '#effcf8',
+        clusterBorder:     '#5eead4',
+      },
+      flowchart: { htmlLabels: true },
+    });
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="/" class="docs-home" title="ドキュメント一覧へ戻る">← ドキュメント一覧</a>
+    <a href="index.html" class="site-title">pgoutput 実践ガイド</a>
+    <span class="doc-kind-badge">ユーザーガイド</span>
+    <span class="version-badge">PostgreSQL 16 · 2026-08-06</span>
+  </header>
+  <div class="layout">
+    <nav class="sidebar">
+      <ol>
+  <li>
+    <a class="chap-title" href="ch01.html">第1章 pgoutput でできること</a>
+    <ol class="sect">
+      <li><a href="ch01.html#sec-1-1">1.1 pgoutput とは何か</a></li>
+      <li><a href="ch01.html#sec-1-2">1.2 どこで使われているか</a></li>
+      <li><a href="ch01.html#sec-1-3">1.3 test_decoding との違い</a></li>
+      <li><a href="ch01.html#sec-1-4">1.4 このガイドの進め方</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch02.html">第2章 準備</a>
+    <ol class="sect">
+      <li><a href="ch02.html#sec-2-1">2.1 wal_level を logical にする</a></li>
+      <li><a href="ch02.html#sec-2-2">2.2 サンプルデータベースとテーブルを作る</a></li>
+      <li><a href="ch02.html#sec-2-3">2.3 パブリケーションを作る</a></li>
+      <li><a href="ch02.html#sec-2-4">2.4 レプリケーションスロットを作る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch03.html">第3章 まず動かす — 3 分で出力を見る</a>
+    <ol class="sect">
+      <li><a href="ch03.html#sec-3-1">3.1 SQL 関数で出力を覗く</a></li>
+      <li><a href="ch03.html#sec-3-2">3.2 4 行の出力を読む</a></li>
+      <li><a href="ch03.html#sec-3-3">3.3 peek と get の違い</a></li>
+      <li><a href="ch03.html#sec-3-4">3.4 pg_recvlogical で受け取る</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch04.html">第4章 出力メッセージを読む</a>
+    <ol class="sect">
+      <li><a href="ch04.html#sec-4-1">4.1 メッセージ型の一覧</a></li>
+      <li><a href="ch04.html#sec-4-2">4.2 Relation と Insert</a></li>
+      <li><a href="ch04.html#sec-4-3">4.3 Update・Delete と REPLICA IDENTITY</a></li>
+      <li><a href="ch04.html#sec-4-4">4.4 Truncate と論理メッセージ</a></li>
+      <li><a href="ch04.html#sec-4-5">4.5 デコーダを手元に置く</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch05.html">第5章 pgoutput のオプション</a>
+    <ol class="sect">
+      <li><a href="ch05.html#sec-5-1">5.1 オプションの渡し方</a></li>
+      <li><a href="ch05.html#sec-5-2">5.2 proto_version</a></li>
+      <li><a href="ch05.html#sec-5-3">5.3 binary</a></li>
+      <li><a href="ch05.html#sec-5-4">5.4 messages</a></li>
+      <li><a href="ch05.html#sec-5-5">5.5 streaming</a></li>
+      <li><a href="ch05.html#sec-5-6">5.6 two_phase</a></li>
+      <li><a href="ch05.html#sec-5-7">5.7 origin</a></li>
+    </ol>
+  </li>
+  <li class="current">
+    <a class="chap-title" href="ch06.html">第6章 送る内容をパブリケーションで絞る</a>
+    <ol class="sect">
+      <li><a href="ch06.html#sec-6-1">6.1 publish で操作種別を絞る</a></li>
+      <li><a href="ch06.html#sec-6-2">6.2 行フィルタ</a></li>
+      <li><a href="ch06.html#sec-6-3">6.3 列リスト</a></li>
+      <li><a href="ch06.html#sec-6-4">6.4 パーティションテーブル</a></li>
+      <li><a href="ch06.html#sec-6-5">6.5 テーブル集合の指定方法</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch07.html">第7章 実践: 論理レプリケーションと CDC</a>
+    <ol class="sect">
+      <li><a href="ch07.html#sec-7-1">7.1 購読側インスタンスを用意する</a></li>
+      <li><a href="ch07.html#sec-7-2">7.2 CREATE SUBSCRIPTION で複製する</a></li>
+      <li><a href="ch07.html#sec-7-3">7.3 裏側で流れている pgoutput のオプション</a></li>
+      <li><a href="ch07.html#sec-7-4">7.4 サブスクリプションの設定は pgoutput の設定</a></li>
+      <li><a href="ch07.html#sec-7-5">7.5 監視する</a></li>
+    </ol>
+  </li>
+  <li>
+    <a class="chap-title" href="ch08.html">第8章 つまずきポイントと対処・チートシート</a>
+    <ol class="sect">
+      <li><a href="ch08.html#sec-8-1">8.1 環境まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-2">8.2 REPLICA IDENTITY まわりのエラー</a></li>
+      <li><a href="ch08.html#sec-8-3">8.3 スロットの運用</a></li>
+      <li><a href="ch08.html#sec-8-4">8.4 出力が空になるとき</a></li>
+      <li><a href="ch08.html#sec-8-5">8.5 チートシート</a></li>
+    </ol>
+  </li>
+</ol>
+    </nav>
+    <main class="content">
+      <article>
+        <h1>第6章　送る内容をパブリケーションで絞る</h1>
+        
+<div class="goal">
+  <strong>🎯 この章のゴール</strong>
+  <ul>
+    <li><code>publish</code> オプションで、送る操作の種類を絞れる</li>
+    <li>行フィルタと列リストで、送る行・列を絞れる</li>
+    <li>パーティションテーブルを、葉と親のどちらの名前で送るか選べる</li>
+  </ul>
+</div>
+
+<div class="prereq">
+  <strong>📋 前提</strong>
+  <ul>
+    <li>第5章までの環境（<code>shop_slot</code> は消費済み、<code>items</code> は <code>REPLICA IDENTITY DEFAULT</code>）</li>
+    <li>この章の冒頭で <code>TRUNCATE items;</code> して、たまったテストデータを空にしてから始める</li>
+    <li>デコード結果は <code>pgoutput_decode.py</code>（4.5）を通したもの</li>
+  </ul>
+</div>
+
+<p>第5章のオプションが「pgoutput 側の設定」だったのに対し、この章で扱うのは
+<strong>パブリケーション側の設定</strong>である。図 6.1 のように、同じテーブルに絞り込みの違う
+パブリケーションを複数定義しておき、pgoutput の <code>publication_names</code> でどれを使うかを選ぶ。
+同じスロット・同じオプションでも、指定するパブリケーションが違えば届く内容が変わる。</p>
+
+<figure>
+  <pre class="mermaid">
+flowchart LR
+    T["items テーブルの<br/>全変更"] --> P1["shop_pub<br/>絞り込みなし"]
+    T --> P2["ins_only_pub<br/>publish = insert"]
+    T --> P3["cheap_pub<br/>WHERE price &lt; 500"]
+    T --> P4["names_pub<br/>列リスト (id, name)"]
+    P1 --> O["pgoutput<br/>publication_names で<br/>どれを使うか選ぶ"]
+    P2 --> O
+    P3 --> O
+    P4 --> O
+  </pre>
+  <figcaption>図 6.1: 同じテーブルに複数のパブリケーションを定義し、pgoutput 側で使い分ける</figcaption>
+</figure>
+
+<h2 id="sec-6-1">6.1　publish で操作種別を絞る</h2>
+
+<p><code>publish</code> オプションで、INSERT / UPDATE / DELETE / TRUNCATE のどれを送るかを選べる。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: INSERT だけ送る</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>テストデータを空にし、スロットも空にしてから始める。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d shop -c "TRUNCATE items;"
+psql -d shop -tAc "SELECT count(*) FROM pg_logical_slot_get_binary_changes(
+    'shop_slot', NULL, NULL, 'proto_version','4','publication_names','shop_pub')"</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>INSERT だけを発行するパブリケーションを作る。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>CREATE PUBLICATION ins_only_pub FOR TABLE items WITH (publish = 'insert');</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>CREATE PUBLICATION</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>3種類の操作を実行する。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d shop -c "INSERT INTO items VALUES (10, 'apple', 120);"
+psql -d shop -c "UPDATE items SET price = 130 WHERE id = 10;"
+psql -d shop -c "DELETE FROM items WHERE id = 10;"</code></pre>
+        </div>
+      </li>
+      <li>
+        <p><code>ins_only_pub</code> を指定してデコードする。</p>
+        <div class="example">
+          <span class="example-label">入力（シェル）</span>
+          <pre><code>psql -d shop -tAc "SELECT data FROM pg_logical_slot_get_binary_changes(
+    'shop_slot', NULL, NULL,
+    'proto_version','4','publication_names','ins_only_pub')" \
+  | python3 pgoutput_decode.py</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>BEGIN      final_lsn=0/2342AE0 ts=2026-08-06T13:35:41.165872+00:00 xid=820
+RELATION   24596 public.items identity=d cols=[*id:23, name:25, price:23, in_stock:16]
+INSERT     rel=24596 N['10', 'apple', '120', 't']
+COMMIT     commit_lsn=0/2342AE0 end_lsn=0/2342B10 ts=2026-08-06T13:35:41.165872+00:00</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>UPDATE と DELETE のトランザクションは<strong>丸ごと消えている</strong>。
+送るものが1つも無いトランザクションは、Begin / Commit すら出力されない。
+これは pgoutput 全般に共通する挙動で、「空トランザクションは送らない」と覚えておくとよい。</p>
+
+<h2 id="sec-6-2">6.2　行フィルタ</h2>
+
+<p><code>FOR TABLE テーブル名 WHERE (条件)</code> で、条件を満たす行だけを送れる。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 500 未満の商品だけ送る</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>行フィルタ付きのパブリケーションを作る。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>CREATE PUBLICATION cheap_pub FOR TABLE items WHERE (price &lt; 500);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>CREATE PUBLICATION</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>条件に合う行と合わない行を1件ずつ入れる。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>INSERT INTO items VALUES (11, 'cheap', 100), (12, 'luxury', 9800);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>INSERT 0 2</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>デコードする。</p>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>BEGIN      final_lsn=0/23435F8 ts=2026-08-06T13:35:41.430540+00:00 xid=824
+RELATION   24596 public.items identity=d cols=[*id:23, name:25, price:23, in_stock:16]
+INSERT     rel=24596 N['11', 'cheap', '100', 't']
+COMMIT     commit_lsn=0/23435F8 end_lsn=0/2343628 ts=2026-08-06T13:35:41.430540+00:00</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>設定はカタログで確認できる。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT pubname, tablename, attnames, rowfilter
+  FROM pg_publication_tables ORDER BY pubname;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>   pubname    | tablename |         attnames         |   rowfilter
+--------------+-----------+--------------------------+---------------
+ cheap_pub    | items     | {id,name,price,in_stock} | (price &lt; 500)
+ ins_only_pub | items     | {id,name,price,in_stock} |
+ shop_pub     | items     | {id,name,price,in_stock} |
+(3 rows)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p><code>price = 9800</code> の <code>luxury</code> は同じトランザクションにあったにもかかわらず送られていない。
+フィルタは<strong>行単位</strong>で効く。</p>
+
+<div class="pitfall">
+  <strong>⚠️ よくある落とし穴（重要）</strong>
+  行フィルタに使った列がレプリカアイデンティティに含まれていないと、
+  <strong>そのテーブルへの UPDATE / DELETE が失敗するようになる</strong>。
+  しかもこれは <code>cheap_pub</code> を使っていない操作にも影響する。
+  <div class="example" style="margin-top:.6em">
+    <span class="example-label">入力（psql -d shop）</span>
+    <pre><code>UPDATE items SET price = 260 WHERE id = 13;</code></pre>
+  </div>
+  <div class="example">
+    <span class="example-label out">出力</span>
+    <pre><code>ERROR:  cannot update table "items"
+DETAIL:  Column used in the publication WHERE expression is not part of the replica identity.</code></pre>
+  </div>
+  対処は2つ。<code>REPLICA IDENTITY FULL</code> にするか、行フィルタを主キーなど
+  レプリカアイデンティティに含まれる列だけで書き直す。
+  なお <code>publish</code> から <code>update,delete</code> を外しておけば、この制約はかからない。
+</div>
+
+<h2 id="sec-6-3">6.3　列リスト</h2>
+
+<p>テーブル名の後ろに括弧で列を並べると、その列だけが送られる。
+個人情報を含む列を購読側に渡したくない、といった場面で使う。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: id と name だけ送る</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>列リスト付きのパブリケーションを作る。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>CREATE PUBLICATION names_pub FOR TABLE items (id, name);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>CREATE PUBLICATION</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>1件入れてデコードする。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>INSERT INTO items VALUES (13, 'kiwi', 250);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力（デコード結果）</span>
+          <pre><code>BEGIN      final_lsn=0/2343F38 ts=2026-08-06T13:35:41.967612+00:00 xid=826
+RELATION   24596 public.items identity=d cols=[*id:23, name:25]
+INSERT     rel=24596 N['13', 'kiwi']
+COMMIT     commit_lsn=0/2343F38 end_lsn=0/2343F68 ts=2026-08-06T13:35:41.967612+00:00</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>Relation メッセージの列定義そのものが2列になっている点が重要である。
+受け取る側から見れば「そういう2列のテーブル」に見えるので、
+購読側のテーブルには <code>price</code> と <code>in_stock</code> が無くてもよい。</p>
+
+<div class="tip">
+  <strong>💡 ヒント</strong>
+  列リストにはレプリカアイデンティティの列を必ず含める必要がある。含めないと
+  <code>CREATE PUBLICATION</code> の時点ではなく、UPDATE / DELETE の実行時にエラーになる。
+</div>
+
+<h2 id="sec-6-4">6.4　パーティションテーブル</h2>
+
+<p>パーティションテーブルは、既定では<strong>実際に行が入った葉テーブルの名前</strong>で送られる。
+<code>publish_via_partition_root = true</code> にすると、親テーブルの名前で送られる。
+購読側がパーティション化されていない普通のテーブルの場合は後者が必要になる。</p>
+
+<div class="handson">
+  <div class="handson-head">⌨️ ハンズオン: 葉と親を比べる</div>
+  <div class="handson-body">
+    <ol class="steps">
+      <li>
+        <p>パーティションテーブルと、2種類のパブリケーションを作る。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>CREATE TABLE sales (id int, region text, amount int) PARTITION BY LIST (region);
+CREATE TABLE sales_east PARTITION OF sales FOR VALUES IN ('east');
+
+CREATE PUBLICATION sales_leaf_pub FOR TABLE sales;
+CREATE PUBLICATION sales_root_pub FOR TABLE sales
+  WITH (publish_via_partition_root = true);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code>CREATE TABLE
+CREATE TABLE
+CREATE PUBLICATION
+CREATE PUBLICATION</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>1件入れて、まず <code>sales_leaf_pub</code>（既定）でデコードする。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>INSERT INTO sales VALUES (1, 'east', 500);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力（デコード結果）</span>
+          <pre><code>BEGIN      final_lsn=0/234AE80 ts=2026-08-06T13:35:42.349796+00:00 xid=832
+RELATION   24631 public.sales_east identity=d cols=[id:23, region:25, amount:23]
+INSERT     rel=24631 N['1', 'east', '500']
+COMMIT     commit_lsn=0/234AE80 end_lsn=0/234AEB0 ts=2026-08-06T13:35:42.349796+00:00</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>もう1件入れて、<code>sales_root_pub</code> でデコードする。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>INSERT INTO sales VALUES (2, 'east', 600);</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力（デコード結果）</span>
+          <pre><code>BEGIN      final_lsn=0/234AEF8 ts=2026-08-06T13:35:42.440576+00:00 xid=833
+RELATION   24628 public.sales identity=d cols=[id:23, region:25, amount:23]
+RELATION   24631 public.sales_east identity=d cols=[id:23, region:25, amount:23]
+INSERT     rel=24628 N['2', 'east', '600']
+COMMIT     commit_lsn=0/234AEF8 end_lsn=0/234AF28 ts=2026-08-06T13:35:42.440576+00:00</code></pre>
+        </div>
+      </li>
+      <li>
+        <p>OID を照合する。</p>
+        <div class="example">
+          <span class="example-label">入力（psql -d shop）</span>
+          <pre><code>SELECT 'sales'::regclass::oid AS sales, 'sales_east'::regclass::oid AS sales_east;</code></pre>
+        </div>
+        <div class="example">
+          <span class="example-label out">出力</span>
+          <pre><code> sales | sales_east
+-------+------------
+ 24628 |      24631
+(1 row)</code></pre>
+        </div>
+      </li>
+    </ol>
+  </div>
+</div>
+
+<p>既定では Insert の <code>rel</code> が葉テーブル <code>sales_east</code>（24631）だったのに対し、
+<code>publish_via_partition_root = true</code> では親テーブル <code>sales</code>（24628）になっている。
+受け取る側が見るテーブル名が変わる、というのがこのオプションの効果である。</p>
+
+<h2 id="sec-6-5">6.5　テーブル集合の指定方法</h2>
+
+<p>パブリケーションに含めるテーブルの指定方法は4通りある。</p>
+
+<table>
+  <thead>
+    <tr><th>書き方</th><th>意味</th><th>注意</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>FOR TABLE a, b</code></td><td>指定したテーブルだけ</td><td>後から <code>ALTER PUBLICATION ... ADD/DROP TABLE</code> できる</td></tr>
+    <tr><td><code>FOR TABLES IN SCHEMA s</code></td><td>スキーマ内の全テーブル</td><td>後から作られたテーブルも自動的に含まれる</td></tr>
+    <tr><td><code>FOR ALL TABLES</code></td><td>データベース内の全テーブル</td><td>スーパーユーザ権限が必要</td></tr>
+    <tr><td>組み合わせ</td><td><code>FOR TABLE a, TABLES IN SCHEMA s</code></td><td>PostgreSQL 15 以降</td></tr>
+  </tbody>
+</table>
+
+<p><code>publication_names</code> にはカンマ区切りで複数のパブリケーションを渡せる。
+その場合、<strong>いずれかに含まれていれば送られる</strong>（和集合）。行フィルタも同様に OR で合成されるので、
+「片方にフィルタ無しのパブリケーションが混ざっていると、フィルタが実質無効になる」点に注意する。</p>
+
+<div class="example">
+  <span class="example-label">入力（psql -d shop）— 複数指定の例</span>
+  <pre><code>SELECT data FROM pg_logical_slot_peek_binary_changes(
+    'shop_slot', NULL, NULL,
+    'proto_version','4',
+    'publication_names','cheap_pub,names_pub');</code></pre>
+</div>
+
+<div class="checkpoint">
+  <strong>✅ チェックポイント</strong>
+  <ul>
+    <li><code>publish = 'insert'</code> のパブリケーションで UPDATE / DELETE が丸ごと消えるのを確認した</li>
+    <li>行フィルタに合わない行が送られないのを確認した</li>
+    <li>行フィルタ列がレプリカアイデンティティに無いと UPDATE がエラーになる、と説明できる</li>
+    <li>列リストを付けると Relation メッセージの列定義自体が変わるのを確認した</li>
+    <li><code>publish_via_partition_root</code> で Insert の <code>rel</code> が親テーブルの OID になるのを確認した</li>
+  </ul>
+</div>
+
+      </article>
+      <nav class="pager">
+        <a class="prev" href="ch05.html">
+  <span class="dir">← 前の章</span>
+  <span class="ttl">第5章 pgoutput のオプション</span>
+</a>
+<a class="up" href="index.html">
+  <span class="dir">↑ 目次</span>
+  <span class="ttl">トップページ</span>
+</a>
+<a class="next" href="ch07.html">
+  <span class="dir">次の章 →</span>
+  <span class="ttl">第7章 実践: 論理レプリケーションと CDC</span>
+</a>
+      </nav>
+    </main>
+  </div>
+  <footer class="site-footer">pgoutput 実践ガイド — PostgreSQL 16.13 上で実際に実行した出力にもとづく</footer>
+</body>
+</html>
