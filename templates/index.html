@@ -21,6 +21,7 @@
     --red-dim: rgba(248,113,113,0.12);
     --orange: #fb923c;
     --cyan: #22d3ee;
+    --yellow: #fbbf24;
 
     /* Branch prefix background colors */
     --prefix-feat: rgba(108,140,255,0.18);   /* blue – Feature */
@@ -170,6 +171,14 @@
   .pg-dot-up { background: var(--green); box-shadow: 0 0 6px rgba(74,222,128,0.4); }
   .pg-dot-down { background: var(--text-muted); opacity: 0.4; }
   .pg-dot-none { background: transparent; border: 1px dashed var(--border); }
+  .star-btn {
+    background: none; border: none; padding: 0; cursor: pointer;
+    font-size: 0.95rem; line-height: 1; flex-shrink: 0;
+    color: var(--text-muted); opacity: 0.35;
+    transition: opacity 0.12s, color 0.12s;
+  }
+  .star-btn:hover { opacity: 1; color: var(--yellow); }
+  .star-btn.starred { opacity: 1; color: var(--yellow); }
   .branch-name {
     font-weight: 600;
     color: var(--text);
@@ -674,6 +683,29 @@
   </select>
 </div>
 
+<!-- Starred Table -->
+<div class="section-header" id="starred-header" onclick="toggleSection('starred')">
+  <span class="toggle-arrow" id="starred-arrow">&#9660;</span>
+  <h2>&#9733; Starred <span class="count" id="starred-count"></span></h2>
+</div>
+<div id="starred-section">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th data-sort="name" data-table="starred" style="width:35%">Branch <span class="sort-arrow"></span></th>
+          <th data-sort="port" data-table="starred">Port <span class="sort-arrow"></span></th>
+          <th>Links</th>
+          <th>Notes</th>
+          <th data-sort="updated_at" data-table="starred">Updated <span class="sort-arrow"></span></th>
+          <th style="text-align:right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="starred-table"></tbody>
+    </table>
+  </div>
+</div>
+
 <!-- Active Table -->
 <div class="section-header" onclick="toggleSection('active')">
   <span class="toggle-arrow" id="active-arrow">&#9660;</span>
@@ -966,12 +998,53 @@ async function fetchBranches() {
   }
 }
 
+function isStarred(b) {
+  return !!b.starred && b.status !== 'archived';
+}
+
+function compareBranches(a, b) {
+  let va = a[sortCol] ?? '';
+  let vb = b[sortCol] ?? '';
+  if (typeof va === 'number' && typeof vb === 'number') return sortAsc ? va - vb : vb - va;
+  va = String(va).toLowerCase();
+  vb = String(vb).toLowerCase();
+  return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+}
+
+// Toggle the star; the row moves between the Starred and Active sections.
+async function toggleStar(name) {
+  const b = branches.find(x => x.name === name);
+  if (!b) return;
+  const next = b.starred ? 0 : 1;
+  b.starred = next;  // optimistic: re-render immediately
+  renderTable();
+  try {
+    const resp = await fetch(`/api/branches/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ starred: next }),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).error || 'Failed');
+  } catch (e) {
+    b.starred = next ? 0 : 1;
+    renderTable();
+    showToast(`Failed to update star for ${name}: ${e.message}`, 'error');
+  }
+}
+
 function renderTable() {
   const search = document.getElementById('search').value.toLowerCase();
   const pgFilter = document.getElementById('pg-filter').value;
 
+  const starred = branches.filter(b => {
+    if (!isStarred(b)) return false;
+    if (search && !b.name.toLowerCase().includes(search)) return false;
+    if (pgFilter && b.pg_running !== pgFilter) return false;
+    return true;
+  });
+
   const active = branches.filter(b => {
-    if (b.status === 'archived') return false;
+    if (b.status === 'archived' || isStarred(b)) return false;
     if (search && !b.name.toLowerCase().includes(search)) return false;
     if (pgFilter && b.pg_running !== pgFilter) return false;
     return true;
@@ -983,29 +1056,29 @@ function renderTable() {
     return true;
   });
 
-  active.sort((a, b) => {
-    let va = a[sortCol] ?? '';
-    let vb = b[sortCol] ?? '';
-    if (typeof va === 'number' && typeof vb === 'number') return sortAsc ? va - vb : vb - va;
-    va = String(va).toLowerCase();
-    vb = String(vb).toLowerCase();
-    return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
-  });
+  starred.sort(compareBranches);
+  active.sort(compareBranches);
+  archived.sort(compareBranches);
 
-  archived.sort((a, b) => {
-    let va = a[sortCol] ?? '';
-    let vb = b[sortCol] ?? '';
-    if (typeof va === 'number' && typeof vb === 'number') return sortAsc ? va - vb : vb - va;
-    va = String(va).toLowerCase();
-    vb = String(vb).toLowerCase();
-    return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
-  });
-
-  const totalActive = branches.filter(b => b.status !== 'archived').length;
+  const totalStarred = branches.filter(isStarred).length;
+  const totalActive = branches.filter(b => b.status !== 'archived' && !isStarred(b)).length;
   const totalArchived = branches.filter(b => b.status === 'archived').length;
   document.getElementById('branch-count').textContent = `${branches.length}`;
+  document.getElementById('starred-count').textContent = `(${starred.length}${starred.length !== totalStarred ? ' / ' + totalStarred : ''})`;
   document.getElementById('active-count').textContent = `(${active.length}${active.length !== totalActive ? ' / ' + totalActive : ''})`;
   document.getElementById('archived-count').textContent = `(${archived.length}${archived.length !== totalArchived ? ' / ' + totalArchived : ''})`;
+
+  // Render starred table (section is hidden entirely when nothing is starred)
+  const hasStarred = totalStarred > 0;
+  document.getElementById('starred-header').style.display = hasStarred ? '' : 'none';
+  document.getElementById('starred-section').style.display =
+    hasStarred && !collapsedSections.has('starred') ? '' : 'none';
+  const starredTbody = document.getElementById('starred-table');
+  if (starred.length === 0) {
+    starredTbody.innerHTML = '<tr class="empty-row"><td colspan="6">No matching starred branches</td></tr>';
+  } else {
+    starredTbody.innerHTML = starred.map(b => renderActiveRow(b)).join('');
+  }
 
   // Render active table
   const activeTbody = document.getElementById('active-table');
@@ -1103,11 +1176,18 @@ function renderActiveRow(b) {
     <div class="kebab-menu">${menuItems.join('')}</div>
   </div>`;
 
+  // A worktree still being created has no DB row yet, so it can't be starred.
+  const star = (isCreating && !b.created_at)
+    ? ''
+    : `<button class="star-btn${b.starred ? ' starred' : ''}" title="${b.starred ? 'Unstar' : 'Star'}"
+        onclick="event.stopPropagation();toggleStar('${esc(b.name)}')">${b.starred ? '★' : '☆'}</button>`;
+
   const prefixBg = getPrefixBg(b.name);
   let html = `
   <tr class="${rowClass}" style="background:${prefixBg}" ondblclick="openEditModal('${esc(b.name)}')">
     <td>
       <div class="branch-cell">
+        ${star}
         <span class="pg-dot ${dotClass}" title="${dotTitle}"></span>
         <div>
           <div class="branch-name">${branchLink}</div>

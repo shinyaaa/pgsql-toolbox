@@ -29,6 +29,7 @@ def init_db(db_path: Optional[Path] = None):
                 commitfest_url TEXT DEFAULT '',
                 claude_session_url TEXT DEFAULT '',
                 notes TEXT DEFAULT '',
+                starred INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
@@ -47,6 +48,10 @@ def init_db(db_path: Optional[Path] = None):
         if "claude_session_url" not in cols:
             conn.execute(
                 "ALTER TABLE branches ADD COLUMN claude_session_url TEXT DEFAULT ''"
+            )
+        if "starred" not in cols:
+            conn.execute(
+                "ALTER TABLE branches ADD COLUMN starred INTEGER NOT NULL DEFAULT 0"
             )
         conn.commit()
     finally:

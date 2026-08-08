@@ -141,7 +141,8 @@ def api_branches():
         elif task["status"] == "running":
             entry.update(status="active", exists_on_disk=False, port=None,
                          src_dir=None, pg_running=None, mailing_list_url="",
-                         commitfest_url="", notes="", created_at="", updated_at="")
+                         commitfest_url="", notes="", starred=0,
+                         created_at="", updated_at="")
             branches.append(entry)
     return jsonify(branches)
 
@@ -158,12 +159,18 @@ def api_update_branch(name):
         if col in data:
             fields.append(f"{col} = ?")
             values.append(data[col])
+    # Starring is a view preference, so it alone does not touch updated_at.
+    touches_content = bool(fields)
+    if "starred" in data:
+        fields.append("starred = ?")
+        values.append(1 if data["starred"] else 0)
 
     if not fields:
         return jsonify({"error": "No fields to update"}), 400
 
-    fields.append("updated_at = ?")
-    values.append(datetime.now().isoformat())
+    if touches_content:
+        fields.append("updated_at = ?")
+        values.append(datetime.now().isoformat())
     values.append(name)
 
     db.execute(
